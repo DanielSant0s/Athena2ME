@@ -1,28 +1,28 @@
 var arr = [100, '2nd', 102, "mid", , 'last']
-println("original: arr.length = $arr.length, content: ${arr.join(',')}")
+console.log("original: arr.length = $arr.length, content: ${arr.join(',')}")
 arr.length = 4
-println("trim to 4: arr.length = $arr.length, content: ${arr.join(',')}")
+console.log("trim to 4: arr.length = $arr.length, content: ${arr.join(',')}")
 arr = arr.concat.apply(arr, [8, [22,"haha",44], 10]);
-println("concat: ${arr.join(',')}")
+console.log("concat: ${arr.join(',')}")
 arr = arr.slice(1, 5);
-println("slice(1, 5): ${arr.join(',')}")
+console.log("slice(1, 5): ${arr.join(',')}")
 arr.push('CC', [10, 'pu'], 'DD')
-println("push: ${arr.join(',')}")
+console.log("push: ${arr.join(',')}")
 arr.reverse();
-println("reversed: ${arr.join(',')}")
+console.log("reversed: ${arr.join(',')}")
 arr.unshift('1st', 2);
-println("unshift('1st', 2): ${arr.join(',')}")
+console.log("unshift('1st', 2): ${arr.join(',')}")
 var pop = arr.pop()
-println("pop(): $pop");
+console.log("pop(): $pop");
 var shift = arr.shift()
-println("shift(): $shift");
-println("after pop&shift: ${arr.join(',')}")
+console.log("shift(): $shift");
+console.log("after pop&shift: ${arr.join(',')}")
 arr.sort()
-println("after sort: ${arr.join(',')}")
+console.log("after sort: ${arr.join(',')}")
 arr = [ 44, , 2222, 5, 11111, , undefined, 333 ]
-println("before sort: ${arr.join(',')}")
+console.log("before sort: ${arr.join(',')}")
 arr.sort()
-println("after sort: ${arr.join(',')}")
+console.log("after sort: ${arr.join(',')}")
 arr = [ 44, , 2222, 5, 11111, , undefined, 333 ]
 arr.sort(function(a, b) { return a - b})
-println("numbered sort: ${arr.join(',')}")
+console.log("numbered sort: ${arr.join(',')}")

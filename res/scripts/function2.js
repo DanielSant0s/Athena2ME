@@ -2,8 +2,8 @@ function Rect(w, h) {
     this.width = w;
     this.height = h;
     this.area = function() { return this.width * this.height }
-    this.echo = function() { println("width=$this.width, height=$this.height, area=${this.area()}") }
-    this.volumn = function(length) { println("for cube ($this.width,$this.height,$length), volumn=${this.area() * length}") }
+    this.echo = function() { console.log("width=$this.width, height=$this.height, area=${this.area()}") }
+    this.volumn = function(length) { console.log("for cube ($this.width,$this.height,$length), volumn=${this.area() * length}") }
     return
 }
 

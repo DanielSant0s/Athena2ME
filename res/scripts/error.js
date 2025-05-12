@@ -9,10 +9,10 @@ try {
     var a = 5 + 6;
     throw new MyError(a)
 } catch (e) {
-    println("catch: Error.message=" + e.message);
+    console.log("catch: Error.message=" + e.message);
     //throw e
 } finally {
-    println("finally");
+    console.log("finally");
 }
-println("after try")
+console.log("after try")
 

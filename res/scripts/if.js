@@ -5,4 +5,4 @@ var result = "passed";
 if ( a = b ) {
   result = "failed:  a = b should return 0";
 }
-println(result);
+console.log(result);

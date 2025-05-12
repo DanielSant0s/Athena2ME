@@ -6,7 +6,7 @@ function clouseTest () {
        x.no = i;
        x.text = array[i];
        x.invoke = function(){
-           println(i);
+           console.log(i);
        }
        outter.push(x);
     }
@@ -14,7 +14,7 @@ function clouseTest () {
 
 clouseTest();
 
-println(outter[0].invoke());
-println(outter[1].invoke());
-println(outter[2].invoke());
-println(outter[3].invoke());
+console.log(outter[0].invoke());
+console.log(outter[1].invoke());
+console.log(outter[2].invoke());
+console.log(outter[3].invoke());

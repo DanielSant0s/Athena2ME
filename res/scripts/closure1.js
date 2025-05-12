@@ -37,9 +37,9 @@ makeProperty(o, "Sex");
 
 
 o.setName("Frank");  // Set the property value
-println(o.getName());  // Get the property value
+console.log(o.getName());  // Get the property value
 //o.setName(0);        // Try to set a value of the wrong type
 o.setSex("male");
-println(o.getSex());
-println("${o.getName()} is ${o.getSex()}");
+console.log(o.getSex());
+console.log("${o.getName()} is ${o.getSex()}");
 

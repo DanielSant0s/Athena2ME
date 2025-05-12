@@ -4,4 +4,4 @@ var sum = 0;
 for (var i = 0; i < a.value.length; ++i) {
     sum += a.value[i];
 }
-println("b = $b, sum = $sum");
+console.log("b = $b, sum = $sum");

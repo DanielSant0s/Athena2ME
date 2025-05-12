@@ -1,4 +1,4 @@
 
-//println("result=${foo()}");
+//console.log("result=${foo()}");
 var foo = function() {return null}
-println("result=${foo()}");
+console.log("result=${foo()}");

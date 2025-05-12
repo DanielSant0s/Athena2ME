@@ -1,2 +1,2 @@
 var date = new Date();
-println("date=${date.getTime()}");
+console.log("date=${date.getTime()}");

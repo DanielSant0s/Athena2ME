@@ -1,5 +1,5 @@
 var a = { n: 15, ob: { key: "aa", value: "bb" } }
-println(">>>> Dumping content of global object...");
+console.log(">>>> Dumping content of global object...");
 var test = new Test(20);
 dumpObject(0, this);
 function dumpObject(indent, obj) {
@@ -11,21 +11,21 @@ function dumpObject(indent, obj) {
         var pvalue = obj[pname];
         switch (var type = typeof pvalue) {
         case "function":
-            println("${pvalue.prototype ? 'Constructor' : 'Function'}: $pname($pvalue.length)");
+            console.log("${pvalue.prototype ? 'Constructor' : 'Function'}: $pname($pvalue.length)");
             if (pvalue.prototype) {
                 dumpObject(indent + 2, pvalue.prototype);
             }
             break;
         case "object":
-            println("Object: $pname");
+            console.log("Object: $pname");
             if (pname != "this") {
                 dumpObject(indent + 2, pvalue);
             } else {
-                println("- not extended");
+                console.log("- not extended");
             }
             break;
         default:
-            println("$pname=$type($pvalue)");
+            console.log("$pname=$type($pvalue)");
             break;
         }
     }

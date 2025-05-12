@@ -999,6 +999,758 @@ mainloop:
         return Rv._undefined;
     }
 
+    public Rv js_call_apply(boolean isNew, Rv _this, Rv args, int magic) {
+        Rv jsFunc = args.get("0");
+        Rv jsArgs = args.get("1");
+
+        boolean isCall = (magic == 0);
+        if (jsFunc != null && jsFunc.type >= Rv.OBJECT 
+                && (isCall || jsArgs != null && jsArgs.type == Rv.ARRAY)) {
+            Rv funCo = new Rv(Rv.OBJECT, Rv._Object);
+            funCo.prev = _this.co.prev;
+            int argNum, argStart;
+            Rv argsArr;
+            if (isCall) {
+                argNum = args.num - 1;
+                argStart = 1;
+                argsArr = args;
+            } else {
+                argNum = jsArgs.num;
+                argStart = 0;
+                argsArr = jsArgs;
+            }
+            Pack argSrc = new Pack(-1, argNum);
+            
+            for (int ii = argStart, nn = argStart + argNum; ii < nn; argSrc.add(argsArr.get(Integer.toString(ii++))));
+            Rv cobak = _this.co;
+            Rv ret = call(false, _this, _this.co = funCo, jsFunc, argSrc, 0, argNum);
+            _this.co = cobak;
+
+            return ret;
+        }
+
+        return Rv._undefined;
+    }
+
+    public NativeFunctionList function_list = new NativeFunctionList(
+        new NativeFunctionListEntry[] {
+            new NativeFunctionListEntry(
+                "Object", 
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv _this, Rv args) {
+                        Rv arg = args.get("0");
+                        Rv ret = isNew ? _this : new Rv(Rv.OBJECT, Rv._Object);
+                        if (arg != null) {
+                            int type;
+                            if ((type = arg.type) == Rv.NUMBER || type == Rv.NUMBER_OBJECT) {
+                                ret.type = Rv.NUMBER_OBJECT;
+                                ret.num = arg.num;
+                            } else if (type == Rv.STRING || type == Rv.STRING_OBJECT) {
+                                ret.type = Rv.STRING_OBJECT;
+                                ret.str = arg.str;
+                            } else { // object
+                                ret = arg;
+                            }
+                        }
+
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Number", 
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv _this, Rv args) {
+                        Rv arg = args.get("0");
+                        Rv ret = _this;
+                        if (isNew) {
+                            ret = _this;
+                            ret.type = Rv.NUMBER_OBJECT;
+                            ret.ctorOrProt = Rv._Number;
+                        } else {
+                            ret = new Rv(0);
+                        }
+
+                        ret.num = arg != null && (arg = arg.toNum()) != Rv._NaN ? arg.num : 0;
+
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "String", 
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv _this, Rv args) {
+                        Rv arg = args.get("0");
+                        Rv ret = _this;
+                        if (isNew) {
+                            ret.type = Rv.STRING_OBJECT;
+                            ret.ctorOrProt = Rv._String;
+                        } else {
+                            ret = new Rv("");
+                        }
+                        ret.str = arg != null? arg.toStr().str : "";
+
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Array", 
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv _this, Rv args) {
+                        Rv ret = isNew ? _this : new Rv(Rv.ARRAY, Rv._Array);
+
+                        ret.type = Rv.ARRAY;
+                        ret.ctorOrProt = Rv._Array;
+                        Rv len;
+
+                        if (args.num == 1 && (len = _this.toNum()) != Rv._NaN) {
+                            ret.num = len.num;
+                        } else { // 0 or more
+                            ret.num = args.num;
+                            for (int i = 0; i < args.num; i++) {
+                                ret.putl(i, args.get(Integer.toString(i)));
+                            }
+                        }
+
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Date", 
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv _this, Rv args) {
+                        Rv arg = args.get("0");
+                        Rv ret = isNew ? _this : new Rv(Rv.OBJECT, Rv._Date);
+                        ret.type = Rv.NUMBER_OBJECT;
+                        ret.ctorOrProt = Rv._Date;
+                        _this.num = arg != null && (arg = arg.toNum()) != Rv._NaN ? arg.num 
+                                : (int) (System.currentTimeMillis() - bootTime);
+
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Error", 
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv _this, Rv args) {
+                        Rv arg = args.get("0");
+                        Rv ret = isNew ? _this : new Rv(Rv.ERROR, Rv._Error);
+                        ret.type = Rv.ERROR;
+                        ret.ctorOrProt = Rv._Error;
+                        if (arg != null) ret.putl("message", arg.toStr());
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Object.toString", 
+                new NativeFunction() {
+                    public final int length = 0;
+                    public Rv func(boolean isNew, Rv _this, Rv args) {
+                        return _this.toStr();
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Object.hasOwnProperty", 
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv _this, Rv args) {
+                        Rv arg = args.get("0");
+                        return arg != null && _this.has(arg.toStr().str) ? Rv._true : Rv._false;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Function.call", 
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv _this, Rv args) {
+                        return js_call_apply(isNew, _this, args, 0);
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Function.apply", 
+                new NativeFunction() {
+                    public final int length = 2;
+                    public Rv func(boolean isNew, Rv _this, Rv args) {
+                        return js_call_apply(isNew, _this, args, 1);
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Number.valueOf", 
+                new NativeFunction() {
+                    public final int length = 0;
+                    public Rv func(boolean isNew, Rv _this, Rv args) {
+                        return _this.type == Rv.NUMBER_OBJECT ? _this : Rv._undefined;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "String.valueOf", 
+                new NativeFunction() {
+                    public final int length = 0;
+                    public Rv func(boolean isNew, Rv _this, Rv args) {
+                        return _this.type == Rv.STRING_OBJECT ? _this : Rv._undefined;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "String.charAt", 
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv _this, Rv args) {
+                        Rv arg = args.get("0");
+                        int pos = (arg = arg.toNum()) != Rv._NaN ? arg.num : -1;
+                        return pos < 0 || pos >= _this.str.length() ? Rv._empty
+                                : new Rv(String.valueOf(_this.str.charAt(pos)));
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "String.indexOf", 
+                new NativeFunction() {
+                    public final int length = 2;
+                    public Rv func(boolean isNew, Rv _this, Rv args) {
+                        Rv key = args.get("0");
+                        Rv start = args.get("1");
+                        Rv ret = new Rv(-1);
+                        if (key != null) {
+                            String s = key.toStr().str;
+                            int idx = start != null && (start = start.toNum()) != Rv._NaN ? start.num : 0;
+                            ret = new Rv(_this.str.indexOf(s, idx));
+                        }
+
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "String.lastIndexOf",
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rv arg0 = args.get("0");
+                        Rv arg1 = args.get("1");
+                        Rv ret = new Rv(-1);
+                        
+                        if (arg0 != null) {
+                            String s = arg0.toStr().str;
+                            String src = thiz.toStr().str;
+                            int l = s.length(), srcl = src.length();
+                            int idx = arg1 != null && (arg1 = arg1.toNum()) != Rv._NaN ? arg1.num : srcl;
+                            if (idx >= 0) {
+                                if (idx >= srcl - l) idx = srcl - l;
+                                for (int i = idx + 1; --i >= 0;) {
+                                    if (src.regionMatches(false, i, s, 0, l)) {
+                                        ret = new Rv(i);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "String.substring",
+                new NativeFunction() {
+                    public final int length = 2;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rv arg0 = args.get("0");
+                        Rv arg1 = args.get("1");
+                        Rv ret = Rv._undefined;
+                        
+                        if (arg0 != null) {
+                            thiz = thiz.toStr();
+                            int i1 = (arg0 = arg0.toNum()) != Rv._NaN ? arg0.num : 0;
+                            int i2 = arg1 != null && (arg1 = arg1.toNum()) != Rv._NaN ? arg1.num : Integer.MAX_VALUE;
+                            int strlen;
+                            if (i2 > (strlen = thiz.str.length())) i2 = strlen;
+                            ret = new Rv(thiz.str.substring(i1, i2));
+                        }
+                        
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "String.split",
+                new NativeFunction() {
+                    public final int length = 2;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rv arg0 = args.get("0");
+                        Rv arg1 = args.get("1");
+                        Rv ret = Rv._undefined;
+                        
+                        if (arg0 != null) {
+                            thiz = thiz.toStr();
+                            int limit = arg1 != null && (arg1 = arg1.toNum()) != Rv._NaN ? arg1.num : -1;
+                            String delim;
+                            Pack p = split(thiz.str, delim = arg0.toStr().str);
+                            if (limit >= 1) {
+                                StringBuffer buf = new StringBuffer();
+                                for (int i = limit - 1, n = p.oSize; i < n; i++) {
+                                    if (i > limit - 1) buf.append(delim);
+                                    buf.append(p.oArray[i]);
+                                }
+                                p.setSize(-1, limit).set(-1, buf.toString());
+                            }
+                            ret = new Rv(Rv.ARRAY, Rv._Array);
+                            for (int i = 0, n = p.oSize; i < n; i++) {
+                                ret.putl(i, new Rv((String) p.oArray[i])); 
+                            }
+                        }
+                        
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "String.charCodeAt",
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rv arg0 = args.get("0");
+                        int pos = (arg0 = arg0.toNum()) != Rv._NaN ? arg0.num : -1;
+                        Rv ret = pos < 0 || pos >= thiz.str.length() ? Rv._NaN
+                                : new Rv(thiz.str.charAt(pos));
+                        
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "String.fromCharCode",
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        StringBuffer buf = new StringBuffer();
+                        int argLen = args.num;
+                        
+                        for (int i = 0; i < argLen; i++) {
+                            Rv charcode = args.get(Integer.toString(i)).toNum();
+                            if (charcode != Rv._NaN) buf.append((char) charcode.num);
+                        }
+                        Rv ret = new Rv(buf.toString());
+                        
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Array.concat",
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rv ret = new Rv(Rv.ARRAY, Rv._Array);
+                        ret.num = thiz.num;
+                        Rhash dest = ret.prop;
+                        Rhash prop = thiz.prop;
+                        String key;
+                        Pack keys = prop.keys();
+                        int argLen = args.num;
+                        
+                        for (int i = 0, n = keys.oSize; i < n; i++) {
+                            dest.put(key = (String) keys.oArray[i], prop.get(key));
+                        }
+                        for (int i = 0; i < argLen; i++) {
+                            Rv obj = args.get(Integer.toString(i));
+                            if (obj.type == Rv.ARRAY) {
+                                for (int j = 0, n = obj.num, b = ret.num; j < n; j++) {
+                                    ret.putl(b + j, obj.get(Integer.toString(j)));
+                                }
+                            } else {
+                                ret.putl(ret.num, obj);
+                            }
+                        }
+                        
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Array.join",
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rv arg0 = args.get("0");
+                        String sep = arg0 != null ? arg0.toStr().str : ",";
+                        StringBuffer buf = new StringBuffer();
+                        Rhash prop = thiz.prop;
+                        
+                        for (int i = 0, n = thiz.num; i < n; i++) {
+                            if (i > 0) buf.append(sep);
+                            buf.append(prop.get(Integer.toString(i)).toStr().str);
+                        }
+                        Rv ret = new Rv(buf.toString());
+                        
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Array.push",
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        int argLen = args.num;
+                        
+                        for (int i = 0, b = thiz.num; i < argLen; i++) {
+                            thiz.putl(b + i, args.get(Integer.toString(i)));
+                        }
+                        Rv ret = new Rv(thiz.num);
+                        
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Array.pop",
+                new NativeFunction() {
+                    public final int length = 0;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rv ret = thiz.shift(thiz.num - 1);
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Array.shift",
+                new NativeFunction() {
+                    public final int length = 0;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rv ret = thiz.shift(0);
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Array.unshift",
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rhash ht = new Rhash(11);
+                        Rhash prop = thiz.prop;
+                        int argLen = args.num;
+                        
+                        for (int i = 0; i < argLen; i++) {
+                            String idx = Integer.toString(i);
+                            Rv val = args.prop.get(idx); 
+                            if (val != null) ht.put(idx, val);
+                        }
+                        for (int i = 0, n = thiz.num; i < n; i++) {
+                            Rv val = prop.get(Integer.toString(i)); 
+                            if (val != null) ht.put(Integer.toString(i + argLen), val);
+                        }
+                        thiz.num += argLen;
+                        thiz.prop = ht;
+                        
+                        return new Rv(thiz.num);
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Array.slice",
+                new NativeFunction() {
+                    public final int length = 2;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rv arg0 = args.get("0");
+                        Rv arg1 = args.get("1");
+                        Rv ret = Rv._undefined;
+                        Rhash prop = thiz.prop;
+                        
+                        if (arg0 != null) {
+                            int i1 = (arg0 = arg0.toNum()) != Rv._NaN ? arg0.num : 0;
+                            int i2 = arg1 != null && (arg1 = arg1.toNum()) != Rv._NaN ? arg1.num : thiz.num;
+                            ret = new Rv(Rv.ARRAY, Rv._Array);
+                            Rhash ht = ret.prop;
+                            int i = 0, n = ret.num = i2 - i1;
+                            for (; i < n; i++) {
+                                Rv val = prop.get(Integer.toString(i + i1)); 
+                                if (val != null) ht.put(Integer.toString(i), val);
+                            }
+                        }
+                        
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Array.sort",
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rv arg0 = args.get("0");
+                        Rhash prop = thiz.prop;
+                        Rv comp = arg0 != null && arg0.type >= Rv.FUNCTION ? arg0 : null;
+                        int num;
+                        Pack tmp = new Pack(-1, num = thiz.num);
+                        
+                        for (int i = 0; i < num; tmp.add(prop.get(Integer.toString(i++))));
+                        Object[] arr = tmp.oArray;
+                        for (int i = 0, n = num - 1; i < n; i++) {
+                            Rv r1 = (Rv) arr[i];
+                            for (int j = i + 1; j < num; j++) {
+                                Rv r2 = (Rv) arr[j];
+                                boolean grtr = false;
+                                if (r1 == null || r2 == null || r1 == Rv._undefined || r2 == Rv._undefined) {
+                                    grtr = r1 == null && r2 != null 
+                                            || r1 == Rv._undefined && r2 != null && r2 != Rv._undefined;
+                                } else {
+                                    if (comp == null) {
+                                        grtr = r1.toStr().str.compareTo(r2.toStr().str) > 0;
+                                    } else {
+                                        Pack argSrc = new Pack(-1, 2).add(r1).add(r2);
+                                        Rv funCo = new Rv(Rv.OBJECT, Rv._Object);
+                                        funCo.prev = comp.co.prev;
+                                        Rv cobak = comp.co;
+                                        grtr = call(false, comp, comp.co = funCo, thiz, argSrc, 0, 2).toNum().num > 0;
+                                        comp.co = cobak;
+                                    }
+                                }
+                                if (grtr) {
+                                    arr[j] = r1;
+                                    arr[i] = r1 = r2;
+                                }
+                            }
+                        }
+                        Rhash ht = new Rhash(11);
+                        for (int i = num; --i >= 0;) {
+                            Rv val; 
+                            if ((val = (Rv) arr[i]) != null) ht.put(Integer.toString(i), val);
+                        }
+                        thiz.prop = ht;
+                        
+                        return thiz;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Array.reverse",
+                new NativeFunction() {
+                    public final int length = 0;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rhash prop = thiz.prop;
+                        Rhash ht = new Rhash(11);
+
+                        for (int i = 0, j = thiz.num; --j >= 0; i++) {
+                            Rv val = prop.get(Integer.toString(j)); 
+                            if (val != null) ht.put(Integer.toString(i), val);
+                        }
+                        thiz.prop = ht;
+
+                        return thiz;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Date.getTime",
+                new NativeFunction() {
+                    public final int length = 0;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rv ret = new Rv(thiz.num);
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Date.setTime",
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rv arg0 = args.get("0");
+
+                        if (arg0 != null && (arg0 = arg0.toNum()) != Rv._NaN) {
+                            thiz.num = arg0.num;
+                        }
+
+                        return thiz;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Error.toString",
+                new NativeFunction() {
+                    public final int length = 0;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rv ret = thiz.get("message");
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Math.random",
+                new NativeFunction() {
+                    public final int length = 2;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rv arg0 = args.get("0");
+                        Rv arg1 = args.get("1");
+                        Rv ret = Rv._undefined;
+                    
+                        if (arg0 != null && arg0.toNum() != Rv._NaN) {
+                            int low = arg0.num;
+                            int high = arg1 != null && arg1.toNum() != Rv._NaN ? arg1.num : low - 1;
+                            if (high <= low) {
+                                high = low;
+                                low = 0;
+                            }
+                            int rand = (random.nextInt() & 0x7FFFFFFF) % (high - low);
+                            ret = new Rv(low + rand);
+                        }
+
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Math.min",
+                new NativeFunction() {
+                    public final int length = 2;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        int argLen = args.num;
+                        Rv ret = Rv._undefined;
+
+                        if (argLen > 0) {
+                            int iret = Integer.MAX_VALUE;
+                            for (int i = 0; i < argLen; i++) {
+                                Rv val = args.get(Integer.toString(i)).toNum();
+                                if (val == Rv._NaN) {
+                                    ret = val;
+                                    return ret;
+                                }
+                                if (iret > val.num) iret = val.num;
+                            }
+                            ret = new Rv(iret);
+                        }
+
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "Math.max",
+                new NativeFunction() {
+                    public final int length = 2;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        int argLen = args.num;
+                        Rv ret = Rv._undefined;
+
+                        if (argLen > 0) {
+                            int iret = Integer.MIN_VALUE;
+                            for (int i = 0; i < argLen; i++) {
+                                Rv val = args.get(Integer.toString(i)).toNum();
+                                if (val == Rv._NaN) {
+                                    ret = val;
+                                    return ret;
+                                }
+                                if (iret < val.num) iret = val.num;
+                            }
+                            ret = new Rv(iret);
+                        }
+
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "isNaN",
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rv arg0 = args.get("0");
+                        Rv ret = arg0 != null && arg0 == Rv._NaN ? Rv._true : Rv._false;
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "parseInt",
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rv arg0 = args.get("0");
+                        Rv arg1 = args.get("1");
+                        Rv ret = Rv._undefined;
+
+                        int radix = arg1 != null && arg1.toNum() != Rv._NaN ? arg1.num : 10;
+                        String sNum = arg0 != null ? arg0.toStr().str : null;
+                        try {
+                            ret = new Rv(Integer.parseInt(sNum, radix));
+                        } catch (Exception ex) { } // do nothing, ret = undefined
+
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "eval",
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rv arg0 = args.get("0");
+                        Rv ret = Rv._undefined;
+
+                        if (arg0 != null) {
+                            String s;
+                            reset(s = arg0.toStr().str, null, 0, s.length());
+                            Node node = astNode(null, RC.TOK_FUNCTION, 0, 0);
+                            astNode(node, RC.TOK_LBR, 0, endpos); // '{' = block
+                            Rv func = new Rv(false, node, 0);
+                            ret = call(false, func, thiz, null, null, 0, 0);
+                        }
+
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "es",
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        Rv arg0 = args.get("0");
+                        Rv ret = Rv._undefined;
+
+                        if (arg0 != null) {
+                            ret = evalString(arg0.toStr().str, thiz);
+                        }
+
+                        return ret;
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
+                "console.log", 
+                new NativeFunction() {
+                    public final int length = 1;
+                    public Rv func(boolean isNew, Rv _this, Rv args) {
+                        Rv arg = args.get("0");
+                        String msg = args.num > 0 ? arg.toStr().str : "";
+
+                        System.out.println(msg);
+
+                        return Rv._undefined;
+                    }
+                }
+            ),
+        }
+    );
+
     /**
      * call a native function
      * @param isNew
@@ -1007,34 +1759,29 @@ mainloop:
      * @return
      */
     protected Rv callNative(boolean isNew, Rv function, Rv callObj) {
-        Rv idEnt;
-        if ((idEnt = htNativeIndex.getEntry(0, function.str)) == null) return Rv._undefined;
         Rv args = callObj.get("arguments");
         Rv thiz = callObj.get("this");
+
+        NativeFunction native_func = function_list.get(function.str);
+
+        if (native_func != null) {
+            return native_func.func(isNew, thiz, args);
+        }
+
+        Rv idEnt;
+        if ((idEnt = htNativeIndex.getEntry(0, function.str)) == null) return Rv._undefined;
+
         Rhash prop = thiz.prop;
         int argLen = args.num;
         Rv arg0, arg1, ret;
         arg0 = argLen > 0 ? (Rv) args.get("0") : null;
         arg1 = argLen > 1 ? (Rv) args.get("1") : null;
         ret = Rv._undefined;
+
+        
         
         int funcId;
         switch (funcId = idEnt.num) {
-        case 101: // Object(1)
-            ret = isNew ? thiz : new Rv(Rv.OBJECT, Rv._Object);
-            if (arg0 != null) {
-                int type;
-                if ((type = arg0.type) == Rv.NUMBER || type == Rv.NUMBER_OBJECT) {
-                    ret.type = Rv.NUMBER_OBJECT;
-                    ret.num = arg0.num;
-                } else if (type == Rv.STRING || type == Rv.STRING_OBJECT) {
-                    ret.type = Rv.STRING_OBJECT;
-                    ret.str = arg0.str;
-                } else { // object
-                    ret = arg0;
-                }
-            }
-            break;
         case 102: // Function(1)
             if (argLen > 0) {
                 ret = isNew ? thiz : new Rv(Rv.OBJECT, Rv._Object);
@@ -1060,354 +1807,6 @@ mainloop:
                 ret.co.prev = callObj.prev;
             }
             break;
-        case 103: // Number(1)
-            if (isNew) {
-                ret = thiz;
-                ret.type = Rv.NUMBER_OBJECT;
-                ret.ctorOrProt = Rv._Number;
-            } else {
-                ret = new Rv(0);
-            }
-            ret.num = arg0 != null && (arg0 = arg0.toNum()) != Rv._NaN ? arg0.num : 0;
-            break;
-        case 104: // String(1)
-            if (isNew) {
-                ret = thiz;
-                ret.type = Rv.STRING_OBJECT;
-                ret.ctorOrProt = Rv._String;
-            } else {
-                ret = new Rv("");
-            }
-            ret.str = arg0 != null? arg0.toStr().str : "";
-            break;
-        case 105: // Array(1)
-            ret = isNew ? thiz : new Rv(Rv.ARRAY, Rv._Array);
-            ret.type = Rv.ARRAY;
-            ret.ctorOrProt = Rv._Array;
-            Rv len;
-            if (argLen == 1 && (len = arg0.toNum()) != Rv._NaN) {
-                ret.num = len.num;
-            } else { // 0 or more
-                ret.num = argLen;
-                for (int i = 0; i < argLen; i++) {
-                    ret.putl(i, args.get(Integer.toString(i)));
-                }
-            }
-            break;
-        case 106: // Date(1)
-            ret = isNew ? thiz : new Rv(Rv.OBJECT, Rv._Date);
-            ret.type = Rv.NUMBER_OBJECT;
-            ret.ctorOrProt = Rv._Date;
-            thiz.num = arg0 != null && (arg0 = arg0.toNum()) != Rv._NaN ? arg0.num 
-                    : (int) (System.currentTimeMillis() - bootTime);
-            break;
-        case 107: // Error(1)
-            ret = isNew ? thiz : new Rv(Rv.ERROR, Rv._Error);
-            ret.type = Rv.ERROR;
-            ret.ctorOrProt = Rv._Error;
-            if (arg0 != null) ret.putl("message", arg0.toStr());
-            break;
-        case 111: // Object.toString(0)
-            ret = thiz.toStr();
-            break;
-        case 112: // Object.hasOwnProperty(1)
-            ret = arg0 != null && thiz.has(arg0.toStr().str) ? Rv._true : Rv._false;
-            break;
-        case 121: // Function.call(1)
-        case 122: // Function.apply(2)
-            boolean isCall;
-            if (arg0 != null && arg0.type >= Rv.OBJECT 
-                    && ((isCall = (funcId == 121)) || arg1 != null && arg1.type == Rv.ARRAY)) {
-                Rv funCo = new Rv(Rv.OBJECT, Rv._Object);
-                funCo.prev = thiz.co.prev;
-                int argNum, argStart;
-                Rv argsArr;
-                if (isCall) {
-                    argNum = argLen - 1;
-                    argStart = 1;
-                    argsArr = args;
-                } else {
-                    argNum = arg1.num;
-                    argStart = 0;
-                    argsArr = arg1;
-                }
-                Pack argSrc = new Pack(-1, argNum);
-                
-                for (int ii = argStart, nn = argStart + argNum; ii < nn; argSrc.add(argsArr.get(Integer.toString(ii++))));
-                Rv cobak = thiz.co;
-                ret = call(false, thiz, thiz.co = funCo, arg0, argSrc, 0, argNum);
-                thiz.co = cobak;
-            }
-            break;
-        case 131: // Number.valueOf(0)
-            ret = thiz.type == Rv.NUMBER_OBJECT ? thiz : Rv._undefined;
-            break;
-        case 141: // String.valueOf(0)
-            ret = thiz.type == Rv.STRING_OBJECT ? thiz : Rv._undefined;
-            break;
-        case 142: // String.charAt(1)
-            int pos = (arg0 = arg0.toNum()) != Rv._NaN ? arg0.num : -1;
-            ret = pos < 0 || pos >= thiz.str.length() ? Rv._empty
-                    : new Rv(String.valueOf(thiz.str.charAt(pos)));
-            break;
-        case 143: // String.indexOf(1)
-            ret = new Rv(-1);
-            if (arg0 != null) {
-                String s = arg0.toStr().str;
-                int idx = arg1 != null && (arg1 = arg1.toNum()) != Rv._NaN ? arg1.num : 0;
-                ret = new Rv(thiz.str.indexOf(s, idx));
-            }
-            break;
-        case 144: // String.lastIndexOf(1)
-            ret = new Rv(-1);
-            if (arg0 != null) {
-                String s = arg0.toStr().str;
-                String src = thiz.toStr().str;
-                int l = s.length(), srcl = src.length();
-                int idx = arg1 != null && (arg1 = arg1.toNum()) != Rv._NaN ? arg1.num : srcl;
-                if (idx >= 0) {
-                    if (idx >= srcl - l) idx = srcl - l;
-                    for (int i = idx + 1; --i >= 0;) {
-                        if (src.regionMatches(false, i, s, 0, l)) {
-                            ret = new Rv(i);
-                            break;
-                        }
-                    }
-                }
-            }
-            break;
-        case 145: // String.substring(2)
-            if (arg0 != null) {
-                thiz = thiz.toStr();
-                int i1 = (arg0 = arg0.toNum()) != Rv._NaN ? arg0.num : 0;
-                int i2 = arg1 != null && (arg1 = arg1.toNum()) != Rv._NaN ? arg1.num : Integer.MAX_VALUE;
-                int strlen;
-                if (i2 > (strlen = thiz.str.length())) i2 = strlen;
-                ret = new Rv(thiz.str.substring(i1, i2));
-            }
-            break;
-        case 146: // String.split(2)
-            if (arg0 != null) {
-                thiz = thiz.toStr();
-                int limit = arg1 != null && (arg1 = arg1.toNum()) != Rv._NaN ? arg1.num : -1;
-                String delim;
-                Pack p = split(thiz.str, delim = arg0.toStr().str);
-                if (limit >= 1) {
-                    StringBuffer buf = new StringBuffer();
-                    for (int i = limit - 1, n = p.oSize; i < n; i++) {
-                        if (i > limit - 1) buf.append(delim);
-                        buf.append(p.oArray[i]);
-                    }
-                    p.setSize(-1, limit).set(-1, buf.toString());
-                }
-                ret = new Rv(Rv.ARRAY, Rv._Array);
-                for (int i = 0, n = p.oSize; i < n; i++) {
-                    ret.putl(i, new Rv((String) p.oArray[i])); 
-                }
-            }
-            break;
-        case 147: // String.charCodeAt(1)
-            pos = (arg0 = arg0.toNum()) != Rv._NaN ? arg0.num : -1;
-            ret = pos < 0 || pos >= thiz.str.length() ? Rv._NaN
-                    : new Rv(thiz.str.charAt(pos));
-            break;
-        case 148: // String.fromCharCode(1)
-            StringBuffer buf = new StringBuffer();
-            for (int i = 0; i < argLen; i++) {
-                Rv charcode = args.get(Integer.toString(i)).toNum();
-                if (charcode != Rv._NaN) buf.append((char) charcode.num);
-            }
-            ret = new Rv(buf.toString());
-            break;
-        case 151: // Array.concat(1)
-            ret = new Rv(Rv.ARRAY, Rv._Array);
-            ret.num = thiz.num;
-            Rhash dest = ret.prop;
-            String key;
-            Pack keys = prop.keys();
-            for (int i = 0, n = keys.oSize; i < n; i++) {
-                dest.put(key = (String) keys.oArray[i], prop.get(key));
-            }
-            for (int i = 0; i < argLen; i++) {
-                Rv obj = args.get(Integer.toString(i));
-                if (obj.type == Rv.ARRAY) {
-                    for (int j = 0, n = obj.num, b = ret.num; j < n; j++) {
-                        ret.putl(b + j, obj.get(Integer.toString(j)));
-                    }
-                } else {
-                    ret.putl(ret.num, obj);
-                }
-            }
-            break;
-        case 152: // Array.join(1)
-            String sep = arg0 != null ? arg0.toStr().str : ",";
-            buf = new StringBuffer();
-            for (int i = 0, n = thiz.num; i < n; i++) {
-                if (i > 0) buf.append(sep);
-                buf.append(prop.get(Integer.toString(i)).toStr().str);
-            }
-            ret = new Rv(buf.toString());
-            break;
-        case 153: // Array.push(1)
-            for (int i = 0, b = thiz.num; i < argLen; i++) {
-                thiz.putl(b + i, args.get(Integer.toString(i)));
-            }
-            ret = new Rv(thiz.num);
-            break;
-        case 154: // Array.pop(0)
-            ret = thiz.shift(thiz.num - 1);
-            break;
-        case 155: // Array.shift(0)
-            ret = thiz.shift(0);
-            break;
-        case 156: // Array.unshift(1)
-            Rhash ht = new Rhash(11);
-            for (int i = 0; i < argLen; i++) {
-                String idx = Integer.toString(i);
-                Rv val = args.prop.get(idx); 
-                if (val != null) ht.put(idx, val);
-            }
-            for (int i = 0, n = thiz.num; i < n; i++) {
-                Rv val = prop.get(Integer.toString(i)); 
-                if (val != null) ht.put(Integer.toString(i + argLen), val);
-            }
-            thiz.num += argLen;
-            thiz.prop = ht;
-            break;
-        case 157: // Array.slice(2)
-            if (arg0 != null) {
-                int i1 = (arg0 = arg0.toNum()) != Rv._NaN ? arg0.num : 0;
-                int i2 = arg1 != null && (arg1 = arg1.toNum()) != Rv._NaN ? arg1.num : thiz.num;
-                ret = new Rv(Rv.ARRAY, Rv._Array);
-                ht = ret.prop;
-                int i = 0, n = ret.num = i2 - i1;
-                for (; i < n; i++) {
-                    Rv val = prop.get(Integer.toString(i + i1)); 
-                    if (val != null) ht.put(Integer.toString(i), val);
-                }
-            }
-            break;
-        case 158: // Array.sort(1)
-            Rv comp = arg0 != null && arg0.type >= Rv.FUNCTION ? arg0 : null;
-            int num;
-            Pack tmp = new Pack(-1, num = thiz.num);
-            for (int i = 0; i < num; tmp.add(prop.get(Integer.toString(i++))));
-            Object[] arr = tmp.oArray;
-            for (int i = 0, n = num - 1; i < n; i++) {
-                Rv r1 = (Rv) arr[i];
-                for (int j = i + 1; j < num; j++) {
-                    Rv r2 = (Rv) arr[j];
-                    boolean grtr = false;
-                    if (r1 == null || r2 == null || r1 == Rv._undefined || r2 == Rv._undefined) {
-                        grtr = r1 == null && r2 != null 
-                                || r1 == Rv._undefined && r2 != null && r2 != Rv._undefined;
-                    } else {
-                        if (comp == null) {
-                            grtr = r1.toStr().str.compareTo(r2.toStr().str) > 0;
-                        } else {
-                            Pack argSrc = new Pack(-1, 2).add(r1).add(r2);
-                            Rv funCo = new Rv(Rv.OBJECT, Rv._Object);
-                            funCo.prev = comp.co.prev;
-                            Rv cobak = comp.co;
-                            grtr = call(false, comp, comp.co = funCo, thiz, argSrc, 0, 2).toNum().num > 0;
-                            comp.co = cobak;
-                        }
-                    }
-                    if (grtr) {
-                        arr[j] = r1;
-                        arr[i] = r1 = r2;
-                    }
-                }
-            }
-            ht = new Rhash(11);
-            for (int i = num; --i >= 0;) {
-                Rv val; 
-                if ((val = (Rv) arr[i]) != null) ht.put(Integer.toString(i), val);
-            }
-            thiz.prop = ht;
-            break;
-        case 159: // Array.reverse(0)
-            ht = new Rhash(11);
-            for (int i = 0, j = thiz.num; --j >= 0; i++) {
-                Rv val = prop.get(Integer.toString(j)); 
-                if (val != null) ht.put(Integer.toString(i), val);
-            }
-            thiz.prop = ht;
-            break;
-        case 160: // Date.getTime(0)
-            ret = new Rv(thiz.num);
-            break;
-        case 161: // Date.setTime(1)
-            if (arg0 != null && (arg0 = arg0.toNum()) != Rv._NaN) {
-                thiz.num = arg0.num;
-            }
-            break;
-        case 170: // Error.toString(0)
-            ret = thiz.get("message");
-            break;
-        case 203: // Math.random(1)
-            if (arg0 != null && arg0.toNum() != Rv._NaN) {
-                int low = arg0.num;
-                int high = arg1 != null && arg1.toNum() != Rv._NaN ? arg1.num : low - 1;
-                if (high <= low) {
-                    high = low;
-                    low = 0;
-                }
-                int rand = (random.nextInt() & 0x7FFFFFFF) % (high - low);
-                ret = new Rv(low + rand);
-            }
-            break;
-        case 210: // Math.min(2)
-        case 211: // Math.max(2)
-            if (argLen > 0) {
-                boolean isMax;
-                int iret = (isMax = funcId == 211) ? Integer.MIN_VALUE : Integer.MAX_VALUE;
-                for (int i = 0; i < argLen; i++) {
-                    Rv val = args.get(Integer.toString(i)).toNum();
-                    if (val == Rv._NaN) {
-                        ret = val;
-                        break;
-                    }
-                    if (isMax && iret < val.num || !isMax && iret > val.num) iret = val.num;
-                }
-                ret = new Rv(iret);
-            }
-            break;
-        case 204: // isNaN(1)
-            ret = arg0 != null && arg0 == Rv._NaN ? Rv._true : Rv._false;
-            break;
-        case 205: // parseInt(1)
-            int radix = arg1 != null && arg1.toNum() != Rv._NaN ? arg1.num : 10;
-            String sNum = arg0 != null ? arg0.toStr().str : null;
-            try {
-                ret = new Rv(Integer.parseInt(sNum, radix));
-            } catch (Exception ex) { } // do nothing, ret = undefined
-            break;
-        case 206: // eval(1)
-            if (arg0 != null) {
-                String s;
-                this.reset(s = arg0.toStr().str, null, 0, s.length());
-                Node node = astNode(null, RC.TOK_FUNCTION, 0, 0);
-                astNode(node, RC.TOK_LBR, 0, this.endpos); // '{' = block
-                Rv func = new Rv(false, node, 0);
-                ret = call(false, func, thiz, null, null, 0, 0);
-            }
-            break;
-        case 207: // es(1)
-            if (arg0 != null) {
-                ret = evalString(arg0.toStr().str, thiz);
-            }
-            break;
-        case 208: // print(1);
-        case 209: // println(1);
-            String msg = argLen > 0 ? arg0.toStr().str : "";
-            System.out.print(msg);
-            out.append(msg);
-            if (funcId == 209) {
-                System.out.println();
-                out.append("\n");
-            }
-            break;
         }
 //        StringBuffer buf = new StringBuffer();
 //        buf.append("this=" + thiz.toStr());
@@ -1421,73 +1820,76 @@ mainloop:
     public Rv initGlobalObject() {
         Rv go = new Rv();
         go.type = Rv.OBJECT;
-        go.prop = new Rhash(41);
+        go.prop = new Rhash(43);
         
         if (Rv._Object.type == Rv.UNDEFINED) { // Rv not initialized
             Rv._Object.nativeCtor("Object", go)
                     .ctorOrProt
-                    .putl("toString", nat("Object.toString"))
-                    .putl("hasOwnProperty", nat("Object.hasOwnProperty"))
+                    .putl("toString", getNativeFunctionValue("Object.toString"))
+                    .putl("hasOwnProperty", getNativeFunctionValue("Object.hasOwnProperty"))
                     .ctorOrProt = null;
             ;
             Rv._Function.nativeCtor("Function", go)
                     .ctorOrProt
-                    .putl("call", nat("Function.call"))      // call(thisObj, [arg1, [arg2...]])
-                    .putl("apply", nat("Function.apply"))    // apply(thisObj, arrayArgs)
+                    .putl("call", getNativeFunctionValue("Function.call"))      // call(thisObj, [arg1, [arg2...]])
+                    .putl("apply", getNativeFunctionValue("Function.apply"))    // apply(thisObj, arrayArgs)
             ;
             Rv._Number.nativeCtor("Number", go)
                     .putl("MAX_VALUE", new Rv(Integer.MAX_VALUE))
                     .putl("MIN_VALUE", new Rv(Integer.MIN_VALUE))
                     .putl("NaN", Rv._NaN)
                     .ctorOrProt
-                    .putl("valueOf", nat("Number.valueOf"))
+                    .putl("valueOf", getNativeFunctionValue("Number.valueOf"))
             ;
             Rv._String.nativeCtor("String", go)
-                    .putl("fromCharCode", nat("String.fromCharCode"))
+                    .putl("fromCharCode", getNativeFunctionValue("String.fromCharCode"))
                     .ctorOrProt
-                    .putl("valueOf", nat("String.valueOf"))
-                    .putl("charAt", nat("String.charAt"))
-                    .putl("charCodeAt", nat("String.charCodeAt"))
-                    .putl("indexOf", nat("String.indexOf"))
-                    .putl("lastIndexOf", nat("String.lastIndexOf"))
-                    .putl("substring", nat("String.substring"))
-                    .putl("split", nat("String.split"))
+                    .putl("valueOf", getNativeFunctionValue("String.valueOf"))
+                    .putl("charAt", getNativeFunctionValue("String.charAt"))
+                    .putl("charCodeAt", getNativeFunctionValue("String.charCodeAt"))
+                    .putl("indexOf", getNativeFunctionValue("String.indexOf"))
+                    .putl("lastIndexOf", getNativeFunctionValue("String.lastIndexOf"))
+                    .putl("substring", getNativeFunctionValue("String.substring"))
+                    .putl("split", getNativeFunctionValue("String.split"))
             ;
             Rv._Array.nativeCtor("Array", go)
                     .ctorOrProt
-                    .putl("concat", nat("Array.concat"))    // concat(arg0[, arg1...])
-                    .putl("join", nat("Array.join"))        // join(separator)
-                    .putl("push", nat("Array.push"))        // push(arg0[, arg1...])
-                    .putl("pop", nat("Array.pop"))          // pop()
-                    .putl("shift", nat("Array.shift"))      // shift()
-                    .putl("unshift", nat("Array.unshift"))  // unshift(arg0[, arg1...])
-                    .putl("slice", nat("Array.slice"))      // slice(start, end)
-                    .putl("sort", nat("Array.sort"))        // sort(comparefn)
-                    .putl("reverse", nat("Array.reverse"))  // reverse()
+                    .putl("concat", getNativeFunctionValue("Array.concat"))    // concat(arg0[, arg1...])
+                    .putl("join", getNativeFunctionValue("Array.join"))        // join(separator)
+                    .putl("push", getNativeFunctionValue("Array.push"))        // push(arg0[, arg1...])
+                    .putl("pop", getNativeFunctionValue("Array.pop"))          // pop()
+                    .putl("shift", getNativeFunctionValue("Array.shift"))      // shift()
+                    .putl("unshift", getNativeFunctionValue("Array.unshift"))  // unshift(arg0[, arg1...])
+                    .putl("slice", getNativeFunctionValue("Array.slice"))      // slice(start, end)
+                    .putl("sort", getNativeFunctionValue("Array.sort"))        // sort(comparefn)
+                    .putl("reverse", getNativeFunctionValue("Array.reverse"))  // reverse()
             ;
             Rv._Date.nativeCtor("Date", go)
                     .ctorOrProt
-                    .putl("getTime", nat("Date.getTime"))   // getTime()
-                    .putl("setTime", nat("Date.setTime"))   // setTime(arg0)
+                    .putl("getTime", getNativeFunctionValue("Date.getTime"))   // getTime()
+                    .putl("setTime", getNativeFunctionValue("Date.setTime"))   // setTime(arg0)
             ;
             Rv._Error.nativeCtor("Error", go)
                     .putl("name", new Rv("Error"))
                     .putl("message", new Rv("Error"))
                     .ctorOrProt
-                    .putl("toString", nat("Error.toString"))    // toString()
+                    .putl("toString", getNativeFunctionValue("Error.toString"))    // toString()
             ;
             Rv._Arguments.nativeCtor("Arguments", go)
                     .ctorOrProt
                     .ctorOrProt = Rv._Array
             ;
         }
+        Rv _console = new Rv(Rv.OBJECT, Rv._Object)
+                .putl("log", getNativeFunctionValue("console.log"))   // console.log()
+        ;
         Rv _Math = new Rv(Rv.OBJECT, Rv._Object)
-                .putl("random", nat("Math.random"))
-                .putl("min", nat("Math.min"))
-                .putl("max", nat("Math.max"))
+                .putl("random", getNativeFunctionValue("Math.random"))
+                .putl("min", getNativeFunctionValue("Math.min"))
+                .putl("max", getNativeFunctionValue("Math.max"))
         ;
         // fill global Object
-        Rv println;
+        Rv console_log;
         go.putl("true", Rv._true)
                 .putl("false", Rv._false)
                 .putl("null", Rv._null)
@@ -1499,15 +1901,14 @@ mainloop:
                 .putl("String", Rv._String)
                 .putl("Array", Rv._Array)
                 .putl("Date", Rv._Date)
+                .putl("console", _console)
                 .putl("Error", Rv._Error)
                 .putl("Math", _Math)
-                .putl("isNaN", nat("isNaN"))
-                .putl("parseInt", nat("parseInt"))
-                .putl("eval", nat("eval"))
-                .putl("es", nat("es"))
-                .putl("print", nat("print"))
-                .putl("println", (println = nat("println")))
-                .putl("alert", println)
+                .putl("isNaN", getNativeFunctionValue("isNaN"))
+                .putl("parseInt", getNativeFunctionValue("parseInt"))
+                .putl("eval", getNativeFunctionValue("eval"))
+                .putl("es", getNativeFunctionValue("es"))
+                //.putl("alert", console_log)
                 ;
         
         go.putl("this", go);
@@ -1857,47 +2258,7 @@ mainloop:
 
     private static final String NATIVE_FUNC =
         // id, name, numArguments
-        "101,Object,1," +
         "102,Function,1," +
-        "103,Number,1," +
-        "104,String,1," +
-        "105,Array,1," +
-        "106,Date,1," +
-        "107,Error,1," +
-        "111,Object.toString,0," +
-        "112,Object.hasOwnProperty,1," +
-        "121,Function.call,1," +
-        "122,Function.apply,2," +
-        "131,Number.valueOf,0," +
-        "141,String.valueOf,0," +
-        "142,String.charAt,1," +
-        "143,String.indexOf,1," +
-        "144,String.lastIndexOf,1," +
-        "145,String.substring,2," +
-        "146,String.split,2," +
-        "147,String.charCodeAt,1," +
-        "148,String.fromCharCode,1," +
-        "151,Array.concat,1," +
-        "152,Array.join,1," +
-        "153,Array.push,1," +
-        "154,Array.pop,0," +
-        "155,Array.shift,0," +
-        "156,Array.unshift,1," +
-        "157,Array.slice,2," +
-        "158,Array.sort,1," +
-        "159,Array.reverse,0," +
-        "160,Date.getTime,0," +
-        "161,Date.setTime,1," +
-        "170,Error.toString,0," +
-        "203,Math.random,1," +
-        "204,isNaN,1," +
-        "205,parseInt,1," +
-        "206,eval,1," +
-        "207,es,1," +                   // eval string
-        "208,print,1," +
-        "209,println,1," +
-        "210,Math.min,2," +
-        "211,Math.max,2," +
         "";
     
     static final Rhash htNativeIndex;
@@ -1987,6 +2348,11 @@ mainloop:
     
     final static Rv nat(String name) {
         return new Rv(true, name, htNativeLength.getEntry(0, name).num);
+    }
+
+    final Rv getNativeFunctionValue(String name) {
+        NativeFunction func = function_list.get(name);
+        return new Rv(true, name, func.length);
     }
     
 }

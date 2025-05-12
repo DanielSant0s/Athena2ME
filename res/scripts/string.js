@@ -15,6 +15,6 @@ function aa() {
      sbf.append("$i");
     }
   str = sbf.toString();
-  println(str);
+  console.log(str);
 }
 aa();

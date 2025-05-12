@@ -8,4 +8,4 @@ var f = e >>> 16
 var g = e << 8
 var h = g >> 8
 
-println("a=$a, b=$b, c=$c, d=$d, e=$e, f=$f, g=$g, h=$h");
+console.log("a=$a, b=$b, c=$c, d=$d, e=$e, f=$f, g=$g, h=$h");

@@ -3,20 +3,20 @@ var c = 100;
 var i = 0;
 var sum = 0;
 while (i++ < c)  sum += i;
-println("sum=" + sum)
+console.log("sum=" + sum)
 with (myobj)
 switch (a) {
 case "b":
-    println("b");
+    console.log("b");
     break;
 default:
-    println("default");
+    console.log("default");
     break;
 case "aaa":
-    println("aaa");
+    console.log("aaa");
     break;
 case "bbb":
-    println("bbb");
+    console.log("bbb");
     break;
 }
-println("end!!");
+console.log("end!!");

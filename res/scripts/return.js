@@ -12,4 +12,4 @@ function foo()
     return i;
 }
 
-println(foo());
+console.log(foo());

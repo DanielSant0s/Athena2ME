@@ -1,11 +1,11 @@
 function foo() {
-    println("arguments.length=$arguments.length");
+    console.log("arguments.length=$arguments.length");
     for (var i in arguments)
-        println("arguments[$i]=$arguments[i]");
+        console.log("arguments[$i]=$arguments[i]");
 
     var arr = arguments.concat("hello", "world", [ "22", , , "55" ])
     for (var i in arr) {
-        println("arr[$i]=$arr[i]");
+        console.log("arr[$i]=$arr[i]");
     }
 
 }
