@@ -1584,6 +1584,15 @@ mainloop:
                 }
             ),
             new NativeFunctionListEntry(
+                "Date.now",
+                new NativeFunction() {
+                    public final int length = 0;
+                    public Rv func(boolean isNew, Rv thiz, Rv args) {
+                        return new Rv((int) (System.currentTimeMillis()-bootTime));
+                    }
+                }
+            ),
+            new NativeFunctionListEntry(
                 "Error.toString",
                 new NativeFunction() {
                     public final int length = 0;
@@ -1878,6 +1887,7 @@ mainloop:
                     .putl("reverse", newNativeFunction("Array.reverse"))  // reverse()
             ;
             Rv._Date.nativeCtor("Date", go)
+                    .putl("now", newNativeFunction("Date.now"))
                     .ctorOrProt
                     .putl("getTime", newNativeFunction("Date.getTime"))   // getTime()
                     .putl("setTime", newNativeFunction("Date.setTime"))   // setTime(arg0)
@@ -1926,6 +1936,14 @@ mainloop:
         
         go.putl("this", go);
         return go;
+    }
+
+    public void addToObject(Rv obj, String key, Rv prop) {
+        obj.putl(key, prop);
+    }
+
+    public Rv newModule() {
+        return new Rv(Rv.OBJECT, Rv._Object);
     }
     
 ////////////////////////////// Auxiliary Routines ///////////////////////////

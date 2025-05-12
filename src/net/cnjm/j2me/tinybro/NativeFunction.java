@@ -6,6 +6,6 @@ import net.cnjm.j2me.util.*;
 
 public abstract class NativeFunction {
     public int length = 0;
-    abstract Rv func(boolean isNew, Rv _this, Rv args);
+    public abstract Rv func(boolean isNew, Rv _this, Rv args);
 
 }
