@@ -1,4 +1,4 @@
-MIDlet-1: Athena2ME, Athena2ME.png, RockScript
+MIDlet-1: Athena2ME, Athena2ME.png, Athena2ME
 MIDlet-Name: Athena2ME
 MIDlet-Vendor: Unknown
 MIDlet-Version: 1.0

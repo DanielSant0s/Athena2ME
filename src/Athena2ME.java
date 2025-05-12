@@ -6,11 +6,11 @@ import javax.microedition.midlet.*;
 import net.cnjm.j2me.tinybro.*;
 import net.cnjm.j2me.util.*;
 
-public class RockScript extends MIDlet implements CommandListener {
+public class Athena2ME extends MIDlet implements CommandListener {
     RocksInterpreter ri;
     
 
-    public RockScript() {
+    public Athena2ME() {
         // TODO Auto-generated constructor stub
     }
 
