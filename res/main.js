@@ -13,7 +13,7 @@ var triangle_img = Screen.loadImage("/triangle.png");
 
 while(true) {
     if (Date.now() > cur_time) {
-        cur_time = Date.now() + 250
+        cur_time = Date.now() + 32
 
         Screen.clear(0x8000FF)
         Screen.drawText("Hello from Athena2ME!", 15, 15, 0, 0xFFFFFF)
@@ -26,29 +26,29 @@ while(true) {
         Screen.drawRect(x, y, 15, 15, 0xFFFFFF)
 
         if (dir_x == 1) {
-            x += 15
+            x += 2
         } else if (dir_x == 2) {  
-            x -= 15
+            x -= 2
         } 
 
         if (dir_y == 1) {
-            y += 15
+            y += 2
         } else if (dir_y == 2) {  
-            y -= 15
+            y -= 2
         } 
 
-        if (x >= (Screen.width-45) && dir_x == 1 && dir_y == 0) {
-            dir_x = 0
-            dir_y = 1
-        } else if (y >= (Screen.height-45) && dir_x == 0 && dir_y == 1) {
-            dir_x = 2
-            dir_y = 0
-        } else if (x <= 15 && dir_x == 2 && dir_y == 0) {
-            dir_x = 0
-            dir_y = 2
-        } else if (y <= 15 && dir_x == 0 && dir_y == 2) {
-            dir_x = 1
-            dir_y = 0
+        if (Pads.pressed(Pads.UP) && !(dir_x == 0 && dir_y == 2)) {
+            dir_x = 0;
+            dir_y = 2;
+        } else if (Pads.pressed(Pads.DOWN) && !(dir_x == 0 && dir_y == 1)) {
+            dir_x = 0;
+            dir_y = 1;
+        } else if (Pads.pressed(Pads.LEFT) && !(dir_x == 1 && dir_y == 0)) {
+            dir_x = 2;
+            dir_y = 0;
+        } else if (Pads.pressed(Pads.RIGHT) && !(dir_x == 2 && dir_y == 0)) {
+            dir_x = 1;
+            dir_y = 0;
         }
 
         Screen.update()

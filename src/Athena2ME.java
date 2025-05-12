@@ -10,14 +10,14 @@ import net.cnjm.j2me.util.*;
 
 public class Athena2ME extends MIDlet implements CommandListener {
     RocksInterpreter ri;
-    private AthenaCanvas athenaScreen;
+    private AthenaCanvas canvas;
     private Command exitCmd = new Command("Exit", Command.EXIT, 3);
     
 
     public Athena2ME() {
-        athenaScreen = new AthenaCanvas();
-        athenaScreen.addCommand(exitCmd);
-        athenaScreen.setCommandListener(this);
+        canvas = new AthenaCanvas();
+        canvas.addCommand(exitCmd);
+        canvas.setCommandListener(this);
     }
 
     protected void destroyApp(boolean unconditional) {
@@ -31,7 +31,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
     }
 
     protected void startApp() throws MIDletStateChangeException {
-        Display.getDisplay(this).setCurrent(athenaScreen);
+        Display.getDisplay(this).setCurrent(canvas);
 
         InputStream is = "".getClass().getResourceAsStream("/main.js");
         String src = "";
@@ -61,7 +61,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 public Rv func(boolean isNew, Rv _this, Rv args) {
                     Rv arg = args.get("0");
 
-                    athenaScreen.clearScreen(arg.toNum().num);
+                    canvas.clearScreen(arg.toNum().num);
 
                     return Rv._undefined;
                 }
@@ -76,7 +76,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
                     Rv anchor = args.get("3");
                     Rv color = args.get("4");
                     
-                    athenaScreen.drawFont(text.toStr().str, x.toNum().num, y.toNum().num, anchor.toNum().num, color.toNum().num);
+                    canvas.drawFont(text.toStr().str, x.toNum().num, y.toNum().num, anchor.toNum().num, color.toNum().num);
 
                     return Rv._undefined;
                 }
@@ -85,7 +85,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
         ri.addNativeFunction(new NativeFunctionListEntry("Screen.update", new NativeFunction() {
             public final int length = 0;
                 public Rv func(boolean isNew, Rv _this, Rv args) {
-                    athenaScreen.screenUpdate();
+                    canvas.screenUpdate();
 
                     return Rv._undefined;
                 }
@@ -100,7 +100,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
                     Rv h = args.get("3");
                     Rv color = args.get("4");
                     
-                    athenaScreen.drawRect(x.toNum().num, y.toNum().num, w.toNum().num, h.toNum().num, color.toNum().num);
+                    canvas.drawRect(x.toNum().num, y.toNum().num, w.toNum().num, h.toNum().num, color.toNum().num);
 
                     return Rv._undefined;
                 }
@@ -111,7 +111,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 public Rv func(boolean isNew, Rv _this, Rv args) {
                     Rv name = args.get("0");
 
-                    return new Rv(athenaScreen.loadImage(name.toStr().str));
+                    return new Rv(canvas.loadImage(name.toStr().str));
                 }
         }));
 
@@ -119,7 +119,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
             public final int length = 1;
                 public Rv func(boolean isNew, Rv _this, Rv args) {
                     Rv id = args.get("0");
-                    athenaScreen.freeImage(id.toNum().num);
+                    canvas.freeImage(id.toNum().num);
 
                     return Rv._undefined;
                 }
@@ -132,15 +132,15 @@ public class Athena2ME extends MIDlet implements CommandListener {
                     Rv x = args.get("1");
                     Rv y = args.get("2");
                     
-                    athenaScreen._drawImage(id.toNum().num, x.toNum().num, y.toNum().num);
+                    canvas._drawImage(id.toNum().num, x.toNum().num, y.toNum().num);
 
                     return Rv._undefined;
                 }
         }));
 
         Rv _Screen = ri.newModule();
-        ri.addToObject(_Screen, "width", new Rv(athenaScreen.getWidth()));
-        ri.addToObject(_Screen, "height", new Rv(athenaScreen.getHeight()));
+        ri.addToObject(_Screen, "width", new Rv(canvas.getWidth()));
+        ri.addToObject(_Screen, "height", new Rv(canvas.getHeight()));
         ri.addToObject(_Screen, "clear", ri.newNativeFunction("Screen.clear"));
         ri.addToObject(_Screen, "drawText", ri.newNativeFunction("Screen.drawText"));
         ri.addToObject(_Screen, "update", ri.newNativeFunction("Screen.update"));
@@ -150,6 +150,42 @@ public class Athena2ME extends MIDlet implements CommandListener {
         ri.addToObject(_Screen, "drawImage", ri.newNativeFunction("Screen.drawImage"));
 
         ri.addToObject(callObj, "Screen", _Screen);
+
+        ri.addNativeFunction(new NativeFunctionListEntry("Pads.pressed", new NativeFunction() {
+            public final int length = 0;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    Rv buttons = args.get("0");
+                    return new Rv(canvas.padPressed(buttons.toNum().num)? 1 : 0);
+                }
+        }));
+
+        Rv _Pads = ri.newModule();
+        ri.addToObject(_Pads, "pressed", ri.newNativeFunction("Pads.pressed"));
+
+        ri.addToObject(_Pads, "UP", new Rv(canvas.UP));
+        ri.addToObject(_Pads, "DOWN", new Rv(canvas.DOWN));
+        ri.addToObject(_Pads, "LEFT", new Rv(canvas.LEFT));
+        ri.addToObject(_Pads, "RIGHT", new Rv(canvas.RIGHT));
+        ri.addToObject(_Pads, "FIRE", new Rv(canvas.FIRE));
+        ri.addToObject(_Pads, "GAME_A", new Rv(canvas.GAME_A));
+        ri.addToObject(_Pads, "GAME_B", new Rv(canvas.GAME_B));
+        ri.addToObject(_Pads, "GAME_C", new Rv(canvas.GAME_C));
+        ri.addToObject(_Pads, "GAME_D", new Rv(canvas.GAME_D));
+
+        ri.addToObject(_Pads, "KEY_NUM0", new Rv(canvas.KEY_NUM0));
+        ri.addToObject(_Pads, "KEY_NUM1", new Rv(canvas.KEY_NUM1));
+        ri.addToObject(_Pads, "KEY_NUM2", new Rv(canvas.KEY_NUM2));
+        ri.addToObject(_Pads, "KEY_NUM3", new Rv(canvas.KEY_NUM3));
+        ri.addToObject(_Pads, "KEY_NUM4", new Rv(canvas.KEY_NUM4));
+        ri.addToObject(_Pads, "KEY_NUM5", new Rv(canvas.KEY_NUM5));
+        ri.addToObject(_Pads, "KEY_NUM6", new Rv(canvas.KEY_NUM6));
+        ri.addToObject(_Pads, "KEY_NUM7", new Rv(canvas.KEY_NUM7));
+        ri.addToObject(_Pads, "KEY_NUM8", new Rv(canvas.KEY_NUM8));
+        ri.addToObject(_Pads, "KEY_NUM9", new Rv(canvas.KEY_NUM9));
+        ri.addToObject(_Pads, "KEY_STAR", new Rv(canvas.KEY_STAR));
+        ri.addToObject(_Pads, "KEY_POUND", new Rv(canvas.KEY_POUND));
+        
+        ri.addToObject(callObj, "Pads", _Pads);
 
         ri.call(false, rv, callObj, null, null, 0, 0);
     }
