@@ -14,4 +14,15 @@ public class NativeFunctionList {
     public NativeFunction get(String name) {
         return (NativeFunction)functions.get(name);
     }
+
+    public void concat(NativeFunctionListEntry entries[]) {
+        for (int i = 0; i < entries.length; i++) {
+            functions.put((Object)entries[i].name, (Object)entries[i].func);
+        }
+    }
+
+    public void put(NativeFunctionListEntry entry) {
+        functions.put((Object)entry.name, (Object)entry.func);
+    }
+
 }

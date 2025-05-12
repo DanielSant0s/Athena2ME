@@ -1032,7 +1032,7 @@ mainloop:
         return Rv._undefined;
     }
 
-    public NativeFunctionList function_list = new NativeFunctionList(
+    private NativeFunctionList function_list = new NativeFunctionList(
         new NativeFunctionListEntry[] {
             new NativeFunctionListEntry(
                 "Object", 
@@ -1751,6 +1751,19 @@ mainloop:
         }
     );
 
+    public final Rv newNativeFunction(String name) {
+        NativeFunction func = function_list.get(name);
+        return new Rv(true, name, func.length);
+    }
+
+    public final void addNativeFunctionList(NativeFunctionListEntry entries[]) {
+        function_list.concat(entries);
+    }
+
+    public final void addNativeFunction(NativeFunctionListEntry entry) {
+        function_list.put(entry);
+    }
+
     /**
      * call a native function
      * @param isNew
@@ -1825,55 +1838,55 @@ mainloop:
         if (Rv._Object.type == Rv.UNDEFINED) { // Rv not initialized
             Rv._Object.nativeCtor("Object", go)
                     .ctorOrProt
-                    .putl("toString", getNativeFunctionValue("Object.toString"))
-                    .putl("hasOwnProperty", getNativeFunctionValue("Object.hasOwnProperty"))
+                    .putl("toString", newNativeFunction("Object.toString"))
+                    .putl("hasOwnProperty", newNativeFunction("Object.hasOwnProperty"))
                     .ctorOrProt = null;
             ;
             Rv._Function.nativeCtor("Function", go)
                     .ctorOrProt
-                    .putl("call", getNativeFunctionValue("Function.call"))      // call(thisObj, [arg1, [arg2...]])
-                    .putl("apply", getNativeFunctionValue("Function.apply"))    // apply(thisObj, arrayArgs)
+                    .putl("call", newNativeFunction("Function.call"))      // call(thisObj, [arg1, [arg2...]])
+                    .putl("apply", newNativeFunction("Function.apply"))    // apply(thisObj, arrayArgs)
             ;
             Rv._Number.nativeCtor("Number", go)
                     .putl("MAX_VALUE", new Rv(Integer.MAX_VALUE))
                     .putl("MIN_VALUE", new Rv(Integer.MIN_VALUE))
                     .putl("NaN", Rv._NaN)
                     .ctorOrProt
-                    .putl("valueOf", getNativeFunctionValue("Number.valueOf"))
+                    .putl("valueOf", newNativeFunction("Number.valueOf"))
             ;
             Rv._String.nativeCtor("String", go)
-                    .putl("fromCharCode", getNativeFunctionValue("String.fromCharCode"))
+                    .putl("fromCharCode", newNativeFunction("String.fromCharCode"))
                     .ctorOrProt
-                    .putl("valueOf", getNativeFunctionValue("String.valueOf"))
-                    .putl("charAt", getNativeFunctionValue("String.charAt"))
-                    .putl("charCodeAt", getNativeFunctionValue("String.charCodeAt"))
-                    .putl("indexOf", getNativeFunctionValue("String.indexOf"))
-                    .putl("lastIndexOf", getNativeFunctionValue("String.lastIndexOf"))
-                    .putl("substring", getNativeFunctionValue("String.substring"))
-                    .putl("split", getNativeFunctionValue("String.split"))
+                    .putl("valueOf", newNativeFunction("String.valueOf"))
+                    .putl("charAt", newNativeFunction("String.charAt"))
+                    .putl("charCodeAt", newNativeFunction("String.charCodeAt"))
+                    .putl("indexOf", newNativeFunction("String.indexOf"))
+                    .putl("lastIndexOf", newNativeFunction("String.lastIndexOf"))
+                    .putl("substring", newNativeFunction("String.substring"))
+                    .putl("split", newNativeFunction("String.split"))
             ;
             Rv._Array.nativeCtor("Array", go)
                     .ctorOrProt
-                    .putl("concat", getNativeFunctionValue("Array.concat"))    // concat(arg0[, arg1...])
-                    .putl("join", getNativeFunctionValue("Array.join"))        // join(separator)
-                    .putl("push", getNativeFunctionValue("Array.push"))        // push(arg0[, arg1...])
-                    .putl("pop", getNativeFunctionValue("Array.pop"))          // pop()
-                    .putl("shift", getNativeFunctionValue("Array.shift"))      // shift()
-                    .putl("unshift", getNativeFunctionValue("Array.unshift"))  // unshift(arg0[, arg1...])
-                    .putl("slice", getNativeFunctionValue("Array.slice"))      // slice(start, end)
-                    .putl("sort", getNativeFunctionValue("Array.sort"))        // sort(comparefn)
-                    .putl("reverse", getNativeFunctionValue("Array.reverse"))  // reverse()
+                    .putl("concat", newNativeFunction("Array.concat"))    // concat(arg0[, arg1...])
+                    .putl("join", newNativeFunction("Array.join"))        // join(separator)
+                    .putl("push", newNativeFunction("Array.push"))        // push(arg0[, arg1...])
+                    .putl("pop", newNativeFunction("Array.pop"))          // pop()
+                    .putl("shift", newNativeFunction("Array.shift"))      // shift()
+                    .putl("unshift", newNativeFunction("Array.unshift"))  // unshift(arg0[, arg1...])
+                    .putl("slice", newNativeFunction("Array.slice"))      // slice(start, end)
+                    .putl("sort", newNativeFunction("Array.sort"))        // sort(comparefn)
+                    .putl("reverse", newNativeFunction("Array.reverse"))  // reverse()
             ;
             Rv._Date.nativeCtor("Date", go)
                     .ctorOrProt
-                    .putl("getTime", getNativeFunctionValue("Date.getTime"))   // getTime()
-                    .putl("setTime", getNativeFunctionValue("Date.setTime"))   // setTime(arg0)
+                    .putl("getTime", newNativeFunction("Date.getTime"))   // getTime()
+                    .putl("setTime", newNativeFunction("Date.setTime"))   // setTime(arg0)
             ;
             Rv._Error.nativeCtor("Error", go)
                     .putl("name", new Rv("Error"))
                     .putl("message", new Rv("Error"))
                     .ctorOrProt
-                    .putl("toString", getNativeFunctionValue("Error.toString"))    // toString()
+                    .putl("toString", newNativeFunction("Error.toString"))    // toString()
             ;
             Rv._Arguments.nativeCtor("Arguments", go)
                     .ctorOrProt
@@ -1881,12 +1894,12 @@ mainloop:
             ;
         }
         Rv _console = new Rv(Rv.OBJECT, Rv._Object)
-                .putl("log", getNativeFunctionValue("console.log"))   // console.log()
+                .putl("log", newNativeFunction("console.log"))   // console.log()
         ;
         Rv _Math = new Rv(Rv.OBJECT, Rv._Object)
-                .putl("random", getNativeFunctionValue("Math.random"))
-                .putl("min", getNativeFunctionValue("Math.min"))
-                .putl("max", getNativeFunctionValue("Math.max"))
+                .putl("random", newNativeFunction("Math.random"))
+                .putl("min", newNativeFunction("Math.min"))
+                .putl("max", newNativeFunction("Math.max"))
         ;
         // fill global Object
         Rv console_log;
@@ -1904,10 +1917,10 @@ mainloop:
                 .putl("console", _console)
                 .putl("Error", Rv._Error)
                 .putl("Math", _Math)
-                .putl("isNaN", getNativeFunctionValue("isNaN"))
-                .putl("parseInt", getNativeFunctionValue("parseInt"))
-                .putl("eval", getNativeFunctionValue("eval"))
-                .putl("es", getNativeFunctionValue("es"))
+                .putl("isNaN", newNativeFunction("isNaN"))
+                .putl("parseInt", newNativeFunction("parseInt"))
+                .putl("eval", newNativeFunction("eval"))
+                .putl("es", newNativeFunction("es"))
                 //.putl("alert", console_log)
                 ;
         
@@ -2345,14 +2358,4 @@ mainloop:
         if (val != null) oo[1] = val;
         tokens.add(type).add(oo);
     }
-    
-    final static Rv nat(String name) {
-        return new Rv(true, name, htNativeLength.getEntry(0, name).num);
-    }
-
-    final Rv getNativeFunctionValue(String name) {
-        NativeFunction func = function_list.get(name);
-        return new Rv(true, name, func.length);
-    }
-    
 }
