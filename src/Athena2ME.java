@@ -59,9 +59,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
         ri.addNativeFunction(new NativeFunctionListEntry("Screen.clear", new NativeFunction() {
             public final int length = 1;
                 public Rv func(boolean isNew, Rv _this, Rv args) {
-                    Rv arg = args.get("0");
+                    int color = args.num > 0 ? args.get("0").toNum().num : canvas.CLEAR_COLOR;
 
-                    canvas.clearScreen(arg.toNum().num);
+                    canvas.clearScreen(color);
 
                     return Rv._undefined;
                 }
