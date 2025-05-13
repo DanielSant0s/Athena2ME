@@ -226,8 +226,11 @@ Properties:
   • FontAlign.TOP  
   • FontAlign.BOTTOM  
   • FontAlign.LEFT  
-  • FontAlign.NONE  
-
+  • FontAlign.RIGHT  
+  • FontAlign.VCENTER  
+  • FontAlign.HCENTER  
+  • FontAlign.CENTER  
+  
 Methods:
 * print(x, y, text) - Draw text on screen(call it every frame). Example: font.print(10.0, 10.0, "Hello world!);
 * getTextSize(text) - Returns text absolute size in pixels (width, height). Example: const size = font.getTextSize("Hello world!");
