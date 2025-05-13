@@ -22,17 +22,16 @@ import javax.microedition.media.control.ToneControl;
 import javax.microedition.rms.RecordStore;
 import javax.microedition.rms.RecordStoreException;
 
-interface DrawableElement {
-    void draw(Graphics g);
-}
-
 public class AthenaCanvas extends GameCanvas {
     static final int TEXT_COLOR = 0x00ffffff;
     static final int CLEAR_COLOR = 0x00000000;
 
     private Vector loaded_images = new Vector();
+
     private int pressed_buttons = 0;
     private int old_pressed_buttons = 0;
+
+    private int key = 0;
 
     private Graphics g = null;
 
@@ -118,19 +117,6 @@ public class AthenaCanvas extends GameCanvas {
         flushGraphics();
     }
 
-    public final int KEY_NUM0 =   1 << 1;
-    public final int KEY_NUM1 =   1 << 2;
-    public final int KEY_NUM2 =   1 << 3;
-    public final int KEY_NUM3 =   1 << 4;
-    public final int KEY_NUM4 =   1 << 5;
-    public final int KEY_NUM5 =   1 << 6;
-    public final int KEY_NUM6 =   1 << 7;
-    public final int KEY_NUM7 =   1 << 8;
-    public final int KEY_NUM8 =   1 << 9;
-    public final int KEY_NUM9 =   1 << 10;
-    public final int KEY_STAR =   1 << 11;
-    public final int KEY_POUND =  1 << 12;
-
     public void padUpdate() {
         old_pressed_buttons = pressed_buttons;
         pressed_buttons = getKeyStates();
@@ -142,5 +128,19 @@ public class AthenaCanvas extends GameCanvas {
 
     public boolean padJustPressed(int buttons) {
         return (((old_pressed_buttons & buttons) == 0) && ((pressed_buttons & buttons) != 0));
+    }
+
+    public void keyPressed(int keyCode) {
+        key = keyCode;
+    }
+
+    public void keyReleased(int keyCode) {
+        if (key == keyCode) {
+            key = 0;
+        }
+    }
+
+    public int getKeypad() {
+        return key;
     }
 }

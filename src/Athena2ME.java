@@ -11,7 +11,7 @@ import net.cnjm.j2me.util.*;
 public class Athena2ME extends MIDlet implements CommandListener {
     RocksInterpreter ri;
     private AthenaCanvas canvas;
-    private Command exitCmd = new Command("Exit", Command.EXIT, 3);
+    private Command exitCmd = new Command("Exit", Command.EXIT, 1);
     
 
     public Athena2ME() {
@@ -268,21 +268,33 @@ public class Athena2ME extends MIDlet implements CommandListener {
         ri.addToObject(_Pad, "GAME_B", new Rv(canvas.GAME_B_PRESSED));
         ri.addToObject(_Pad, "GAME_C", new Rv(canvas.GAME_C_PRESSED));
         ri.addToObject(_Pad, "GAME_D", new Rv(canvas.GAME_D_PRESSED));
-
-        //ri.addToObject(_Pad, "KEY_NUM0", new Rv(canvas.KEY_NUM0));
-        //ri.addToObject(_Pad, "KEY_NUM1", new Rv(canvas.KEY_NUM1));
-        //ri.addToObject(_Pad, "KEY_NUM2", new Rv(canvas.KEY_NUM2));
-        //ri.addToObject(_Pad, "KEY_NUM3", new Rv(canvas.KEY_NUM3));
-        //ri.addToObject(_Pad, "KEY_NUM4", new Rv(canvas.KEY_NUM4));
-        //ri.addToObject(_Pad, "KEY_NUM5", new Rv(canvas.KEY_NUM5));
-        //ri.addToObject(_Pad, "KEY_NUM6", new Rv(canvas.KEY_NUM6));
-        //ri.addToObject(_Pad, "KEY_NUM7", new Rv(canvas.KEY_NUM7));
-        //ri.addToObject(_Pad, "KEY_NUM8", new Rv(canvas.KEY_NUM8));
-        //ri.addToObject(_Pad, "KEY_NUM9", new Rv(canvas.KEY_NUM9));
-        //ri.addToObject(_Pad, "KEY_STAR", new Rv(canvas.KEY_STAR));
-        //ri.addToObject(_Pad, "KEY_POUND", new Rv(canvas.KEY_POUND));
         
         ri.addToObject(callObj, "Pad", _Pad);
+
+        ri.addNativeFunction(new NativeFunctionListEntry("Keyboard.get", new NativeFunction() {
+            public final int length = 0;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    return new Rv(canvas.getKeypad());
+                }
+        }));
+
+        Rv _Keyboard = ri.newModule();
+        ri.addToObject(_Keyboard, "get", ri.newNativeFunction("Keyboard.get"));
+
+        ri.addToObject(_Keyboard, "KEY_NUM0", new Rv(canvas.KEY_NUM0));
+        ri.addToObject(_Keyboard, "KEY_NUM1", new Rv(canvas.KEY_NUM1));
+        ri.addToObject(_Keyboard, "KEY_NUM2", new Rv(canvas.KEY_NUM2));
+        ri.addToObject(_Keyboard, "KEY_NUM3", new Rv(canvas.KEY_NUM3));
+        ri.addToObject(_Keyboard, "KEY_NUM4", new Rv(canvas.KEY_NUM4));
+        ri.addToObject(_Keyboard, "KEY_NUM5", new Rv(canvas.KEY_NUM5));
+        ri.addToObject(_Keyboard, "KEY_NUM6", new Rv(canvas.KEY_NUM6));
+        ri.addToObject(_Keyboard, "KEY_NUM7", new Rv(canvas.KEY_NUM7));
+        ri.addToObject(_Keyboard, "KEY_NUM8", new Rv(canvas.KEY_NUM8));
+        ri.addToObject(_Keyboard, "KEY_NUM9", new Rv(canvas.KEY_NUM9));
+        ri.addToObject(_Keyboard, "KEY_STAR", new Rv(canvas.KEY_STAR));
+        ri.addToObject(_Keyboard, "KEY_POUND", new Rv(canvas.KEY_POUND));
+
+        ri.addToObject(callObj, "Keyboard", _Keyboard);
 
         ri.call(false, rv, callObj, null, null, 0, 0);
     }
