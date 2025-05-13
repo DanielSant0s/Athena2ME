@@ -15,7 +15,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
     
 
     public Athena2ME() {
-        canvas = new AthenaCanvas();
+        canvas = new AthenaCanvas(false);
         canvas.addCommand(exitCmd);
         canvas.setCommandListener(this);
     }
@@ -126,7 +126,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
         }));
 
         ri.addNativeFunction(new NativeFunctionListEntry("Screen.drawImage", new NativeFunction() {
-            public final int length = 5;
+            public final int length = 3;
                 public Rv func(boolean isNew, Rv _this, Rv args) {
                     Rv id = args.get("0");
                     Rv x = args.get("1");
@@ -151,7 +151,25 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
         ri.addToObject(callObj, "Screen", _Screen);
 
-        ri.addNativeFunction(new NativeFunctionListEntry("Pads.pressed", new NativeFunction() {
+        ri.addNativeFunction(new NativeFunctionListEntry("Color.new", new NativeFunction() {
+            public final int length = 4;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    int r = args.get("0").toNum().num;
+                    int g = args.get("1").toNum().num;
+                    int b = args.get("2").toNum().num;
+
+                    int a = args.num > 3? args.get("3").toNum().num : 0;
+
+                    return new Rv(AthenaColor.color(r, g, b, a));
+                }
+        }));
+
+        Rv _Color = ri.newModule();
+        ri.addToObject(_Color, "new", ri.newNativeFunction("Color.new"));
+
+        ri.addToObject(callObj, "Color", _Color);
+
+        ri.addNativeFunction(new NativeFunctionListEntry("Pad.pressed", new NativeFunction() {
             public final int length = 0;
                 public Rv func(boolean isNew, Rv _this, Rv args) {
                     Rv buttons = args.get("0");
@@ -159,33 +177,52 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 }
         }));
 
-        Rv _Pads = ri.newModule();
-        ri.addToObject(_Pads, "pressed", ri.newNativeFunction("Pads.pressed"));
+        ri.addNativeFunction(new NativeFunctionListEntry("Pad.justPressed", new NativeFunction() {
+            public final int length = 0;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    Rv buttons = args.get("0");
+                    return new Rv(canvas.padJustPressed(buttons.toNum().num)? 1 : 0);
+                }
+        }));
 
-        ri.addToObject(_Pads, "UP", new Rv(canvas.UP));
-        ri.addToObject(_Pads, "DOWN", new Rv(canvas.DOWN));
-        ri.addToObject(_Pads, "LEFT", new Rv(canvas.LEFT));
-        ri.addToObject(_Pads, "RIGHT", new Rv(canvas.RIGHT));
-        ri.addToObject(_Pads, "FIRE", new Rv(canvas.FIRE));
-        ri.addToObject(_Pads, "GAME_A", new Rv(canvas.GAME_A));
-        ri.addToObject(_Pads, "GAME_B", new Rv(canvas.GAME_B));
-        ri.addToObject(_Pads, "GAME_C", new Rv(canvas.GAME_C));
-        ri.addToObject(_Pads, "GAME_D", new Rv(canvas.GAME_D));
+        ri.addNativeFunction(new NativeFunctionListEntry("Pad.update", new NativeFunction() {
+            public final int length = 0;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    canvas.padUpdate();
 
-        ri.addToObject(_Pads, "KEY_NUM0", new Rv(canvas.KEY_NUM0));
-        ri.addToObject(_Pads, "KEY_NUM1", new Rv(canvas.KEY_NUM1));
-        ri.addToObject(_Pads, "KEY_NUM2", new Rv(canvas.KEY_NUM2));
-        ri.addToObject(_Pads, "KEY_NUM3", new Rv(canvas.KEY_NUM3));
-        ri.addToObject(_Pads, "KEY_NUM4", new Rv(canvas.KEY_NUM4));
-        ri.addToObject(_Pads, "KEY_NUM5", new Rv(canvas.KEY_NUM5));
-        ri.addToObject(_Pads, "KEY_NUM6", new Rv(canvas.KEY_NUM6));
-        ri.addToObject(_Pads, "KEY_NUM7", new Rv(canvas.KEY_NUM7));
-        ri.addToObject(_Pads, "KEY_NUM8", new Rv(canvas.KEY_NUM8));
-        ri.addToObject(_Pads, "KEY_NUM9", new Rv(canvas.KEY_NUM9));
-        ri.addToObject(_Pads, "KEY_STAR", new Rv(canvas.KEY_STAR));
-        ri.addToObject(_Pads, "KEY_POUND", new Rv(canvas.KEY_POUND));
+                    return Rv._undefined;
+                }
+        }));
+
+        Rv _Pad = ri.newModule();
+        ri.addToObject(_Pad, "update", ri.newNativeFunction("Pad.update"));
+        ri.addToObject(_Pad, "pressed", ri.newNativeFunction("Pad.pressed"));
+        ri.addToObject(_Pad, "justPressed", ri.newNativeFunction("Pad.justPressed"));
+
+        ri.addToObject(_Pad, "UP", new Rv(canvas.UP_PRESSED));
+        ri.addToObject(_Pad, "DOWN", new Rv(canvas.DOWN_PRESSED));
+        ri.addToObject(_Pad, "LEFT", new Rv(canvas.LEFT_PRESSED));
+        ri.addToObject(_Pad, "RIGHT", new Rv(canvas.RIGHT_PRESSED));
+        ri.addToObject(_Pad, "FIRE", new Rv(canvas.FIRE_PRESSED));
+        ri.addToObject(_Pad, "GAME_A", new Rv(canvas.GAME_A_PRESSED));
+        ri.addToObject(_Pad, "GAME_B", new Rv(canvas.GAME_B_PRESSED));
+        ri.addToObject(_Pad, "GAME_C", new Rv(canvas.GAME_C_PRESSED));
+        ri.addToObject(_Pad, "GAME_D", new Rv(canvas.GAME_D_PRESSED));
+
+        //ri.addToObject(_Pad, "KEY_NUM0", new Rv(canvas.KEY_NUM0));
+        //ri.addToObject(_Pad, "KEY_NUM1", new Rv(canvas.KEY_NUM1));
+        //ri.addToObject(_Pad, "KEY_NUM2", new Rv(canvas.KEY_NUM2));
+        //ri.addToObject(_Pad, "KEY_NUM3", new Rv(canvas.KEY_NUM3));
+        //ri.addToObject(_Pad, "KEY_NUM4", new Rv(canvas.KEY_NUM4));
+        //ri.addToObject(_Pad, "KEY_NUM5", new Rv(canvas.KEY_NUM5));
+        //ri.addToObject(_Pad, "KEY_NUM6", new Rv(canvas.KEY_NUM6));
+        //ri.addToObject(_Pad, "KEY_NUM7", new Rv(canvas.KEY_NUM7));
+        //ri.addToObject(_Pad, "KEY_NUM8", new Rv(canvas.KEY_NUM8));
+        //ri.addToObject(_Pad, "KEY_NUM9", new Rv(canvas.KEY_NUM9));
+        //ri.addToObject(_Pad, "KEY_STAR", new Rv(canvas.KEY_STAR));
+        //ri.addToObject(_Pad, "KEY_POUND", new Rv(canvas.KEY_POUND));
         
-        ri.addToObject(callObj, "Pads", _Pads);
+        ri.addToObject(callObj, "Pad", _Pad);
 
         ri.call(false, rv, callObj, null, null, 0, 0);
     }

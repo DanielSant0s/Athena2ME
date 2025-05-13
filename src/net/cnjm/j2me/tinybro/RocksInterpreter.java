@@ -42,7 +42,6 @@ public class RocksInterpreter {
 
     /**
      * TODO support of native regular expression "/<pattern>/<args>"
-     * TODO smarter tokenizing for ignoring semicolon
      * @param src
      * @param pos
      * @param len
@@ -60,6 +59,9 @@ public class RocksInterpreter {
         StringBuffer buf = new StringBuffer();
         int startPos = 0, endpos = pos + len;
         boolean continueline = false;
+
+        boolean afterDot = false;
+        
         while (pos < endpos) {
 mainswitch:
             switch (state) {
@@ -96,6 +98,7 @@ mainswitch:
                         ival = Integer.parseInt(new String(cc, p, pos - p)); 
                     }
                     addToken(tt, RC.TOK_NUMBER, p, pos - p, new Integer(ival));
+                    afterDot = false; 
                 } else if (c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
                     || c == '_' || c == '$') { // symbol or keyword
                     int p = pos;
@@ -107,12 +110,30 @@ mainswitch:
                     }
                     String symb = new String(cc, p, pos - p);
                     int iKey = keywordIndex(symb);
-                    addToken(tt, iKey < 0 ? RC.TOK_SYMBOL : iKey, p, pos - p, symb);
+
+                    if (afterDot) {
+                        addToken(tt, RC.TOK_SYMBOL, p, pos - p, symb);
+                    } else {
+                        addToken(tt, iKey < 0 ? RC.TOK_SYMBOL : iKey, p, pos - p, symb);
+                    }
+                    
+                    afterDot = false; 
                 } else {
                     switch (c) {
                     case RC.TOK_SEM: // ;
-                    case RC.TOK_EOL: // \n
+
+                        if (!shouldIgnoreSemicolon(tt)) {
+                            addToken(tt, c, pos, 1, null);
+                        }
+                        pos++;
+                        afterDot = false;
+                        break;
                     case RC.TOK_DOT: // .
+                        addToken(tt, c, pos++, 1, null);
+
+                        afterDot = true;
+                        break;
+                    case RC.TOK_EOL: // \n
                     case RC.TOK_LBK: // [
                     case RC.TOK_RBK: // ]
                     case RC.TOK_LBR: // {
@@ -124,10 +145,12 @@ mainswitch:
                     case RC.TOK_QMK: // ?
                     case RC.TOK_BNO: // ~
                         addToken(tt, c, pos++, 1, null);
+                        afterDot = false;
                         break;
                     case RC.BACKSLASH: // \
                         ++pos;
                         continueline = true;
+                        afterDot = false;
                         break;
                     case RC.DQUOT: // ", """
                     case RC.SQUOT: // '
@@ -139,6 +162,7 @@ mainswitch:
                             state = c; // '\'' or '"'
                             startPos = ++pos;
                         }
+                        afterDot = false;
                         break;
                     case RC.TOK_MOD: // %, %=
                     case RC.TOK_BXO: // ^, ^=
@@ -193,6 +217,7 @@ mainswitch:
                         }
                         addToken(tt, c + tokinc, pos, posinc, null);
                         pos += posinc;
+                        afterDot = false;
                         break;
                     default:
                         throw ex(c, pos, null);
@@ -208,11 +233,13 @@ mainswitch:
                     buf.setLength(0);
                     pos += 3;
                     state = 0;
+                    afterDot = false;
                 } else if (state != 3 && c == state) {
                     addToken(tt, RC.TOK_STRING, startPos, pos - startPos, buf.toString());
                     buf.setLength(0);
                     ++pos;
                     state = 0;
+                    afterDot = false;
                 } else if (state != 3 && c == RC.TOK_EOL) {
                     throw ex(c, pos, String.valueOf((char) state));
                 } else if (c == '\\' && pos + 1 < endpos){
@@ -267,17 +294,21 @@ mainswitch:
             }
         }
         addToken(tt, RC.TOK_EOL, pos, 0, null);
-        // debug output only
-//        buf.setLength(0);
-//        for (int i = 0, n = tt.oSize; i < n; i++) {
-//            int token = tt.getInt(i);
-//            Object tinfo = tt.getObject(i);
-//            buf.append(i).append(":\t").append(RC.tokenName(token, tinfo))
-//                    .append(" (").append(token).append(")\r\n");
-//        }
-//        System.out.println(buf);
         
         return tt;
+    }
+
+    private boolean shouldIgnoreSemicolon(Pack tokens) {
+        if (tokens.oSize <= 0) {
+            return false;
+        }
+
+        int lastToken = tokens.getInt(tokens.oSize - 1);
+
+        return lastToken == RC.TOK_RPR || // )
+               lastToken == RC.TOK_RBR || // }
+               lastToken == RC.TOK_RBK || // ]
+               lastToken == RC.TOK_EOL;   // \n
     }
     
 ////////////////////////////// Parser Methods ///////////////////////////
