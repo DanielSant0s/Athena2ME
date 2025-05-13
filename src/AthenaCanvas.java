@@ -56,16 +56,26 @@ public class AthenaCanvas extends GameCanvas {
         g.fillRect(0, 0, getWidth(), getHeight());
     }
 
-    public void drawRect(final int x, final int y, final int w, final int h, final int color) {
+    public void drawRect(int x, int y, int w, int h, int color) {
         g.setColor(color);
         g.fillRect(x, y, w, h);
     }
 
-    public void _drawImage(final int id, final int x, final int y) {
+    public void drawLine(int x1, int y1, int x2, int y2, int color) {
+        g.setColor(color);
+        g.drawLine(x1, y1, x2, y2);
+    }
+
+    public void drawTriangle(int x1, int y1, int x2, int y2, int x3, int y3, int color) {
+        g.setColor(color);
+        g.fillTriangle(x1, y1, x2, y2, x3, y3);
+    }
+
+    public void _drawImage(int id, int x, int y) {
         g.drawImage((Image)loaded_images.elementAt(id), x, y, g.TOP | g.LEFT);
     }
 
-    public void _drawImageRegion(final int id, final int x, final int y, int startx, int starty, int endx, int endy) {
+    public void _drawImageRegion(int id, int x, int y, int startx, int starty, int endx, int endy) {
         //g.drawImage((Image)loaded_images.elementAt(id), x, y, g.TOP | g.LEFT);
         g.drawRegion((Image)loaded_images.elementAt(id),
             startx,
@@ -78,13 +88,13 @@ public class AthenaCanvas extends GameCanvas {
             g.TOP | g.LEFT);
     }
 
-    public int getImageWidth(final int id) {
+    public int getImageWidth(int id) {
         Image img = (Image)loaded_images.elementAt(id);
 
         return img.getWidth();
     }
 
-    public int getImageHeight(final int id) {
+    public int getImageHeight(int id) {
         Image img = (Image)loaded_images.elementAt(id);
 
         return img.getHeight();

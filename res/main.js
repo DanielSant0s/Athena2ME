@@ -27,7 +27,7 @@ while(true) {
         square_img.draw(79, 5);
         triangle_img.draw(116, 5);
 
-        Screen.drawRect(x, y, 15, 15, WHITE);
+        Draw.rect(x, y, 15, 15, WHITE);
 
         if (dir_x == 1) {
             x += 2;

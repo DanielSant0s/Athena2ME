@@ -91,7 +91,16 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 }
         }));
 
-        ri.addNativeFunction(new NativeFunctionListEntry("Screen.drawRect", new NativeFunction() {
+        Rv _Screen = ri.newModule();
+        ri.addToObject(_Screen, "width", new Rv(canvas.getWidth()));
+        ri.addToObject(_Screen, "height", new Rv(canvas.getHeight()));
+        ri.addToObject(_Screen, "clear", ri.newNativeFunction("Screen.clear"));
+        ri.addToObject(_Screen, "drawText", ri.newNativeFunction("Screen.drawText"));
+        ri.addToObject(_Screen, "update", ri.newNativeFunction("Screen.update"));
+
+        ri.addToObject(callObj, "Screen", _Screen);
+
+        ri.addNativeFunction(new NativeFunctionListEntry("Draw.rect", new NativeFunction() {
             public final int length = 5;
                 public Rv func(boolean isNew, Rv _this, Rv args) {
                     Rv x = args.get("0");
@@ -106,15 +115,44 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 }
         }));
 
-        Rv _Screen = ri.newModule();
-        ri.addToObject(_Screen, "width", new Rv(canvas.getWidth()));
-        ri.addToObject(_Screen, "height", new Rv(canvas.getHeight()));
-        ri.addToObject(_Screen, "clear", ri.newNativeFunction("Screen.clear"));
-        ri.addToObject(_Screen, "drawText", ri.newNativeFunction("Screen.drawText"));
-        ri.addToObject(_Screen, "update", ri.newNativeFunction("Screen.update"));
-        ri.addToObject(_Screen, "drawRect", ri.newNativeFunction("Screen.drawRect"));
+        ri.addNativeFunction(new NativeFunctionListEntry("Draw.line", new NativeFunction() {
+            public final int length = 5;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    int x1 = args.get("0").toNum().num;
+                    int y1 = args.get("1").toNum().num;
+                    int x2 = args.get("2").toNum().num;
+                    int y2 = args.get("3").toNum().num;
+                    int color = args.get("4").toNum().num;
+                    
+                    canvas.drawLine(x1, y1, x2, y2, color);
 
-        ri.addToObject(callObj, "Screen", _Screen);
+                    return Rv._undefined;
+                }
+        }));
+
+        ri.addNativeFunction(new NativeFunctionListEntry("Draw.triangle", new NativeFunction() {
+            public final int length = 5;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    int x1 = args.get("0").toNum().num;
+                    int y1 = args.get("1").toNum().num;
+                    int x2 = args.get("2").toNum().num;
+                    int y2 = args.get("3").toNum().num;
+                    int x3 = args.get("4").toNum().num;
+                    int y3 = args.get("5").toNum().num;
+                    int color = args.get("6").toNum().num;
+                    
+                    canvas.drawTriangle(x1, y1, x2, y2, x3, y3, color);
+
+                    return Rv._undefined;
+                }
+        }));
+
+        Rv _Draw = ri.newModule();
+        ri.addToObject(_Draw, "line", ri.newNativeFunction("Draw.line"));
+        ri.addToObject(_Draw, "triangle", ri.newNativeFunction("Draw.triangle"));
+        ri.addToObject(_Draw, "rect", ri.newNativeFunction("Draw.rect"));
+
+        ri.addToObject(callObj, "Draw", _Draw);
 
         final Rv _Image = ri.newModule();
 
