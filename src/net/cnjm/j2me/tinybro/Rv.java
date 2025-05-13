@@ -290,6 +290,10 @@ public class Rv {
         }
         return ret != null ? ret : Rv._undefined;
     }
+
+    public final boolean isNum() {
+        return this.type == Rv.NUMBER || this.type == Rv.NUMBER_OBJECT;
+    }
     
     public final Rv toNum() {
         if (this == _null) return Rv._false;
@@ -305,6 +309,10 @@ public class Rv {
             } catch (Exception ex) { }
         } 
         return Rv._NaN;
+    }
+
+    public final boolean isStr() {
+        return this.type == Rv.STRING || this.type == Rv.STRING_OBJECT;
     }
     
     public final Rv toStr() {

@@ -14,13 +14,16 @@ var triangle_img = new Image("/triangle.png");
 var PURPLE = Color.new(80, 0, 160);
 var WHITE = Color.new(255, 255, 255);
 
+var font = new Font("default");
+
 while(true) {
     if (Date.now() > cur_time) {
         cur_time = Date.now() + 16;
         Pad.update();
 
         Screen.clear(PURPLE);
-        Screen.drawText("Hello from Athena2ME!", 15, 15, 0, WHITE);
+
+        font.print("Hello from Athena2ME!", 15, 15);
 
         cross_img.draw(5, 5);
         circle_img.draw(42, 5);

@@ -194,25 +194,43 @@ Methods:
 
 ### Font module
 
+**Constants:**
+
+*Faces:*  
+* Font.FACE_MONOSPACE
+* Font.FACE_PROPORTIONAL
+* Font.FACE_SYSTEM  
+  
+*Styles (P.S.: Styles can be combined, excepting STYLE_PLAIN):*  
+* Font.STYLE_PLAIN
+* Font.STYLE_BOLD
+* Font.STYLE_ITALIC
+* Font.STYLE_UNDERLINED  
+  
+*Sizes:*  
+* Font.SIZE_SMALL
+* Font.SIZE_MEDIUM
+* Font.SIZE_LARGE  
+  
 Construction:  
 
 ```js
-var font = new Font(path);  // It supports png, bmp, jpg, otf, ttf.
-```
-  path - Path to a font file, E.g.: "images/atlas.png", "fonts/font.png".  
-```js
-var osdfnt = new Font();  //Load BIOS font, not available for all console models  
-var font = new Font("Segoe UI.ttf"); //Load trueType font 
+var osdfnt = new Font("default");  //Load default font
+var font = new Font(Font.FACE_MONOSPACE, Font.STYLE_ITALIC, Font.SIZE_MEDIUM); //Load a custom variant font. Arguments: face, style, size (style and size are optional)
 ``` 
 
 Properties:
-* color - Define font tinting, default value is Color.new(255, 255, 255, 128).
-* scale - Proportional scale, default: 1.0f
+* color - Define font tinting, default value is Color.new(255, 255, 255).
+* align - Font alignment, default value is FontAlign.NONE. Avaliable options below:  
+  • FontAlign.NONE  
+  • FontAlign.TOP  
+  • FontAlign.BOTTOM  
+  • FontAlign.LEFT  
+  • FontAlign.NONE  
 
 Methods:
 * print(x, y, text) - Draw text on screen(call it every frame). Example: font.print(10.0, 10.0, "Hello world!);
 * getTextSize(text) - Returns text absolute size in pixels (width, height). Example: const size = font.getTextSize("Hello world!");
-
 ### Pad module
 
 * Buttons list:  

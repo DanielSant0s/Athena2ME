@@ -4,6 +4,7 @@ import javax.microedition.lcdui.*;
 import javax.microedition.midlet.*;
 import javax.microedition.lcdui.Command;
 import javax.microedition.lcdui.CommandListener;
+import javax.microedition.lcdui.Font;
 import javax.microedition.lcdui.Image;
 
 import net.cnjm.j2me.tinybro.*;
@@ -68,21 +69,6 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 }
         }));
 
-        ri.addNativeFunction(new NativeFunctionListEntry("Screen.drawText", new NativeFunction() {
-            public final int length = 5;
-                public Rv func(boolean isNew, Rv _this, Rv args) {
-                    Rv text = args.get("0");
-                    Rv x = args.get("1");
-                    Rv y = args.get("2");
-                    Rv anchor = args.get("3");
-                    Rv color = args.get("4");
-                    
-                    canvas.drawFont(text.toStr().str, x.toNum().num, y.toNum().num, anchor.toNum().num, color.toNum().num);
-
-                    return Rv._undefined;
-                }
-        }));
-
         ri.addNativeFunction(new NativeFunctionListEntry("Screen.update", new NativeFunction() {
             public final int length = 0;
                 public Rv func(boolean isNew, Rv _this, Rv args) {
@@ -96,7 +82,6 @@ public class Athena2ME extends MIDlet implements CommandListener {
         ri.addToObject(_Screen, "width", new Rv(canvas.getWidth()));
         ri.addToObject(_Screen, "height", new Rv(canvas.getHeight()));
         ri.addToObject(_Screen, "clear", ri.newNativeFunction("Screen.clear"));
-        ri.addToObject(_Screen, "drawText", ri.newNativeFunction("Screen.drawText"));
         ri.addToObject(_Screen, "update", ri.newNativeFunction("Screen.update"));
 
         ri.addToObject(callObj, "Screen", _Screen);
@@ -210,6 +195,101 @@ public class Athena2ME extends MIDlet implements CommandListener {
         ri.addToObject(_Image.ctorOrProt, "free", ri.newNativeFunction("Image.free"));
 
         ri.addToObject(callObj, "Image", _Image);
+
+        final Rv _Font = ri.newModule();
+
+        ri.addNativeFunction(new NativeFunctionListEntry("Font", new NativeFunction() {
+            public final int length = 3;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    Rv ret = isNew ? _this : new Rv(Rv.OBJECT, _Font);
+
+                    Font font = null;
+                    Rv font_face =  args.get("0");
+
+                    if (font_face.isStr()) {
+                        if (font_face.toStr().str.compareTo("default") == 0) {
+                            font = Font.getDefaultFont();
+                        } 
+                    } else {
+                        int font_style = Font.STYLE_PLAIN;
+                        int font_size =  Font.SIZE_MEDIUM;
+
+                        if (args.num > 1) {
+                            font_style = args.get("1").toNum().num;
+                        }
+
+                        if (args.num > 2) {
+                            font_size =  args.get("2").toNum().num;
+                        }
+
+                        font = Font.getFont(font_face.toNum().num, font_style, font_size);
+                    }
+
+                    ret.opaque = (Object)font;
+
+                    ri.addToObject(ret, "align", new Rv(canvas.ALIGN_NONE));
+                    ri.addToObject(ret, "color", new Rv(0xFFFFFF));
+
+                    return ret;
+                }
+        }));
+
+        ri.addNativeFunction(new NativeFunctionListEntry("Font.free", new NativeFunction() {
+            public final int length = 1;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    _this.opaque = null;
+
+                    return Rv._undefined;
+                }
+        }));
+
+        ri.addNativeFunction(new NativeFunctionListEntry("Font.print", new NativeFunction() {
+            public final int length = 3;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    String text = args.get("0").toStr().str;
+                    int x = args.get("1").toNum().num;
+                    int y = args.get("2").toNum().num;
+
+                    int color = _this.get("color").toNum().num;
+                    int align = _this.get("align").toNum().num;
+
+                    //canvas._drawImageRegion((Image)_this.opaque, x, y, startx, starty, endx, endy);
+                    canvas.drawFont(text, x, y, align, color);
+
+                    return Rv._undefined;
+                }
+        }));
+
+        _Font.nativeCtor("Font", callObj);
+        ri.addToObject(_Font, "STYLE_PLAIN", new Rv(Font.STYLE_PLAIN));
+        ri.addToObject(_Font, "STYLE_BOLD", new Rv(Font.STYLE_BOLD));
+        ri.addToObject(_Font, "STYLE_ITALIC", new Rv(Font.STYLE_ITALIC));
+        ri.addToObject(_Font, "STYLE_UNDERLINED", new Rv(Font.STYLE_UNDERLINED));
+
+        ri.addToObject(_Font, "FACE_MONOSPACE", new Rv(Font.FACE_MONOSPACE));
+        ri.addToObject(_Font, "FACE_PROPORTIONAL", new Rv(Font.FACE_PROPORTIONAL));
+        ri.addToObject(_Font, "FACE_SYSTEM", new Rv(Font.FACE_SYSTEM));
+
+        ri.addToObject(_Font, "SIZE_SMALL", new Rv(Font.SIZE_SMALL));
+        ri.addToObject(_Font, "SIZE_MEDIUM", new Rv(Font.SIZE_MEDIUM));
+        ri.addToObject(_Font, "SIZE_LARGE", new Rv(Font.SIZE_LARGE));
+
+        ri.addToObject(_Font.ctorOrProt, "print", ri.newNativeFunction("Font.print"));
+        ri.addToObject(_Font.ctorOrProt, "free", ri.newNativeFunction("Font.free"));
+
+        ri.addToObject(callObj, "Font", _Font);
+
+        Rv _FontAlign = ri.newModule();
+        ri.addToObject(_FontAlign, "TOP", new Rv(canvas.ALIGN_TOP));
+        ri.addToObject(_FontAlign, "BOTTOM", new Rv(canvas.ALIGN_BOTTOM));
+        ri.addToObject(_FontAlign, "VCENTER", new Rv(canvas.ALIGN_VCENTER));
+        ri.addToObject(_FontAlign, "LEFT", new Rv(canvas.ALIGN_LEFT));
+        ri.addToObject(_FontAlign, "RIGHT", new Rv(canvas.ALIGN_RIGHT));
+        ri.addToObject(_FontAlign, "HCENTER", new Rv(canvas.ALIGN_HCENTER));
+        ri.addToObject(_FontAlign, "NONE", new Rv(canvas.ALIGN_NONE));
+        ri.addToObject(_FontAlign, "CENTER", new Rv(canvas.ALIGN_CENTER));
+
+        ri.addToObject(callObj, "FontAlign", _FontAlign);
 
         ri.addNativeFunction(new NativeFunctionListEntry("Color.new", new NativeFunction() {
             public final int length = 4;

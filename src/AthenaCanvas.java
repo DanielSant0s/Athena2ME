@@ -33,15 +33,21 @@ public class AthenaCanvas extends GameCanvas {
 
     private Graphics g = null;
 
-    static {
-        Font defaultFont = Font.getDefaultFont();
-    }
-
     public AthenaCanvas(boolean suppressKeyEvents) {
         super(suppressKeyEvents);
 
         g = getGraphics();
     }
+
+     
+    public final int ALIGN_TOP = g.TOP;
+    public final int ALIGN_BOTTOM = g.BOTTOM;
+    public final int ALIGN_VCENTER = g.VCENTER;
+    public final int ALIGN_LEFT = g.LEFT;
+    public final int ALIGN_RIGHT = g.RIGHT;
+    public final int ALIGN_HCENTER = g.HCENTER;
+    public final int ALIGN_NONE = g.TOP | g.LEFT;
+    public final int ALIGN_CENTER = g.VCENTER | g.HCENTER;
 
     public void drawFont(final String text, final int x, final int y, final int anchor, final int color) {
         g.setColor(color);
