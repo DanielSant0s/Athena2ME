@@ -26,8 +26,6 @@ public class AthenaCanvas extends GameCanvas {
     static final int TEXT_COLOR = 0x00ffffff;
     static final int CLEAR_COLOR = 0x00000000;
 
-    private Vector loaded_images = new Vector();
-
     private int pressed_buttons = 0;
     private int old_pressed_buttons = 0;
 
@@ -70,13 +68,13 @@ public class AthenaCanvas extends GameCanvas {
         g.fillTriangle(x1, y1, x2, y2, x3, y3);
     }
 
-    public void _drawImage(int id, int x, int y) {
-        g.drawImage((Image)loaded_images.elementAt(id), x, y, g.TOP | g.LEFT);
+    public void _drawImage(Image img, int x, int y) {
+        g.drawImage(img, x, y, g.TOP | g.LEFT);
     }
 
-    public void _drawImageRegion(int id, int x, int y, int startx, int starty, int endx, int endy) {
-        //g.drawImage((Image)loaded_images.elementAt(id), x, y, g.TOP | g.LEFT);
-        g.drawRegion((Image)loaded_images.elementAt(id),
+    public void _drawImageRegion(Image img, int x, int y, int startx, int starty, int endx, int endy) {
+        //g.drawImage(img, x, y, g.TOP | g.LEFT);
+        g.drawRegion(img,
             startx,
             starty,
             endx,
@@ -87,30 +85,15 @@ public class AthenaCanvas extends GameCanvas {
             g.TOP | g.LEFT);
     }
 
-    public int getImageWidth(int id) {
-        Image img = (Image)loaded_images.elementAt(id);
-
-        return img.getWidth();
-    }
-
-    public int getImageHeight(int id) {
-        Image img = (Image)loaded_images.elementAt(id);
-
-        return img.getHeight();
-    }
-
-    public int loadImage(String name) {
+    public Image loadImage(String name) {
+        Image ret = null;
         try {
-            loaded_images.addElement(Image.createImage(name));
+            ret = Image.createImage(name);
         } catch (Exception ex) {
             ex.printStackTrace();
         }
 
-        return loaded_images.size()-1;
-    }
-
-    public void freeImage(int id) {
-        loaded_images.removeElementAt(id);
+        return ret;
     }
 
     public void screenUpdate() {

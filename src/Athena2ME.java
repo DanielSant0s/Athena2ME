@@ -4,6 +4,7 @@ import javax.microedition.lcdui.*;
 import javax.microedition.midlet.*;
 import javax.microedition.lcdui.Command;
 import javax.microedition.lcdui.CommandListener;
+import javax.microedition.lcdui.Image;
 
 import net.cnjm.j2me.tinybro.*;
 import net.cnjm.j2me.util.*;
@@ -161,17 +162,18 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 public Rv func(boolean isNew, Rv _this, Rv args) {
                     Rv ret = isNew ? _this : new Rv(Rv.OBJECT, _Image);
 
-                    Rv name = args.get("0");
+                    String name = args.get("0").toStr().str;
 
-                    int id = canvas.loadImage(name.toStr().str);
+                    Image img = canvas.loadImage(name);
 
-                    ri.addToObject(ret, "id", new Rv(id));
+                    ret.opaque = (Object)img;
+
                     ri.addToObject(ret, "startx", new Rv(0));
                     ri.addToObject(ret, "starty", new Rv(0));
-                    ri.addToObject(ret, "endx", new Rv(canvas.getImageWidth(id)));
-                    ri.addToObject(ret, "endy", new Rv(canvas.getImageHeight(id)));
-                    ri.addToObject(ret, "width", new Rv(canvas.getImageWidth(id)));
-                    ri.addToObject(ret, "height", new Rv(canvas.getImageHeight(id)));
+                    ri.addToObject(ret, "endx", new Rv(img.getWidth()));
+                    ri.addToObject(ret, "endy", new Rv(img.getHeight()));
+                    ri.addToObject(ret, "width", new Rv(img.getWidth()));
+                    ri.addToObject(ret, "height", new Rv(img.getHeight()));
 
                     return ret;
                 }
@@ -180,8 +182,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
         ri.addNativeFunction(new NativeFunctionListEntry("Image.free", new NativeFunction() {
             public final int length = 1;
                 public Rv func(boolean isNew, Rv _this, Rv args) {
-                    Rv id = _this.get("id");
-                    canvas.freeImage(id.toNum().num);
+                    _this.opaque = null;
 
                     return Rv._undefined;
                 }
@@ -190,7 +191,6 @@ public class Athena2ME extends MIDlet implements CommandListener {
         ri.addNativeFunction(new NativeFunctionListEntry("Image.draw", new NativeFunction() {
             public final int length = 3;
                 public Rv func(boolean isNew, Rv _this, Rv args) {
-                    int id = _this.get("id").toNum().num;
                     int x = args.get("0").toNum().num;
                     int y = args.get("1").toNum().num;
 
@@ -199,7 +199,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
                     int endx = _this.get("endx").toNum().num;
                     int endy = _this.get("endy").toNum().num;
 
-                    canvas._drawImageRegion(id, x, y, startx, starty, endx, endy);
+                    canvas._drawImageRegion((Image)_this.opaque, x, y, startx, starty, endx, endy);
 
                     return Rv._undefined;
                 }

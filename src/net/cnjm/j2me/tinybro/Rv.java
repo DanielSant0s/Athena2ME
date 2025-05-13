@@ -32,6 +32,8 @@ public class Rv {
     // ctPr                     o   o   o   o   o   o   o       x 
     // prev                                                 o     
       
+    /** Some helper to hold Opaque data (such as native objects) */
+    public Object opaque;
     /** For function & native it's number of formal arguments */
     public int num;
     /** For native it's the name of native function */
