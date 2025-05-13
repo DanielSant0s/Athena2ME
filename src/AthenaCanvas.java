@@ -11,6 +11,7 @@ import java.lang.System;
 import java.util.Vector;
 
 import javax.microedition.lcdui.game.GameCanvas;
+import javax.microedition.lcdui.game.Sprite;
 import javax.microedition.lcdui.Font;
 import javax.microedition.lcdui.Graphics;
 import javax.microedition.lcdui.Image;
@@ -64,6 +65,30 @@ public class AthenaCanvas extends GameCanvas {
         g.drawImage((Image)loaded_images.elementAt(id), x, y, g.TOP | g.LEFT);
     }
 
+    public void _drawImageRegion(final int id, final int x, final int y, int startx, int starty, int endx, int endy) {
+        //g.drawImage((Image)loaded_images.elementAt(id), x, y, g.TOP | g.LEFT);
+        g.drawRegion((Image)loaded_images.elementAt(id),
+            startx,
+            starty,
+            endx,
+            endy,
+            Sprite.TRANS_NONE,
+            x,
+            y,
+            g.TOP | g.LEFT);
+    }
+
+    public int getImageWidth(final int id) {
+        Image img = (Image)loaded_images.elementAt(id);
+
+        return img.getWidth();
+    }
+
+    public int getImageHeight(final int id) {
+        Image img = (Image)loaded_images.elementAt(id);
+
+        return img.getHeight();
+    }
 
     public int loadImage(String name) {
         try {

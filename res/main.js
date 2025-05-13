@@ -6,10 +6,10 @@ var dir_y = 0;
 
 var cur_time = 0;
 
-var cross_img = Screen.loadImage("/cross.png");
-var circle_img = Screen.loadImage("/circle.png");
-var square_img = Screen.loadImage("/square.png");
-var triangle_img = Screen.loadImage("/triangle.png");
+var cross_img = new Image("/cross.png");
+var circle_img = new Image("/circle.png");
+var square_img = new Image("/square.png");
+var triangle_img = new Image("/triangle.png");
 
 var PURPLE = Color.new(80, 0, 160);
 var WHITE = Color.new(255, 255, 255);
@@ -22,10 +22,10 @@ while(true) {
         Screen.clear(PURPLE);
         Screen.drawText("Hello from Athena2ME!", 15, 15, 0, WHITE);
 
-        Screen.drawImage(cross_img, 5, 5);
-        Screen.drawImage(circle_img, 42, 5);
-        Screen.drawImage(square_img, 79, 5);
-        Screen.drawImage(triangle_img, 116, 5);
+        cross_img.draw(5, 5);
+        circle_img.draw(42, 5);
+        square_img.draw(79, 5);
+        triangle_img.draw(116, 5);
 
         Screen.drawRect(x, y, 15, 15, WHITE);
 

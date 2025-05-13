@@ -10,7 +10,7 @@ public class Rv {
     static final int SYMBOL =           RC.TOK_SYMBOL; // unresolved symbol
     static final int LVALUE =           9;    // left_value
     
-    static final int OBJECT =           0x10;
+    public static final int OBJECT =           0x10;
     static final int NUMBER_OBJECT =    OBJECT + Rv.NUMBER;
     static final int STRING_OBJECT =    OBJECT + Rv.STRING;
     static final int ARRAY =            OBJECT + 0x0A;
