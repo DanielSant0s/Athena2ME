@@ -189,14 +189,12 @@ Properties:
 Methods:
 
 * draw(x, y) - Draw loaded image onscreen(call it every frame). Example: image.draw(15.0, 100.0);
+* free() - Free content immediately. 
   
 ### Draw module
-* Draw.point(x, y, color) - Draws a pixel on the specified color and position on the screen.
 * Draw.rect(x, y, width, height, color) - Draws a rectangle on the specified color, position and size on the screen.
 * Draw.line(x, y, x2, y2, color) - Draws a line on the specified colors and position on the screen.
-* Draw.circle(x, y, radius, color, *filled*) - Draws a circle on the specified color, position, radius and fill on the screen.
-* Draw.triangle(x, y, x2, y2, x3, y3, color, *color2*, *color3*) - Draws a triangle on the specified points positions and colors on the screen.
-* Draw.quad(x, y, x2, y2, x3, y3, x4, y4 color, *color2*, *color3*, *color4*) - Draws a quad on the specified points positions and colors on the screen.
+* Draw.triangle(x, y, x2, y2, x3, y3, color) - Draws a triangle on the specified points positions and colors on the screen.
   
 ### Screen module
 * Screen.clear(*color*) - Clears screen with the specified color. If you don't specify any argument, it will use black as default.  
@@ -244,6 +242,8 @@ Properties:
 Methods:
 * print(x, y, text) - Draw text on screen(call it every frame). Example: font.print(10.0, 10.0, "Hello world!);
 * getTextSize(text) - Returns text absolute size in pixels (width, height). Example: const size = font.getTextSize("Hello world!");
+* free() - Free asset content immediately. 
+
 ### Pad module
 
 * Buttons list:  
