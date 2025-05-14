@@ -43,8 +43,8 @@ Athena2ME is a project that seeks to facilitate and at the same time brings a co
 ### Modules:
 * System: OS dependant functions in general.
 * Image: Image drawing.
-* Draw: Shape drawing, triangles, circles etc.
-* Screen: The entire screen of your project (2D and 3D), being able to change the resolution, enable or disable parameters.
+* Draw: Shape drawing, rectangles, triangles etc.
+* Screen: The entire screen of your project, enable or disable parameters.
 * Font: Functions that control the texts that appear on the screen, loading texts, drawing and unloading from memory.
 * Pad: Above being able to draw and everything else, A human interface is important.
 * Keyboard: Basic keypad support.
