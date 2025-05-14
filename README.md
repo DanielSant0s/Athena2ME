@@ -74,11 +74,11 @@ Oh, and I also have to mention that an essential prerequisite for using Athena2M
 
 Hello World:  
 ```js
-var WHITE = Color.new(255, 255, 255);
+var font = new Font("default");
 
 while (true) { 
   Screen.clear(); // Clear screen for the next frame.
-  Screen.drawText("Hello from Athena2ME!", 15, 15, 0, WHITE);
+  font.print("Hello from Athena2ME!", 15, 15);
   Screen.update(); // Updates the screen.
 }
 ```
