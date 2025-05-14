@@ -16,7 +16,13 @@ var WHITE = Color.new(255, 255, 255);
 
 var font = new Font("default");
 
-while(true) {
+var running = true;
+
+System.setExitHandler(function () {
+    running = false;
+});
+
+while(running) {
     if (Date.now() > cur_time) {
         cur_time = Date.now() + 16;
         Pad.update();

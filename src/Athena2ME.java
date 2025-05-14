@@ -12,6 +12,8 @@ import net.cnjm.j2me.util.*;
 
 public class Athena2ME extends MIDlet implements CommandListener {
     RocksInterpreter ri;
+    Rv jsThis = null;
+    Rv jsExitHandler = null;
     private AthenaCanvas canvas;
     private Command exitCmd = new Command("Exit", Command.EXIT, 1);
     
@@ -57,6 +59,20 @@ public class Athena2ME extends MIDlet implements CommandListener {
         ri.astNode(func, '{', 0, ri.endpos);
         Rv rv = new Rv(false, func, 0);
         Rv callObj = rv.co = ri.initGlobalObject();
+
+        ri.addNativeFunction(new NativeFunctionListEntry("System.setExitHandler", new NativeFunction() {
+            public final int length = 1;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    jsExitHandler = args.get("0");
+
+                    return Rv._undefined;
+                }
+        }));
+
+        Rv _System = ri.newModule();
+        ri.addToObject(_System, "setExitHandler", ri.newNativeFunction("System.setExitHandler"));
+
+        ri.addToObject(callObj, "System", _System);
 
         ri.addNativeFunction(new NativeFunctionListEntry("Screen.clear", new NativeFunction() {
             public final int length = 1;
@@ -376,11 +392,117 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
         ri.addToObject(callObj, "Keyboard", _Keyboard);
 
+        final Rv _Timer = ri.newModule();
+
+        ri.addNativeFunction(new NativeFunctionListEntry("Timer", new NativeFunction() {
+            public final int length = 0;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    Rv ret = isNew ? _this : new Rv(Rv.OBJECT, _Timer);
+
+                    AthenaTimer timer = new AthenaTimer(RocksInterpreter.bootTime);
+
+                    ret.opaque = (Object)timer;
+
+                    return ret;
+                }
+        }));
+
+        ri.addNativeFunction(new NativeFunctionListEntry("Timer.free", new NativeFunction() {
+            public final int length = 0;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    _this.opaque = null;
+
+                    return Rv._undefined;
+                }
+        }));
+
+        ri.addNativeFunction(new NativeFunctionListEntry("Timer.get", new NativeFunction() {
+            public final int length = 0;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    AthenaTimer timer = (AthenaTimer)_this.opaque;
+
+                    return new Rv(timer.get());
+                }
+        }));
+
+        ri.addNativeFunction(new NativeFunctionListEntry("Timer.set", new NativeFunction() {
+            public final int length = 1;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    AthenaTimer timer = (AthenaTimer)_this.opaque;
+
+                    int value = args.get("0").toNum().num;
+
+                    timer.set(value);
+
+                    return Rv._undefined;
+                }
+        }));
+
+        ri.addNativeFunction(new NativeFunctionListEntry("Timer.pause", new NativeFunction() {
+            public final int length = 0;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    AthenaTimer timer = (AthenaTimer)_this.opaque;
+
+                    timer.pause();
+
+                    return Rv._undefined;
+                }
+        }));
+
+        ri.addNativeFunction(new NativeFunctionListEntry("Timer.resume", new NativeFunction() {
+            public final int length = 0;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    AthenaTimer timer = (AthenaTimer)_this.opaque;
+
+                    timer.resume();
+
+                    return Rv._undefined;
+                }
+        }));
+
+        ri.addNativeFunction(new NativeFunctionListEntry("Timer.reset", new NativeFunction() {
+            public final int length = 0;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    AthenaTimer timer = (AthenaTimer)_this.opaque;
+
+                    timer.reset();
+
+                    return Rv._undefined;
+                }
+        }));
+
+        ri.addNativeFunction(new NativeFunctionListEntry("Timer.playing", new NativeFunction() {
+            public final int length = 0;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    AthenaTimer timer = (AthenaTimer)_this.opaque;
+
+                    return new Rv(timer.playing()? 1 : 0);
+                }
+        }));
+
+        _Timer.nativeCtor("Timer", callObj);
+        ri.addToObject(_Timer.ctorOrProt, "get", ri.newNativeFunction("Timer.get"));
+        ri.addToObject(_Timer.ctorOrProt, "set", ri.newNativeFunction("Timer.set"));
+        ri.addToObject(_Timer.ctorOrProt, "pause", ri.newNativeFunction("Timer.pause"));
+        ri.addToObject(_Timer.ctorOrProt, "resume", ri.newNativeFunction("Timer.resume"));
+        ri.addToObject(_Timer.ctorOrProt, "reset", ri.newNativeFunction("Timer.reset"));
+        ri.addToObject(_Timer.ctorOrProt, "playing", ri.newNativeFunction("Timer.playing"));
+
+        ri.addToObject(_Timer.ctorOrProt, "free", ri.newNativeFunction("Timer.free"));
+
+        ri.addToObject(callObj, "Timer", _Timer);
+
         ri.call(false, rv, callObj, null, null, 0, 0);
+
+        jsThis = callObj;
     }
 
     public void commandAction(Command c, Displayable d) {
         if (c == exitCmd) {
+            if (jsExitHandler != null) {
+                ri.call(false, jsExitHandler, jsExitHandler.co, jsThis, null, 0, 0);
+            }
+
             destroyApp(false);
             notifyDestroyed();
         }

@@ -2325,7 +2325,7 @@ mainloop:
     
     static final Rhash htNativeIndex;
     static final Rhash htNativeLength;
-    static final long bootTime = System.currentTimeMillis();
+    public static final long bootTime = System.currentTimeMillis();
     static final Random random = new Random(bootTime);
     static final Pack EMPTY_BLOCK = new Pack(-1, 0);
     

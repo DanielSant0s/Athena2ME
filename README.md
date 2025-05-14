@@ -41,6 +41,7 @@
 Athena2ME is a project that seeks to facilitate and at the same time brings a complete kit for users to create homebrew software for Java ME mobile divices using the JavaScript language. It has dozens of built-in functions, both for creating games and apps. The main advantage over using Athena2ME project instead of Sun Wireless Toolkit or Nokia S40 SDK is above all the practicality, you will use one of the simplest possible languages to create what you have in mind, besides not having to compile, just script and test, fast and simple.
 
 ### Modules:
+* System: OS dependant functions in general.
 * Image: Image drawing.
 * Draw: Shape drawing, triangles, circles etc.
 * Screen: The entire screen of your project (2D and 3D), being able to change the resolution, enable or disable parameters.
@@ -76,7 +77,13 @@ Hello World:
 ```js
 var font = new Font("default");
 
-while (true) { 
+var running = true;
+
+System.setExitHandler(function () {
+    running = false;
+});
+
+while (running) { 
   Screen.clear(); // Clear screen for the next frame.
   font.print("Hello from Athena2ME!", 15, 15);
   Screen.update(); // Updates the screen.
@@ -156,6 +163,9 @@ Below is the list of usable functions of Athena2ME project currently, this list 
 
 P.S.: *Italic* parameters refer to optional parameters
     
+### System module
+* System.setExitHandler(func) - Set *func* to be called when the device run any action to exit Athena2ME.
+
 ### Color module
 * var col = Color.new(r, g, b, *a*) - Returns a color object from the specified RGB(A) parameters.
 
@@ -256,15 +266,15 @@ Methods:
 
 ### Timer module
 
-* var timer = Timer.new()
-* Timer.getTime(timer)
-* Timer.setTime(src, value)
-* Timer.destroy(timer)
-* Timer.pause(timer)
-* Timer.resume(timer)
-* Timer.reset(timer)
-* Timer.isPlaying(timer)
-
+* var timer = new Timer()  
+  • get()  
+  • set(value)  
+  • free()  
+  • pause()  
+  • resume()  
+  • reset()  
+  • playing()  
+  
 ## Contributing
 
 Contributions are what make the open source community such an amazing place to be learn, inspire, and create. Any contributions you make are **greatly appreciated**.
