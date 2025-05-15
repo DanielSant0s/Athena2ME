@@ -41,7 +41,7 @@
 Athena2ME is a project that seeks to facilitate and at the same time brings a complete kit for users to create homebrew software for Java ME mobile divices using the JavaScript language. It has dozens of built-in functions, both for creating games and apps. The main advantage over using Athena2ME project instead of Sun Wireless Toolkit or Nokia S40 SDK is above all the practicality, you will use one of the simplest possible languages to create what you have in mind, besides not having to compile, just script and test, fast and simple.
 
 ### Modules:
-* System: OS dependant functions in general.
+* os: OS dependant functions in general.
 * Image: Image drawing.
 * Draw: Shape drawing, rectangles, triangles etc.
 * Screen: The entire screen of your project, enable or disable parameters.
@@ -163,8 +163,9 @@ Below is the list of usable functions of Athena2ME project currently, this list 
 
 P.S.: *Italic* parameters refer to optional parameters
     
-### System module
-* System.setExitHandler(func) - Set *func* to be called when the device run any action to exit Athena2ME.
+### os module
+* os.setExitHandler(func) - Set *func* to be called when the device run any action to exit Athena2ME.
+* os.platform - Return a string representing the platform: "j2me".
 
 ### Color module
 * var col = Color.new(r, g, b, *a*) - Returns a color object from the specified RGB(A) parameters.

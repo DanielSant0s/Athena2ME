@@ -18,7 +18,7 @@ var font = new Font("default");
 
 var running = true;
 
-System.setExitHandler(function () {
+os.setExitHandler(function () {
     running = false;
 });
 

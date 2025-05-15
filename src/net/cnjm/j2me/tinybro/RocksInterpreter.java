@@ -1800,8 +1800,9 @@ mainloop:
         function_list.concat(entries);
     }
 
-    public final void addNativeFunction(NativeFunctionListEntry entry) {
+    public final Rv addNativeFunction(NativeFunctionListEntry entry) {
         function_list.put(entry);
+        return new Rv(true, entry.name, entry.func.length);
     }
 
     /**
