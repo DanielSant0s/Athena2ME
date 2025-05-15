@@ -256,10 +256,10 @@ public class AthenaFile {
         try {
             closeStreams();
             fc.close();
-            return 0; // Sucesso
+            return 0;
         } catch (IOException ioe) {
             ioe.printStackTrace();
-            return -1; // Erro
+            return -1;
         }
     }
 
@@ -402,7 +402,6 @@ public class AthenaFile {
         }
     }
 
-    // Métodos estáticos existentes
     static public int open(String name, int flags) {
         FileConnection conn = null;
         try {

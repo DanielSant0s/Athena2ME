@@ -73,6 +73,41 @@ public class Athena2ME extends MIDlet implements CommandListener {
             }
         })));
 
+        ri.addToObject(_os, "open", 
+            ri.addNativeFunction(new NativeFunctionListEntry("os.open", new NativeFunction() {
+            public final int length = 2;
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                String path = args.get("0").toStr().str;
+                int flags = args.get("1").toNum().num;
+            
+                return new Rv(AthenaFile.open(path, flags));
+            }
+        })));
+
+        ri.addToObject(_os, "close", 
+            ri.addNativeFunction(new NativeFunctionListEntry("os.close", new NativeFunction() {
+            public final int length = 1;
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                int fd = args.get("0").toNum().num;
+
+                AthenaFile.close(fd);
+            
+                return Rv._undefined;
+            }
+        })));
+
+        ri.addToObject(_os, "seek", 
+            ri.addNativeFunction(new NativeFunctionListEntry("os.seek", new NativeFunction() {
+            public final int length = 1;
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                int fd = args.get("0").toNum().num;
+                int offset = args.get("1").toNum().num;
+                int whence = args.get("2").toNum().num;
+            
+                return new Rv(AthenaFile.seek(fd, offset, whence));
+            }
+        })));
+
         ri.addToObject(callObj, "os", _os);
 
         Rv _Screen = ri.newModule();
