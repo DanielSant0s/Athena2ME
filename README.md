@@ -67,6 +67,11 @@ New types are always being added and this list can grow a lot over time, so stay
 - [ ] 3D Render functions
 - [ ] Network (requests, sockets, websockets)
 - [ ] Archive (zip, 7zip, tar, rar) system
+- [ ] Add float support
+- [ ] Add ArrayBuffer support
+- [ ] Add let, const
+- [ ] Add array functions
+- [ ] Add more JS standard functions
 
 ### Built With
 
