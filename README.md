@@ -40,7 +40,7 @@
 
 Athena2ME is a project that seeks to facilitate and at the same time brings a complete kit for users to create homebrew software for Java ME mobile divices using the JavaScript language. It has dozens of built-in functions, both for creating games and apps. The main advantage over using Athena2ME project instead of Sun Wireless Toolkit or Nokia S40 SDK is above all the practicality, you will use one of the simplest possible languages to create what you have in mind, besides not having to compile, just script and test, fast and simple.
 
-### Modules:
+### Modules
 * os: OS dependant functions in general.
 * Image: Image drawing.
 * Draw: Shape drawing, rectangles, triangles etc.
@@ -51,6 +51,22 @@ Athena2ME is a project that seeks to facilitate and at the same time brings a co
 * Timer: Control the time precisely in your code, it contains several timing functions.
 
 New types are always being added and this list can grow a lot over time, so stay tuned.
+
+### Progress
+
+- [x] Image basic functions
+- [x] Screen basic functions
+- [x] OS Font functions
+- [x] Physical pad functions
+- [x] Keypad functions
+- [x] Timer functions
+- [ ] OS external file functions
+- [ ] OS platform functions
+- [ ] std functions
+- [ ] Thread functions
+- [ ] 3D Render functions
+- [ ] Network (requests, sockets, websockets)
+- [ ] Archive (zip, 7zip, tar, rar) system
 
 ### Built With
 
