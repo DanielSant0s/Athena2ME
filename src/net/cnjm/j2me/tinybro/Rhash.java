@@ -12,7 +12,11 @@ public class Rhash {
     private boolean updatekey;
 
     public int size;
-    
+
+    /** Structural change counter. Bumped whenever a key is inserted, replaced
+     *  or removed. Used by inline caches to invalidate memoised lookups. */
+    public int gen;
+
     public Rhash(int initialCapacity) {
         reset(initialCapacity);
     }
@@ -23,6 +27,7 @@ public class Rhash {
         threshold = initialCapacity * LOAD_FACTOR / 100;
         updatekey = true;
         keys = new Pack(-1, -1);
+        gen = 0;
         return this;
     }
     
@@ -66,6 +71,28 @@ public class Rhash {
         }
         return null;
     }
+
+    /**
+     * Lookup variant that trusts a pre-computed hash. Hot-path callers
+     * (symbol resolution, property access) should prefer this to avoid
+     * re-computing String.hashCode() on every access.
+     */
+    public final Rv getEntryH(int hash, String sKey) {
+        Rv[] tab;
+        Rv p;
+        int index = (hash & 0x7fffffff) % (tab = table).length;
+        for (p = tab[index]; p != null; p = p.prev) {
+            if (hash == p.type && (sKey == p.str || sKey.equals(p.str))) {
+                return p;
+            }
+        }
+        return null;
+    }
+
+    public final Rv getH(int hash, String sKey) {
+        Rv entry = getEntryH(hash, sKey);
+        return entry != null ? entry.co : null;
+    }
     
     public final Rhash putEntry(int iKey, String sKey, Rv entry) {
         if (sKey != null) iKey = sKey.hashCode(); // key's object, iKey is ignored
@@ -83,6 +110,7 @@ public class Rhash {
                     tab[index] = entry;
                 }
                 entry.prev = p.prev;
+                ++gen;
                 return this;
             }
         }
@@ -90,6 +118,7 @@ public class Rhash {
         tab[index] = entry;
         entry.prev = next;
         ++size;
+        ++gen;
         updatekey = true;
         return this;
     }
@@ -108,6 +137,7 @@ public class Rhash {
                 }
                 p.prev = null;
                 --size;
+                ++gen;
                 updatekey = true;
                 return p;
             }

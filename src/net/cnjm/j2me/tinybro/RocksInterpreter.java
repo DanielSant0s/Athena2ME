@@ -481,7 +481,7 @@ mainswitch:
         Pack rpn = new Pack(len = endpos - pos, len); // for generated reverse polish notation
         Pack op = new Pack(20, 20); // for operator
         Pack st = new Pack(10, -1); // stack for [ state, comma_count ]
-        Rhash opidx = htOptrIndex;
+        int[] opidx = optrIndex;
         int[][] ptab = prioTable;
         boolean isNew = false;
 mainloop:
@@ -556,7 +556,8 @@ mainloop:
                 int top = op.iSize > 0 ? op.iArray[op.iSize - 1] : RC.TOK_EMPTY;
                 int offset = top >>> 16;
                 top &= 0xffff;
-                int row = opidx.get(t, -1), col = opidx.get(top, -1);
+                int row = t < OPTR_TABLE_SIZE ? opidx[t] : -1;
+                int col = top < OPTR_TABLE_SIZE ? opidx[top] : -1;
                 if (row == -1 || col == -1) {
                     throw ex(t, to, "stack top: " + RC.tokenName(top, null));
                 }
@@ -646,13 +647,31 @@ mainloop:
         if (rpn.iSize == 0) return Rv._undefined;
         int[] tt = rpn.iArray;
         Object[] to = rpn.oArray;
-        Pack opnd = new Pack(-1, 10);
+        // ---- acquire an operand stack from the pool ----
+        Pack[] pool = opndPool;
+        int depth = evalDepth;
+        if (depth >= pool.length) {
+            Pack[] grown = new Pack[pool.length * 2];
+            System.arraycopy(pool, 0, grown, 0, pool.length);
+            opndPool = pool = grown;
+        }
+        Pack opnd = pool[depth];
+        if (opnd == null) {
+            opnd = new Pack(-1, 16);
+            pool[depth] = opnd;
+        } else {
+            opnd.iSize = 0;
+            opnd.oSize = 0;
+        }
+        evalDepth = depth + 1;
+        try {
         boolean isLocal = false;
+        int[] _optrType = optrType;
         for (int i = 0, n = rpn.iSize; i < n; i++) {
             int t = tt[i];
             int offset = t >> 16;
             t &= 0xffff;
-            switch (htOptrType.get(t, -1)) {
+            switch (t < OPTR_TABLE_SIZE ? _optrType[t] : 0) {
             case 1: // unary op
                 Rv o = (Rv) opnd.oArray[opnd.oSize - 1];
                 opnd.oArray[opnd.oSize - 1] = ((Rv) to[i]).unary(callObj, t, o);
@@ -787,6 +806,9 @@ mainloop:
             System.out.println("EVAL_RETURN: " + opnd.oArray[0]);
         }
         return (Rv) opnd.oArray[0];
+        } finally {
+            evalDepth = depth;
+        }
     }
 
     /**
@@ -813,6 +835,13 @@ mainloop:
             return Rv.error("invalid function");
         }
         boolean isNative = (function.type & ~Rv.CTOR_MASK) == Rv.NATIVE;
+        // ============ fast path for NativeFunctionFast ============
+        // Skip the expensive arguments / funCo / stringified-index setup that the
+        // classic contract requires. All the interpreter needs is (isNew, thiz, raw args).
+        if (isNative && function.obj instanceof NativeFunctionFast) {
+            NativeFunctionFast fast = (NativeFunctionFast) function.obj;
+            return fast.callFast(isInit, thiz, argSrc, start, num, this);
+        }
         Pack children = isNative ? null : ((Node) function.obj).children;
         if (thiz != null) {
             Rv args = new Rv(Rv.ARGUMENTS, Rv._Arguments);
@@ -1052,7 +1081,7 @@ mainloop:
             }
             Pack argSrc = new Pack(-1, argNum);
             
-            for (int ii = argStart, nn = argStart + argNum; ii < nn; argSrc.add(argsArr.get(Integer.toString(ii++))));
+            for (int ii = argStart, nn = argStart + argNum; ii < nn; argSrc.add(argsArr.get(Rv.intStr(ii++))));
             Rv cobak = _this.co;
             Rv ret = call(false, _this, _this.co = funCo, jsFunc, argSrc, 0, argNum);
             _this.co = cobak;
@@ -1145,7 +1174,7 @@ mainloop:
                         } else { // 0 or more
                             ret.num = args.num;
                             for (int i = 0; i < args.num; i++) {
-                                ret.putl(i, args.get(Integer.toString(i)));
+                                ret.putl(i, args.get(Rv.intStr(i)));
                             }
                         }
 
@@ -1374,7 +1403,7 @@ mainloop:
                         int argLen = args.num;
                         
                         for (int i = 0; i < argLen; i++) {
-                            Rv charcode = args.get(Integer.toString(i)).toNum();
+                            Rv charcode = args.get(Rv.intStr(i)).toNum();
                             if (charcode != Rv._NaN) buf.append((char) charcode.num);
                         }
                         Rv ret = new Rv(buf.toString());
@@ -1400,10 +1429,10 @@ mainloop:
                             dest.put(key = (String) keys.oArray[i], prop.get(key));
                         }
                         for (int i = 0; i < argLen; i++) {
-                            Rv obj = args.get(Integer.toString(i));
+                            Rv obj = args.get(Rv.intStr(i));
                             if (obj.type == Rv.ARRAY) {
                                 for (int j = 0, n = obj.num, b = ret.num; j < n; j++) {
-                                    ret.putl(b + j, obj.get(Integer.toString(j)));
+                                    ret.putl(b + j, obj.get(Rv.intStr(j)));
                                 }
                             } else {
                                 ret.putl(ret.num, obj);
@@ -1426,7 +1455,7 @@ mainloop:
                         
                         for (int i = 0, n = thiz.num; i < n; i++) {
                             if (i > 0) buf.append(sep);
-                            buf.append(prop.get(Integer.toString(i)).toStr().str);
+                            buf.append(prop.get(Rv.intStr(i)).toStr().str);
                         }
                         Rv ret = new Rv(buf.toString());
                         
@@ -1442,7 +1471,7 @@ mainloop:
                         int argLen = args.num;
                         
                         for (int i = 0, b = thiz.num; i < argLen; i++) {
-                            thiz.putl(b + i, args.get(Integer.toString(i)));
+                            thiz.putl(b + i, args.get(Rv.intStr(i)));
                         }
                         Rv ret = new Rv(thiz.num);
                         
@@ -1480,13 +1509,13 @@ mainloop:
                         int argLen = args.num;
                         
                         for (int i = 0; i < argLen; i++) {
-                            String idx = Integer.toString(i);
+                            String idx = Rv.intStr(i);
                             Rv val = args.prop.get(idx); 
                             if (val != null) ht.put(idx, val);
                         }
                         for (int i = 0, n = thiz.num; i < n; i++) {
-                            Rv val = prop.get(Integer.toString(i)); 
-                            if (val != null) ht.put(Integer.toString(i + argLen), val);
+                            Rv val = prop.get(Rv.intStr(i)); 
+                            if (val != null) ht.put(Rv.intStr(i + argLen), val);
                         }
                         thiz.num += argLen;
                         thiz.prop = ht;
@@ -1512,8 +1541,8 @@ mainloop:
                             Rhash ht = ret.prop;
                             int i = 0, n = ret.num = i2 - i1;
                             for (; i < n; i++) {
-                                Rv val = prop.get(Integer.toString(i + i1)); 
-                                if (val != null) ht.put(Integer.toString(i), val);
+                                Rv val = prop.get(Rv.intStr(i + i1)); 
+                                if (val != null) ht.put(Rv.intStr(i), val);
                             }
                         }
                         
@@ -1532,7 +1561,7 @@ mainloop:
                         int num;
                         Pack tmp = new Pack(-1, num = thiz.num);
                         
-                        for (int i = 0; i < num; tmp.add(prop.get(Integer.toString(i++))));
+                        for (int i = 0; i < num; tmp.add(prop.get(Rv.intStr(i++))));
                         Object[] arr = tmp.oArray;
                         for (int i = 0, n = num - 1; i < n; i++) {
                             Rv r1 = (Rv) arr[i];
@@ -1563,7 +1592,7 @@ mainloop:
                         Rhash ht = new Rhash(11);
                         for (int i = num; --i >= 0;) {
                             Rv val; 
-                            if ((val = (Rv) arr[i]) != null) ht.put(Integer.toString(i), val);
+                            if ((val = (Rv) arr[i]) != null) ht.put(Rv.intStr(i), val);
                         }
                         thiz.prop = ht;
                         
@@ -1580,8 +1609,8 @@ mainloop:
                         Rhash ht = new Rhash(11);
 
                         for (int i = 0, j = thiz.num; --j >= 0; i++) {
-                            Rv val = prop.get(Integer.toString(j)); 
-                            if (val != null) ht.put(Integer.toString(i), val);
+                            Rv val = prop.get(Rv.intStr(j)); 
+                            if (val != null) ht.put(Rv.intStr(i), val);
                         }
                         thiz.prop = ht;
 
@@ -1668,7 +1697,7 @@ mainloop:
                         if (argLen > 0) {
                             int iret = Integer.MAX_VALUE;
                             for (int i = 0; i < argLen; i++) {
-                                Rv val = args.get(Integer.toString(i)).toNum();
+                                Rv val = args.get(Rv.intStr(i)).toNum();
                                 if (val == Rv._NaN) {
                                     ret = val;
                                     return ret;
@@ -1693,7 +1722,7 @@ mainloop:
                         if (argLen > 0) {
                             int iret = Integer.MIN_VALUE;
                             for (int i = 0; i < argLen; i++) {
-                                Rv val = args.get(Integer.toString(i)).toNum();
+                                Rv val = args.get(Rv.intStr(i)).toNum();
                                 if (val == Rv._NaN) {
                                     ret = val;
                                     return ret;
@@ -1802,7 +1831,11 @@ mainloop:
 
     public final Rv addNativeFunction(NativeFunctionListEntry entry) {
         function_list.put(entry);
-        return new Rv(true, entry.name, entry.func.length);
+        Rv ret = new Rv(true, entry.name, entry.func.length);
+        // Keep a direct reference to the NativeFunction instance so callNative
+        // doesn't have to do a Hashtable<String,NativeFunction> lookup per call.
+        ret.obj = entry.func;
+        return ret;
     }
 
     /**
@@ -1816,7 +1849,12 @@ mainloop:
         Rv args = callObj.get("arguments");
         Rv thiz = callObj.get("this");
 
-        NativeFunction native_func = function_list.get(function.str);
+        // Direct-ref path: avoid the per-call Hashtable<String,NativeFunction>
+        // lookup when we already resolved the function at registration time.
+        Object direct = function.obj;
+        NativeFunction native_func = direct instanceof NativeFunction
+                ? (NativeFunction) direct
+                : function_list.get(function.str);
 
         if (native_func != null) {
             return native_func.func(isNew, thiz, args);
@@ -1848,11 +1886,11 @@ mainloop:
                     int numArgs = argLen - 1;
                     for (int i = 0; i < numArgs; i++) {
                         String arg;
-                        this.reset(arg = args.get(Integer.toString(i)).toStr().str, null, 0, arg.length());
+                        this.reset(arg = args.get(Rv.intStr(i)).toStr().str, null, 0, arg.length());
                         astNode(n, RC.TOK_MUL, 0, this.endpos);
                     }
                     String src;
-                    this.reset(src = args.get(Integer.toString(numArgs)).toStr().str, null, 0, src.length());
+                    this.reset(src = args.get(Rv.intStr(numArgs)).toStr().str, null, 0, src.length());
                     astNode(n, RC.TOK_LBR, 0, this.endpos); // '{' = block
                 }
                 ret.obj = n;
@@ -2277,6 +2315,16 @@ mainloop:
     
     static final Rhash htOptrIndex;
     static final Rhash htOptrType;
+
+    static final int OPTR_TABLE_SIZE = 2048;
+    public static final int[] optrIndex = new int[OPTR_TABLE_SIZE];
+    public static final int[] optrType = new int[OPTR_TABLE_SIZE];
+
+    // Per-interpreter pool of operand stacks used by eval(). Grows on demand
+    // as eval() recurses (eval -> call -> eval ...). Reusing these Packs turns
+    // "one allocation per expression" into zero on the steady state.
+    private Pack[] opndPool = new Pack[16];
+    private int evalDepth = 0;
     
     static final String PRECEDENCE = 
         "Paaaaaaaaaaaaapaaaaapaaaapa" + // DOT
@@ -2338,6 +2386,7 @@ mainloop:
         
         Rhash ih = htOptrIndex = new Rhash(53);
         Rhash ot = htOptrType = new Rhash(53);
+        for (int i = optrIndex.length; --i >= 0;) optrIndex[i] = -1;
         pk = split(OPTRINDEX, ",");
         pkar = pk.oArray;
         for (int i = 0, idx = -1, n = pk.oSize; i < n; i++) {
@@ -2352,6 +2401,10 @@ mainloop:
                         : idx == 12 ? 3                 // assign op 
                         : 0;                            // misc op
                 ot.put(optr, type);
+                if (optr >= 0 && optr < OPTR_TABLE_SIZE) {
+                    optrIndex[optr] = idx;
+                    optrType[optr] = type;
+                }
             }
         }
         

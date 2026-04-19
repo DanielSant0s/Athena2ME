@@ -8,6 +8,7 @@ import java.lang.InterruptedException;
 import java.lang.Runnable;
 import java.lang.System;
 
+import java.util.Hashtable;
 import java.util.Vector;
 
 import javax.microedition.lcdui.game.GameCanvas;
@@ -51,7 +52,7 @@ public class AthenaCanvas extends GameCanvas {
 
     public void drawFont(final String text, final int x, final int y, final int anchor, final int color) {
         g.setColor(color);
-        g.drawString(text, x, y, g.TOP | g.LEFT);
+        g.drawString(text, x, y, anchor != 0 ? anchor : (g.TOP | g.LEFT));
     }
 
     public void clearScreen(final int color) {
@@ -79,22 +80,30 @@ public class AthenaCanvas extends GameCanvas {
     }
 
     public void _drawImageRegion(Image img, int x, int y, int startx, int starty, int endx, int endy) {
-        //g.drawImage(img, x, y, g.TOP | g.LEFT);
+        // MIDP's drawRegion expects (x_src, y_src, width, height) — not end-coords.
         g.drawRegion(img,
             startx,
             starty,
-            endx,
-            endy,
+            endx - startx,
+            endy - starty,
             Sprite.TRANS_NONE,
             x,
             y,
             g.TOP | g.LEFT);
     }
 
+    // Cache decoded Images by resource name. Loading a PNG on a feature phone can
+    // easily take tens of milliseconds, so per-frame `new Image(...)` calls in JS
+    // become a major stall. The cache is keyed by the exact name string passed in.
+    private final Hashtable imageCache = new Hashtable();
+
     public Image loadImage(String name) {
-        Image ret = null;
+        if (name == null) return null;
+        Image ret = (Image) imageCache.get(name);
+        if (ret != null) return ret;
         try {
             ret = Image.createImage(name);
+            if (ret != null) imageCache.put(name, ret);
         } catch (Exception ex) {
             ex.printStackTrace();
         }

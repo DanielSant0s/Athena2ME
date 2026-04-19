@@ -22,6 +22,26 @@ public class Rv {
     static final int CTOR_MASK =        0x40;
     
     public int type;
+
+    /** Pre-computed String.hashCode() for SYMBOL/STRING values used as map keys.
+     *  0 means "not cached yet". Saves work on every Rhash lookup in the hot path. */
+    public int hash;
+
+    /** Structural generation counter. Bumped every time a property is added or
+     *  replaced via {@link #putl}. Used by the monomorphic inline cache in
+     *  LVALUE nodes to validate whether a previously memoised lookup result is
+     *  still fresh. */
+    public int gen;
+
+    /** Inline cache slots, only meaningful when {@code type == LVALUE}. Store the
+     *  last resolved value, the holder it was fetched from, the property key we
+     *  looked up, and the holder's {@link #gen} at resolution time. Treated as
+     *  a best-effort hint: a miss just falls through to the normal chain-walking
+     *  lookup. */
+    public Rv icHolder;
+    public Rv icValue;
+    public String icKey;
+    public int icStamp;
     
     // ------- NUM STR SYM LVA OBJ NOB SOB ARR ARG FUN NAT cob CTR
     // num      o           x       o       o   o   o   o         
@@ -72,9 +92,21 @@ public class Rv {
         this.str = s;
     }
     
+    /**
+     * Canonical SYMBOL pool. Ensures that a given identifier string always maps
+     * to the same Rv, so comparisons can short-circuit to pointer equality and
+     * the hashCode is computed once per symbol name.
+     */
+    private static final java.util.Hashtable _symbolPool = new java.util.Hashtable();
+
     public static final Rv symbol(String s) {
-        Rv ret = new Rv(s);
-        ret.type = Rv.SYMBOL;
+        Rv ret = (Rv) _symbolPool.get(s);
+        if (ret == null) {
+            ret = new Rv(s);
+            ret.type = Rv.SYMBOL;
+            ret.hash = s.hashCode();
+            _symbolPool.put(s, ret);
+        }
         return ret;
     }
     
@@ -153,7 +185,7 @@ public class Rv {
             int len = this.num;
             if ((p = (Pack) this.obj) == null || p.oSize != len) {
                 this.obj = p = new Pack(-1, len);
-                for (int i = 0; i < len; p.add(Integer.toString(i++)));
+                for (int i = 0; i < len; p.add(intStr(i++)));
             }
             return p;
         }
@@ -172,7 +204,24 @@ public class Rv {
             newco.num = co.num;
             this.co = newco;
         }
-        return this.co.get(this.str);
+        // ---- monomorphic inline cache ----
+        // Identical holder + key + unchanged Rhash generation => return cached value.
+        Rv holder = this.co;
+        String key = this.str;
+        Rhash hp;
+        if (this.icHolder == holder
+                && this.icValue != null
+                && (hp = holder.prop) != null
+                && this.icStamp == hp.gen
+                && (this.icKey == key || (this.icKey != null && this.icKey.equals(key)))) {
+            return this.icValue;
+        }
+        Rv v = holder.get(key);
+        this.icHolder = holder;
+        this.icStamp = (hp = holder.prop) != null ? hp.gen : 0;
+        this.icKey = key;
+        this.icValue = v;
+        return v;
     }
     
     public final boolean has(String p) {
@@ -185,8 +234,9 @@ public class Rv {
         } else if (type >= Rv.ARRAY && "length".equals(p)) { // array/arguments/function/native
             return true;
         }
+        int ph = p.hashCode();
         Rv ctor, prot, obj, ret;
-        for (obj = this; (ret = obj.prop.get(p)) == null
+        for (obj = this; (ret = obj.prop.getH(ph, p)) == null
                 && (ctor = obj.ctorOrProt) != null
                 && (prot = ctor.ctorOrProt) != null; obj = prot)
             ;
@@ -207,13 +257,14 @@ public class Rv {
                     : -1;
             if (num >= 0) return new Rv(num);
         }
+        int ph = p.hashCode();
         Rv ctor, prot, prev, obj, ret;
-        for (obj = this; (ret = obj.prop.get(p)) == null
+        for (obj = this; (ret = obj.prop.getH(ph, p)) == null
                 && (ctor = obj.ctorOrProt) != null
                 && (prot = ctor.ctorOrProt) != null; obj = prot)
             ;
         if (ret == null && (prev = this.prev) != null) { // this is a call object
-            for (obj = prev; (ret = obj.prop.get(p)) == null
+            for (obj = prev; (ret = obj.prop.getH(ph, p)) == null
                     && (prev = obj.prev) != null; obj = prev)
                 ;
         }
@@ -242,7 +293,8 @@ public class Rv {
                 int newNum;
                 if ((newNum = val.num) < o.num) { // trim array
                     Rhash prop = o.prop;
-                    for (int i = o.num; --i >= newNum; prop.remove(0, Integer.toString(i)));
+                    for (int i = o.num; --i >= newNum; prop.remove(0, intStr(i)));
+                    ++o.gen;
                 }
                 o.num = newNum;
             } // else do nothing (for Arguments, Function, Native)
@@ -257,7 +309,9 @@ public class Rv {
             }
             Rv ret;
             for (; (ret = obj.prop.get(p)) == null && (prev = obj.prev) != null; obj = prev);
-            (ret == null ? o : obj).prop.put(p, val);
+            Rv target = ret == null ? o : obj;
+            target.prop.put(p, val);
+            ++target.gen;
         }
         return this;
     }
@@ -270,12 +324,14 @@ public class Rv {
      */
     final Rv putl(String p, Rv val) {
         this.prop.put(p, val);
+        ++this.gen;
         return this;
     }
-    
+
     final Rv putl(int i, Rv val) {
-        this.prop.put(Integer.toString(i), val);
-        if (i >= this.num) this.num = i + 1; 
+        this.prop.put(intStr(i), val);
+        if (i >= this.num) this.num = i + 1;
+        ++this.gen;
         return this;
     }
     
@@ -283,10 +339,10 @@ public class Rv {
      */
     final Rv shift(int idx) {
         Rhash prop = this.prop;
-        Rv ret = prop.get(Integer.toString(idx));
+        Rv ret = prop.get(intStr(idx));
         for (int i = idx, n = --this.num; i < n; i++) {
-            Rv val = prop.get(Integer.toString(i + 1));
-            prop.put(Integer.toString(i), val != null ? val : Rv._undefined);
+            Rv val = prop.get(intStr(i + 1));
+            prop.put(intStr(i), val != null ? val : Rv._undefined);
         }
         return ret != null ? ret : Rv._undefined;
     }
@@ -369,9 +425,43 @@ public class Rv {
         if ((t = this.type) == Rv.LVALUE) {
             return this.get();
         } else if (t == Rv.SYMBOL) {
-            return callObj.get(this.str);
+            return callObj.getByKey(this);
         }
         return this;
+    }
+
+    /**
+     * Like {@link #get(String)} but uses the pre-computed hash stored on the key Rv
+     * (typically a canonical SYMBOL), avoiding a String.hashCode() per access.
+     */
+    public final Rv getByKey(Rv key) {
+        int type;
+        String p = key.str;
+        if ((type = this.type) < Rv.OBJECT) {
+            return Rv._undefined;
+        }
+        if (type >= Rv.CTOR_MASK && "prototype".equals(p)
+                || type >= Rv.OBJECT && type < Rv.CTOR_MASK && "constructor".equals(p)) {
+            return this.ctorOrProt != null ? this.ctorOrProt : Rv._undefined;
+        } else if ("length".equals(p)) {
+            int num = type >= Rv.ARRAY ? this.num
+                    : type == Rv.STRING || type == Rv.STRING_OBJECT ? this.str.length()
+                    : -1;
+            if (num >= 0) return new Rv(num);
+        }
+        int ph = key.hash;
+        if (ph == 0) ph = key.hash = p.hashCode();
+        Rv ctor, prot, prev, obj, ret;
+        for (obj = this; (ret = obj.prop.getH(ph, p)) == null
+                && (ctor = obj.ctorOrProt) != null
+                && (prot = ctor.ctorOrProt) != null; obj = prot)
+            ;
+        if (ret == null && (prev = this.prev) != null) {
+            for (obj = prev; (ret = obj.prop.getH(ph, p)) == null
+                    && (prev = obj.prev) != null; obj = prev)
+                ;
+        }
+        return ret != null ? ret : Rv._undefined;
     }
     
     public final Rv evalRef(Rv callObj) {
@@ -428,7 +518,8 @@ public class Rv {
         case RC.TOK_NE: // !=
             return isEq(r1, r2) ? Rv._false : Rv._true;
         }
-        if (RocksInterpreter.htOptrIndex.get(op, -1) == 5) { // >, >=, <, <=
+        if (op >= 0 && op < RocksInterpreter.OPTR_TABLE_SIZE
+                && RocksInterpreter.optrIndex[op] == 5) { // >, >=, <, <=
             if (r1 == Rv._undefined || r2 == Rv._undefined 
                     || r1 == Rv._NaN || r2 == Rv._NaN) return Rv._NaN;
             if ((t1 == Rv.NUMBER || t1 == Rv.NUMBER_OBJECT) &&
@@ -548,7 +639,10 @@ public class Rv {
         case RC.TOK_DELETE:
             rv = rv.evalRef(callObj);
             Rv arr = rv.co;
-            if (rv != Rv._undefined) arr.prop.remove(0, rv.str);
+            if (rv != Rv._undefined) {
+                arr.prop.remove(0, rv.str);
+                ++arr.gen;
+            }
             if (arr.type == Rv.ARRAY) {
                 try {
                     int idx = Integer.parseInt(rv.str);
@@ -583,7 +677,7 @@ public class Rv {
             Rv obj = new Rv(Rv.OBJECT, Rv._Object);
             for (int i = idx, n = opnd.oSize - 1; i < n; i += 2) {
                 Rv k = (Rv) opnd.getObject(i);
-                String ks = k.type == Rv.NUMBER ? Integer.toString(k.num) : k.str;
+                String ks = k.type == Rv.NUMBER ? intStr(k.num) : k.str;
                 Rv v = ((Rv) opnd.getObject(i + 1)).evalVal(callObj);
                 obj.putl(ks, v);
             }
@@ -723,7 +817,7 @@ public class Rv {
             buf.append('(').append(len).append(")[");
             for (int i = 0; i < len; i++) {
                 if (i > 0) buf.append(", ");
-                Object elem = ht.get(Integer.toString(i));
+                Object elem = ht.get(intStr(i));
                 buf.append(elem);
             }
             return buf.append(']').toString();
@@ -740,6 +834,37 @@ public class Rv {
         }
     }
     
+    /**
+     * Cached Integer.toString for small indices used as array/arguments keys.
+     * Avoids allocating a new String on every array push/shift/get in hot loops.
+     */
+    static final int INT_STR_CACHE_SIZE = 512;
+    public static final String[] INT_STR = new String[INT_STR_CACHE_SIZE];
+    static {
+        for (int i = 0; i < INT_STR_CACHE_SIZE; i++) {
+            INT_STR[i] = Integer.toString(i);
+        }
+    }
+
+    public static final String intStr(int i) {
+        return (i >= 0 && i < INT_STR_CACHE_SIZE) ? INT_STR[i] : Integer.toString(i);
+    }
+
+    public final boolean isCallable() {
+        int t = this.type & ~Rv.CTOR_MASK;
+        return t == Rv.FUNCTION || t == Rv.NATIVE;
+    }
+
+    /**
+     * Positional argument accessor for {@link NativeFunctionFast} bindings.
+     * Returns {@link #_undefined} when the caller passed fewer arguments than expected.
+     */
+    public static final Rv argAt(net.cnjm.j2me.util.Pack args, int start, int num, int i) {
+        if (args == null || i >= num) return _undefined;
+        Rv a = (Rv) args.getObject(start + i);
+        return a != null ? a : _undefined;
+    }
+
     public static final Rv _null;
     public static final Rv _undefined;
     public static final Rv _NaN;

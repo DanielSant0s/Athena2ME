@@ -16,6 +16,10 @@ public class Athena2ME extends MIDlet implements CommandListener {
     Rv jsExitHandler = null;
     private AthenaCanvas canvas;
     private Command exitCmd = new Command("Exit", Command.EXIT, 1);
+    private Thread jsThread = null;
+    volatile boolean jsRunning = false;
+    private Thread frameThread = null;
+    volatile boolean frameRunning = false;
     
 
     public Athena2ME() {
@@ -25,6 +29,16 @@ public class Athena2ME extends MIDlet implements CommandListener {
     }
 
     protected void destroyApp(boolean unconditional) {
+        frameRunning = false;
+        if (frameThread != null) {
+            frameThread.interrupt();
+            frameThread = null;
+        }
+        jsRunning = false;
+        if (jsThread != null) {
+            jsThread.interrupt();
+            jsThread = null;
+        }
         Display.getDisplay(this).setCurrent((Displayable)null);
 
     }
@@ -108,6 +122,77 @@ public class Athena2ME extends MIDlet implements CommandListener {
             }
         })));
 
+        ri.addToObject(_os, "sleep",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.sleep", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                int ms = Rv.argAt(args, start, num, 0).toNum().num;
+                if (ms < 0) ms = 0;
+                try { Thread.sleep(ms); } catch (InterruptedException e) {}
+                return Rv._undefined;
+            }
+        })));
+
+        // os.startFrameLoop(fn, fps) — opt-in native game loop. The loop runs in a
+        // dedicated Thread and does three things per frame: pad update, invoke the
+        // user callback, flush graphics. Eliminates the overhead of an
+        // interpreted `while(running){ ... }` driving the game.
+        final Athena2ME self = this;
+        final Rv _this = callObj;
+        ri.addToObject(_os, "startFrameLoop",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.startFrameLoop", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                if (self.frameRunning) return Rv._undefined;
+                final Rv fn = Rv.argAt(args, start, num, 0);
+                if (!fn.isCallable()) return Rv._undefined;
+                int fps = num > 1 ? Rv.argAt(args, start, num, 1).toNum().num : 30;
+                if (fps < 1) fps = 1;
+                if (fps > 120) fps = 120;
+                final int frameMs = 1000 / fps;
+                final RocksInterpreter interp = ri;
+                final Rv thisRef = _this;
+                self.frameRunning = true;
+                final AthenaCanvas cv = self.canvas;
+                self.frameThread = new Thread(new Runnable() {
+                    public void run() {
+                        while (self.frameRunning) {
+                            long deadline = System.currentTimeMillis() + frameMs;
+                            try {
+                                cv.padUpdate();
+                                interp.call(false, fn, fn.co, thisRef, null, 0, 0);
+                                cv.screenUpdate();
+                            } catch (Throwable t) {
+                                t.printStackTrace();
+                                break;
+                            }
+                            long wait = deadline - System.currentTimeMillis();
+                            if (wait > 0) {
+                                try { Thread.sleep(wait); } catch (InterruptedException e) { break; }
+                            } else {
+                                Thread.yield();
+                            }
+                        }
+                        self.frameRunning = false;
+                    }
+                });
+                self.frameThread.start();
+                return Rv._undefined;
+            }
+        })));
+
+        ri.addToObject(_os, "stopFrameLoop",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.stopFrameLoop", new NativeFunctionFast() {
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                self.frameRunning = false;
+                if (self.frameThread != null) {
+                    self.frameThread.interrupt();
+                    self.frameThread = null;
+                }
+                return Rv._undefined;
+            }
+        })));
+
         ri.addToObject(callObj, "os", _os);
 
         Rv _Screen = ri.newModule();
@@ -115,22 +200,21 @@ public class Athena2ME extends MIDlet implements CommandListener {
         ri.addToObject(_Screen, "height", new Rv(canvas.getHeight()));
 
         ri.addToObject(_Screen, "clear", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Screen.clear", new NativeFunction() {
+            ri.addNativeFunction(new NativeFunctionListEntry("Screen.clear", new NativeFunctionFast() {
             public final int length = 1;
-            public Rv func(boolean isNew, Rv _this, Rv args) {
-                int color = args.num > 0 ? args.get("0").toNum().num : canvas.CLEAR_COLOR;
-            
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                int color = num > 0 ? Rv.argAt(args, start, num, 0).toNum().num : canvas.CLEAR_COLOR;
+
                 canvas.clearScreen(color);
-            
+
                 return Rv._undefined;
             }
         })));
 
         ri.addToObject(_Screen, "update", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Screen.update", new NativeFunction() {
-                public Rv func(boolean isNew, Rv _this, Rv args) {
+            ri.addNativeFunction(new NativeFunctionListEntry("Screen.update", new NativeFunctionFast() {
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                     canvas.screenUpdate();
-
                     return Rv._undefined;
                 }
         })));
@@ -139,15 +223,15 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
         Rv _Draw = ri.newModule();
         ri.addToObject(_Draw, "line", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Draw.line", new NativeFunction() {
+            ri.addNativeFunction(new NativeFunctionListEntry("Draw.line", new NativeFunctionFast() {
                 public final int length = 5;
-                public Rv func(boolean isNew, Rv _this, Rv args) {
-                    int x1 = args.get("0").toNum().num;
-                    int y1 = args.get("1").toNum().num;
-                    int x2 = args.get("2").toNum().num;
-                    int y2 = args.get("3").toNum().num;
-                    int color = args.get("4").toNum().num;
-                    
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                    int x1 = Rv.argAt(args, start, num, 0).toNum().num;
+                    int y1 = Rv.argAt(args, start, num, 1).toNum().num;
+                    int x2 = Rv.argAt(args, start, num, 2).toNum().num;
+                    int y2 = Rv.argAt(args, start, num, 3).toNum().num;
+                    int color = Rv.argAt(args, start, num, 4).toNum().num;
+
                     canvas.drawLine(x1, y1, x2, y2, color);
 
                     return Rv._undefined;
@@ -155,17 +239,17 @@ public class Athena2ME extends MIDlet implements CommandListener {
         })));
 
         ri.addToObject(_Draw, "triangle", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Draw.triangle", new NativeFunction() {
+            ri.addNativeFunction(new NativeFunctionListEntry("Draw.triangle", new NativeFunctionFast() {
                 public final int length = 5;
-                public Rv func(boolean isNew, Rv _this, Rv args) {
-                    int x1 = args.get("0").toNum().num;
-                    int y1 = args.get("1").toNum().num;
-                    int x2 = args.get("2").toNum().num;
-                    int y2 = args.get("3").toNum().num;
-                    int x3 = args.get("4").toNum().num;
-                    int y3 = args.get("5").toNum().num;
-                    int color = args.get("6").toNum().num;
-                    
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                    int x1 = Rv.argAt(args, start, num, 0).toNum().num;
+                    int y1 = Rv.argAt(args, start, num, 1).toNum().num;
+                    int x2 = Rv.argAt(args, start, num, 2).toNum().num;
+                    int y2 = Rv.argAt(args, start, num, 3).toNum().num;
+                    int x3 = Rv.argAt(args, start, num, 4).toNum().num;
+                    int y3 = Rv.argAt(args, start, num, 5).toNum().num;
+                    int color = Rv.argAt(args, start, num, 6).toNum().num;
+
                     canvas.drawTriangle(x1, y1, x2, y2, x3, y3, color);
 
                     return Rv._undefined;
@@ -173,16 +257,16 @@ public class Athena2ME extends MIDlet implements CommandListener {
         })));
 
         ri.addToObject(_Draw, "rect", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Draw.rect", new NativeFunction() {
+            ri.addNativeFunction(new NativeFunctionListEntry("Draw.rect", new NativeFunctionFast() {
                 public final int length = 5;
-                public Rv func(boolean isNew, Rv _this, Rv args) {
-                    Rv x = args.get("0");
-                    Rv y = args.get("1");
-                    Rv w = args.get("2");
-                    Rv h = args.get("3");
-                    Rv color = args.get("4");
-                    
-                    canvas.drawRect(x.toNum().num, y.toNum().num, w.toNum().num, h.toNum().num, color.toNum().num);
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                    int x = Rv.argAt(args, start, num, 0).toNum().num;
+                    int y = Rv.argAt(args, start, num, 1).toNum().num;
+                    int w = Rv.argAt(args, start, num, 2).toNum().num;
+                    int h = Rv.argAt(args, start, num, 3).toNum().num;
+                    int color = Rv.argAt(args, start, num, 4).toNum().num;
+
+                    canvas.drawRect(x, y, w, h, color);
 
                     return Rv._undefined;
                 }
@@ -216,11 +300,11 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
         _Image.nativeCtor("Image", callObj);
         ri.addToObject(_Image.ctorOrProt, "draw", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Image.draw", new NativeFunction() {
+            ri.addNativeFunction(new NativeFunctionListEntry("Image.draw", new NativeFunctionFast() {
                 public final int length = 3;
-                public Rv func(boolean isNew, Rv _this, Rv args) {
-                    int x = args.get("0").toNum().num;
-                    int y = args.get("1").toNum().num;
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                    int x = Rv.argAt(args, start, num, 0).toNum().num;
+                    int y = Rv.argAt(args, start, num, 1).toNum().num;
 
                     int startx = _this.get("startx").toNum().num;
                     int starty = _this.get("starty").toNum().num;
@@ -298,17 +382,16 @@ public class Athena2ME extends MIDlet implements CommandListener {
         ri.addToObject(_Font, "SIZE_LARGE", new Rv(Font.SIZE_LARGE));
 
         ri.addToObject(_Font.ctorOrProt, "print", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Font.print", new NativeFunction() {
+            ri.addNativeFunction(new NativeFunctionListEntry("Font.print", new NativeFunctionFast() {
             public final int length = 3;
-                public Rv func(boolean isNew, Rv _this, Rv args) {
-                    String text = args.get("0").toStr().str;
-                    int x = args.get("1").toNum().num;
-                    int y = args.get("2").toNum().num;
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                    String text = Rv.argAt(args, start, num, 0).toStr().str;
+                    int x = Rv.argAt(args, start, num, 1).toNum().num;
+                    int y = Rv.argAt(args, start, num, 2).toNum().num;
 
                     int color = _this.get("color").toNum().num;
                     int align = _this.get("align").toNum().num;
 
-                    //canvas._drawImageRegion((Image)_this.opaque, x, y, startx, starty, endx, endy);
                     canvas.drawFont(text, x, y, align, color);
 
                     return Rv._undefined;
@@ -341,14 +424,13 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
         Rv _Color = ri.newModule();
         ri.addToObject(_Color, "new", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Color.new", new NativeFunction() {
+            ri.addNativeFunction(new NativeFunctionListEntry("Color.new", new NativeFunctionFast() {
             public final int length = 4;
-                public Rv func(boolean isNew, Rv _this, Rv args) {
-                    int r = args.get("0").toNum().num;
-                    int g = args.get("1").toNum().num;
-                    int b = args.get("2").toNum().num;
-
-                    int a = args.num > 3? args.get("3").toNum().num : 0;
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                    int r = Rv.argAt(args, start, num, 0).toNum().num;
+                    int g = Rv.argAt(args, start, num, 1).toNum().num;
+                    int b = Rv.argAt(args, start, num, 2).toNum().num;
+                    int a = num > 3 ? Rv.argAt(args, start, num, 3).toNum().num : 0;
 
                     return new Rv(AthenaColor.color(r, g, b, a));
                 }
@@ -358,27 +440,26 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
         Rv _Pad = ri.newModule();
         ri.addToObject(_Pad, "update", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Pad.update", new NativeFunction() {
-                public Rv func(boolean isNew, Rv _this, Rv args) {
+            ri.addNativeFunction(new NativeFunctionListEntry("Pad.update", new NativeFunctionFast() {
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                     canvas.padUpdate();
-
                     return Rv._undefined;
                 }
         })));
 
         ri.addToObject(_Pad, "pressed", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Pad.pressed", new NativeFunction() {
-                public Rv func(boolean isNew, Rv _this, Rv args) {
-                    Rv buttons = args.get("0");
-                    return new Rv(canvas.padPressed(buttons.toNum().num)? 1 : 0);
+            ri.addNativeFunction(new NativeFunctionListEntry("Pad.pressed", new NativeFunctionFast() {
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                    int buttons = Rv.argAt(args, start, num, 0).toNum().num;
+                    return new Rv(canvas.padPressed(buttons) ? 1 : 0);
                 }
         })));
 
         ri.addToObject(_Pad, "justPressed", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Pad.justPressed", new NativeFunction() {
-                public Rv func(boolean isNew, Rv _this, Rv args) {
-                    Rv buttons = args.get("0");
-                    return new Rv(canvas.padJustPressed(buttons.toNum().num)? 1 : 0);
+            ri.addNativeFunction(new NativeFunctionListEntry("Pad.justPressed", new NativeFunctionFast() {
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                    int buttons = Rv.argAt(args, start, num, 0).toNum().num;
+                    return new Rv(canvas.padJustPressed(buttons) ? 1 : 0);
                 }
         })));
 
@@ -396,8 +477,8 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
         Rv _Keyboard = ri.newModule();
         ri.addToObject(_Keyboard, "get", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Keyboard.get", new NativeFunction() {
-                public Rv func(boolean isNew, Rv _this, Rv args) {
+            ri.addNativeFunction(new NativeFunctionListEntry("Keyboard.get", new NativeFunctionFast() {
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                     return new Rv(canvas.getKeypad());
                 }
         })));
@@ -434,10 +515,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
         _Timer.nativeCtor("Timer", callObj);
 
         ri.addToObject(_Timer.ctorOrProt, "get", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Timer.get", new NativeFunction() {
-                public Rv func(boolean isNew, Rv _this, Rv args) {
+            ri.addNativeFunction(new NativeFunctionListEntry("Timer.get", new NativeFunctionFast() {
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                     AthenaTimer timer = (AthenaTimer)_this.opaque;
-
                     return new Rv(timer.get());
                 }
         })));
@@ -509,15 +589,34 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
         ri.addToObject(callObj, "Timer", _Timer);
 
-        ri.call(false, rv, callObj, null, null, 0, 0);
-
         jsThis = callObj;
+
+        final Rv _rv = rv;
+        final Rv _callObj = callObj;
+
+        jsRunning = true;
+        jsThread = new Thread(new Runnable() {
+            public void run() {
+                try {
+                    ri.call(false, _rv, _callObj, null, null, 0, 0);
+                } catch (Throwable t) {
+                    t.printStackTrace();
+                } finally {
+                    jsRunning = false;
+                }
+            }
+        });
+        jsThread.start();
     }
 
     public void commandAction(Command c, Displayable d) {
         if (c == exitCmd) {
             if (jsExitHandler != null) {
-                ri.call(false, jsExitHandler, jsExitHandler.co, jsThis, null, 0, 0);
+                try {
+                    ri.call(false, jsExitHandler, jsExitHandler.co, jsThis, null, 0, 0);
+                } catch (Throwable t) {
+                    t.printStackTrace();
+                }
             }
 
             destroyApp(false);
