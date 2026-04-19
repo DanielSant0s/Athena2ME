@@ -25,6 +25,20 @@ public class RocksInterpreter {
     }
     
     public RocksInterpreter reset(String src, Pack tokens, int pos, int len) {
+        if (tokens == null && src != null && pos == 0 && len == src.length()) {
+            // ES6 desugaring runs only on top-level script sources, not on cached
+            // sub-token ranges (where pos/len already reference a preprocessed buffer).
+            String pp = Es6Preproc.process(src);
+            if (pp != src) {
+                src = pp;
+                len = pp.length();
+            }
+            if (DEBUG) {
+                System.out.println("=== preprocessed source (" + src.length() + " chars) ===");
+                System.out.println(src);
+                System.out.println("=== end preprocessed source ===");
+            }
+        }
         this.src = src;
         if (tokens == null) {
             tt = tokenize(src, pos, len);
@@ -110,6 +124,11 @@ mainswitch:
                     }
                     String symb = new String(cc, p, pos - p);
                     int iKey = keywordIndex(symb);
+                    // ES6 aliases: "let" and "const" behave as "var" at the token level.
+                    // Real block-scoping for let/const is layered on top in the parser (Fase D).
+                    if (iKey < 0 && ("let".equals(symb) || "const".equals(symb))) {
+                        iKey = RC.TOK_VAR;
+                    }
 
                     if (afterDot) {
                         addToken(tt, RC.TOK_SYMBOL, p, pos - p, symb);
@@ -298,6 +317,20 @@ mainswitch:
         return tt;
     }
 
+    /**
+     * ASI-like heuristic: drop a redundant ';' when the previous token already
+     * terminates a statement (block close '}' or a newline). We intentionally do
+     * NOT drop ';' after ')' or ']' — those close sub-expressions and a
+     * following ';' is a mandatory separator (classic example: the init/cond
+     * separators inside a {@code for(init; cond; update)} header, which in turn
+     * routinely end with ')' when the init contains a parenthesised expression).
+     *
+     * <p>Upstream RockScript dropped ';' after ')' and ']' unconditionally, which
+     * quietly broke every {@code for (...0); cond; ...)} header where the init
+     * expression finished with a closing paren — the tokenizer swallowed the
+     * first separator, collapsing init+cond into a single clause and later
+     * tripping eatUntil() with an unmatched ')'.</p>
+     */
     private boolean shouldIgnoreSemicolon(Pack tokens) {
         if (tokens.oSize <= 0) {
             return false;
@@ -305,9 +338,7 @@ mainswitch:
 
         int lastToken = tokens.getInt(tokens.oSize - 1);
 
-        return lastToken == RC.TOK_RPR || // )
-               lastToken == RC.TOK_RBR || // }
-               lastToken == RC.TOK_RBK || // ]
+        return lastToken == RC.TOK_RBR || // }
                lastToken == RC.TOK_EOL;   // \n
     }
     
@@ -771,7 +802,19 @@ mainloop:
                     }
                     if ((isInit = (t == RC.TOK_INIT)) && (type & Rv.CTOR_MASK) == 0) { // call as a constructor for the first time
                         funObj.type |= Rv.CTOR_MASK;
-                        funObj.ctorOrProt = new Rv(Rv.OBJECT, Rv._Object);
+                        // Preserve an explicitly-assigned prototype if one is
+                        // sitting in `prop["prototype"]` (class desugar path).
+                        // Only fall back to a fresh empty object when nothing
+                        // has been set. ctorOrProt is initialised to _Function
+                        // by the Rv ctor, so comparing to _Function (and null)
+                        // distinguishes "untouched" from "user-installed".
+                        Rv explicit = funObj.prop != null ? funObj.prop.get("prototype") : null;
+                        if (explicit != null) {
+                            funObj.ctorOrProt = explicit;
+                            funObj.prop.remove("prototype".hashCode(), "prototype");
+                        } else if (funObj.ctorOrProt == null || funObj.ctorOrProt == Rv._Function) {
+                            funObj.ctorOrProt = new Rv(Rv.OBJECT, Rv._Object);
+                        }
                     }
                     for (int ii = idx + 1, nn = ii + num; ii < nn; ii++) {
                         opnd.oArray[ii] = ((Rv) opnd.oArray[ii]).evalVal(callObj).pv();
@@ -1090,6 +1133,59 @@ mainloop:
         }
 
         return Rv._undefined;
+    }
+
+    /**
+     * Generic callback invoker used by stdlib bindings (Array.map, filter, reduce,
+     * Array.sort, for...of helpers, etc.). Handles the funCo bookkeeping that
+     * upstream RockScript requires for JS function callbacks; native callbacks
+     * go through the usual {@code call()} fast paths.
+     *
+     * @param fn      the function Rv (FUNCTION or NATIVE).
+     * @param thiz    value for {@code this} inside the callback.
+     * @param args    argument stack ({@code Pack} with args at [start, start+num)).
+     * @param start   first arg index.
+     * @param num     number of args.
+     * @return        the callback's return value (or {@code undefined} if fn is not callable).
+     */
+    public final Rv invokeJS(Rv fn, Rv thiz, Pack args, int start, int num) {
+        if (fn == null || !fn.isCallable()) return Rv._undefined;
+        int t = fn.type & ~Rv.CTOR_MASK;
+        if (t == Rv.NATIVE) {
+            Rv funCo = new Rv(Rv.OBJECT, Rv._Object);
+            return call(false, fn, funCo, thiz, args, start, num);
+        }
+        // JS function: respect lexicalThis for arrow-like bindings (Fase B)
+        Rv effThis = fn.opaque instanceof Rv ? (Rv) fn.opaque : thiz;
+        Rv funCo = new Rv(Rv.OBJECT, Rv._Object);
+        funCo.prev = fn.co.prev;
+        Rv cobak = fn.co;
+        try {
+            return call(false, fn, fn.co = funCo, effThis, args, start, num);
+        } finally {
+            fn.co = cobak;
+        }
+    }
+
+    /** Convenience wrapper: invoke {@code fn} with a single arg. */
+    public final Rv invokeJS1(Rv fn, Rv thiz, Rv a0) {
+        Pack p = new Pack(-1, 1);
+        p.add(a0);
+        return invokeJS(fn, thiz, p, 0, 1);
+    }
+
+    /** Convenience wrapper: invoke {@code fn} with three args (Array callback shape). */
+    public final Rv invokeJS3(Rv fn, Rv thiz, Rv a0, Rv a1, Rv a2) {
+        Pack p = new Pack(-1, 3);
+        p.add(a0);
+        p.add(a1);
+        p.add(a2);
+        return invokeJS(fn, thiz, p, 0, 3);
+    }
+
+    /** Bootstrap hook: register all ES6+ stdlib bindings onto the global object. */
+    public final void installStdLib(Rv go) {
+        StdLib.install(this, go);
     }
 
     private NativeFunctionList function_list = new NativeFunctionList(
@@ -2005,6 +2101,7 @@ mainloop:
                 ;
         
         go.putl("this", go);
+        installStdLib(go);
         return go;
     }
 
@@ -2093,6 +2190,13 @@ mainloop:
             case RC.TOK_RPR:
             case RC.TOK_RBR:
             case RC.TOK_RBK:
+                if (stack.iSize == 0) {
+                    // Unmatched closer: surface as a parse error instead of an
+                    // anonymous ArrayIndexOutOfBoundsException. This typically
+                    // means the source is malformed OR the preprocessor/tokenizer
+                    // emitted an unbalanced token stream for this sub-expression.
+                    throw ex(token, tt.getObject(tpos), "balanced delim (stack empty)");
+                }
                 int top = stack.getInt(-1);
                 if (top == token) {
                     stack.iSize--;

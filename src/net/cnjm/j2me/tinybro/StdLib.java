@@ -1,0 +1,1690 @@
+package net.cnjm.j2me.tinybro;
+
+import net.cnjm.j2me.util.Pack;
+
+/**
+ * ES6+ standard library extensions for the embedded RockScript interpreter.
+ *
+ * <p>Everything here is registered on top of the minimal ES5 surface that the
+ * upstream RockScript / javascript4me ships with. All bindings are implemented
+ * as {@link NativeFunctionFast} instances so they skip the per-call
+ * {@code arguments} allocation and string-keyed argument access, which matters
+ * a lot on S40-class hardware.</p>
+ *
+ * <p>Organisation:</p>
+ * <ul>
+ *   <li>{@link #install(RocksInterpreter, Rv)} registers every entry.</li>
+ *   <li>All entries are kept in {@link #ENTRIES} as a single flat array to keep
+ *       the function-name hash stable.</li>
+ * </ul>
+ */
+final class StdLib {
+
+    private StdLib() {}
+
+    // ------------------------------------------------------------------
+    //  Shared helpers
+    // ------------------------------------------------------------------
+
+    static final Rv arg(Pack args, int start, int num, int i) {
+        return Rv.argAt(args, start, num, i);
+    }
+
+    static final int toInt(Rv v, int def) {
+        if (v == null || v == Rv._undefined) return def;
+        Rv n = v.toNum();
+        return n == Rv._NaN ? def : n.num;
+    }
+
+    static final String toStr(Rv v) {
+        return v == null ? "" : v.toStr().str;
+    }
+
+    static final boolean isArray(Rv v) {
+        return v != null && v.type == Rv.ARRAY;
+    }
+
+    // ------------------------------------------------------------------
+    //  Transcendental math — CLDC 1.1 ships sin/cos/tan/sqrt/ceil/floor
+    //  but NOT atan, atan2, exp or log. These are small-footprint
+    //  approximations good to ~4 decimal places, which is plenty for the
+    //  fixed-point-times-1000 contract the interpreter uses.
+    // ------------------------------------------------------------------
+
+    static double myAtan(double x) {
+        boolean neg = x < 0;
+        if (neg) x = -x;
+        boolean inv = x > 1;
+        if (inv) x = 1.0 / x;
+        double x2 = x * x;
+        // 5-term Maclaurin series for atan on |x|<=1
+        double r = x * (1.0 - x2 * (1.0/3.0 - x2 * (1.0/5.0 - x2 * (1.0/7.0 - x2 * (1.0/9.0)))));
+        if (inv) r = Math.PI / 2.0 - r;
+        return neg ? -r : r;
+    }
+
+    static double myAtan2(double y, double x) {
+        if (x > 0) return myAtan(y / x);
+        if (x < 0 && y >= 0) return myAtan(y / x) + Math.PI;
+        if (x < 0 && y < 0)  return myAtan(y / x) - Math.PI;
+        if (x == 0 && y > 0) return Math.PI / 2.0;
+        if (x == 0 && y < 0) return -Math.PI / 2.0;
+        return 0;
+    }
+
+    static final double E_CONST = 2.718281828459045;
+    static final double LN2 = 0.6931471805599453;
+
+    static double myExp(double x) {
+        // e^x = e^n * e^r with n integer, r in [-0.5, 0.5]
+        int n = (int) (x < 0 ? x - 0.5 : x + 0.5);
+        double r = x - n;
+        double term = 1, sum = 1;
+        for (int i = 1; i < 12; i++) {
+            term *= r / i;
+            sum += term;
+        }
+        double eN = 1;
+        if (n >= 0) { for (int i = 0; i < n;  i++) eN *= E_CONST; }
+        else        { for (int i = 0; i < -n; i++) eN /= E_CONST; }
+        return eN * sum;
+    }
+
+    static double myLog(double x) {
+        // ln(x) = k*ln2 + ln(1+u), with x in [1,2) ⇒ u in [0,1)
+        int k = 0;
+        while (x >= 2.0) { x /= 2.0; k++; }
+        while (x <  1.0) { x *= 2.0; k--; }
+        double u = x - 1.0;
+        double term = u, sum = 0;
+        for (int i = 1; i < 25; i++) {
+            sum += (i & 1) == 1 ? term / i : -term / i;
+            term *= u;
+        }
+        return k * LN2 + sum;
+    }
+
+    static final Rv newArray() {
+        return new Rv(Rv.ARRAY, Rv._Array);
+    }
+
+    static final Rv newArray(int len) {
+        Rv a = new Rv(Rv.ARRAY, Rv._Array);
+        a.num = len;
+        return a;
+    }
+
+    static final Rv newObject() {
+        return new Rv(Rv.OBJECT, Rv._Object);
+    }
+
+    static final Rv getIdx(Rv arr, int i) {
+        Rv v = arr.get(Rv.intStr(i));
+        return v != null ? v : Rv._undefined;
+    }
+
+    static final void pushItem(Rv arr, Rv v) {
+        arr.putl(arr.num, v);
+    }
+
+    // ------------------------------------------------------------------
+    //  Installation
+    // ------------------------------------------------------------------
+
+    static final void install(RocksInterpreter ri, Rv go) {
+        ri.addNativeFunctionList(ENTRIES);
+
+        // ---- Array ----
+        Rv arrProto = Rv._Array.ctorOrProt;
+        arrProto.putl("map",         ri.addNativeFunction(entryOf("Array.map")));
+        arrProto.putl("filter",      ri.addNativeFunction(entryOf("Array.filter")));
+        arrProto.putl("forEach",     ri.addNativeFunction(entryOf("Array.forEach")));
+        arrProto.putl("reduce",      ri.addNativeFunction(entryOf("Array.reduce")));
+        arrProto.putl("reduceRight", ri.addNativeFunction(entryOf("Array.reduceRight")));
+        arrProto.putl("find",        ri.addNativeFunction(entryOf("Array.find")));
+        arrProto.putl("findIndex",   ri.addNativeFunction(entryOf("Array.findIndex")));
+        arrProto.putl("some",        ri.addNativeFunction(entryOf("Array.some")));
+        arrProto.putl("every",       ri.addNativeFunction(entryOf("Array.every")));
+        arrProto.putl("includes",    ri.addNativeFunction(entryOf("Array.includes")));
+        arrProto.putl("indexOf",     ri.addNativeFunction(entryOf("Array.indexOf")));
+        arrProto.putl("lastIndexOf", ri.addNativeFunction(entryOf("Array.lastIndexOf")));
+        arrProto.putl("fill",        ri.addNativeFunction(entryOf("Array.fill")));
+        arrProto.putl("flat",        ri.addNativeFunction(entryOf("Array.flat")));
+        arrProto.putl("copyWithin",  ri.addNativeFunction(entryOf("Array.copyWithin")));
+        Rv._Array.putl("isArray",    ri.addNativeFunction(entryOf("Array.isArray")));
+        Rv._Array.putl("of",         ri.addNativeFunction(entryOf("Array.of")));
+        Rv._Array.putl("from",       ri.addNativeFunction(entryOf("Array.from")));
+
+        // ---- Object ----
+        Rv._Object.putl("keys",            ri.addNativeFunction(entryOf("Object.keys")));
+        Rv._Object.putl("values",          ri.addNativeFunction(entryOf("Object.values")));
+        Rv._Object.putl("entries",         ri.addNativeFunction(entryOf("Object.entries")));
+        Rv._Object.putl("assign",          ri.addNativeFunction(entryOf("Object.assign")));
+        Rv._Object.putl("freeze",          ri.addNativeFunction(entryOf("Object.freeze")));
+        Rv._Object.putl("isFrozen",        ri.addNativeFunction(entryOf("Object.isFrozen")));
+        Rv._Object.putl("getPrototypeOf",  ri.addNativeFunction(entryOf("Object.getPrototypeOf")));
+        Rv._Object.putl("create",          ri.addNativeFunction(entryOf("Object.create")));
+
+        // ---- String ----
+        Rv strProto = Rv._String.ctorOrProt;
+        strProto.putl("trim",         ri.addNativeFunction(entryOf("String.trim")));
+        strProto.putl("trimStart",    ri.addNativeFunction(entryOf("String.trimStart")));
+        strProto.putl("trimEnd",      ri.addNativeFunction(entryOf("String.trimEnd")));
+        strProto.putl("includes",     ri.addNativeFunction(entryOf("String.includes")));
+        strProto.putl("startsWith",   ri.addNativeFunction(entryOf("String.startsWith")));
+        strProto.putl("endsWith",     ri.addNativeFunction(entryOf("String.endsWith")));
+        strProto.putl("repeat",       ri.addNativeFunction(entryOf("String.repeat")));
+        strProto.putl("padStart",     ri.addNativeFunction(entryOf("String.padStart")));
+        strProto.putl("padEnd",       ri.addNativeFunction(entryOf("String.padEnd")));
+        strProto.putl("replace",      ri.addNativeFunction(entryOf("String.replace")));
+        strProto.putl("replaceAll",   ri.addNativeFunction(entryOf("String.replaceAll")));
+        strProto.putl("toLowerCase",  ri.addNativeFunction(entryOf("String.toLowerCase")));
+        strProto.putl("toUpperCase",  ri.addNativeFunction(entryOf("String.toUpperCase")));
+        strProto.putl("concat",       ri.addNativeFunction(entryOf("String.concat")));
+        strProto.putl("slice",        ri.addNativeFunction(entryOf("String.slice")));
+
+        // ---- JSON ----
+        Rv json = StdLib.newObject();
+        json.putl("parse",     ri.addNativeFunction(entryOf("JSON.parse")));
+        json.putl("stringify", ri.addNativeFunction(entryOf("JSON.stringify")));
+        go.putl("JSON", json);
+
+        // ---- Number extras ----
+        Rv._Number.putl("isInteger",        ri.addNativeFunction(entryOf("Number.isInteger")));
+        Rv._Number.putl("isFinite",         ri.addNativeFunction(entryOf("Number.isFinite")));
+        Rv._Number.putl("isNaN",            ri.addNativeFunction(entryOf("Number.isNaN")));
+        Rv._Number.putl("parseInt",         ri.addNativeFunction(entryOf("Number.parseInt")));
+        Rv._Number.putl("parseFloat",       ri.addNativeFunction(entryOf("Number.parseFloat")));
+        Rv._Number.putl("EPSILON",          new Rv(0));
+        Rv._Number.putl("MAX_SAFE_INTEGER", new Rv(Integer.MAX_VALUE));
+        Rv._Number.putl("MIN_SAFE_INTEGER", new Rv(Integer.MIN_VALUE));
+        go.putl("parseFloat", ri.addNativeFunction(entryOf("parseFloat")));
+
+        // ---- Math extras ----
+        Rv math = (Rv) go.get("Math");
+        if (math != null) {
+            math.putl("abs",    ri.addNativeFunction(entryOf("Math.abs")));
+            math.putl("floor",  ri.addNativeFunction(entryOf("Math.floor")));
+            math.putl("ceil",   ri.addNativeFunction(entryOf("Math.ceil")));
+            math.putl("round",  ri.addNativeFunction(entryOf("Math.round")));
+            math.putl("sqrt",   ri.addNativeFunction(entryOf("Math.sqrt")));
+            math.putl("pow",    ri.addNativeFunction(entryOf("Math.pow")));
+            math.putl("sin",    ri.addNativeFunction(entryOf("Math.sin")));
+            math.putl("cos",    ri.addNativeFunction(entryOf("Math.cos")));
+            math.putl("tan",    ri.addNativeFunction(entryOf("Math.tan")));
+            math.putl("atan",   ri.addNativeFunction(entryOf("Math.atan")));
+            math.putl("atan2",  ri.addNativeFunction(entryOf("Math.atan2")));
+            math.putl("exp",    ri.addNativeFunction(entryOf("Math.exp")));
+            math.putl("log",    ri.addNativeFunction(entryOf("Math.log")));
+            math.putl("sign",   ri.addNativeFunction(entryOf("Math.sign")));
+            math.putl("trunc",  ri.addNativeFunction(entryOf("Math.trunc")));
+            math.putl("PI",     new Rv((int) (Math.PI * 1000)));
+            math.putl("E",      new Rv((int) (Math.E * 1000)));
+        }
+
+        // ---- Map / Set / Symbol (Fase D) ----
+        Rv._Map = new Rv();
+        Rv._Map.nativeCtor("Map", go).ctorOrProt
+                .putl("get",      ri.addNativeFunction(entryOf("Map.get")))
+                .putl("set",      ri.addNativeFunction(entryOf("Map.set")))
+                .putl("has",      ri.addNativeFunction(entryOf("Map.has")))
+                .putl("delete",   ri.addNativeFunction(entryOf("Map.delete")))
+                .putl("clear",    ri.addNativeFunction(entryOf("Map.clear")))
+                .putl("forEach",  ri.addNativeFunction(entryOf("Map.forEach")))
+                .putl("keys",     ri.addNativeFunction(entryOf("Map.keys")))
+                .putl("values",   ri.addNativeFunction(entryOf("Map.values")))
+                .putl("entries",  ri.addNativeFunction(entryOf("Map.entries")));
+        go.putl("Map", Rv._Map);
+
+        Rv._Set = new Rv();
+        Rv._Set.nativeCtor("Set", go).ctorOrProt
+                .putl("add",      ri.addNativeFunction(entryOf("Set.add")))
+                .putl("has",      ri.addNativeFunction(entryOf("Set.has")))
+                .putl("delete",   ri.addNativeFunction(entryOf("Set.delete")))
+                .putl("clear",    ri.addNativeFunction(entryOf("Set.clear")))
+                .putl("forEach",  ri.addNativeFunction(entryOf("Set.forEach")))
+                .putl("values",   ri.addNativeFunction(entryOf("Set.values")));
+        go.putl("Set", Rv._Set);
+
+        Rv._Symbol = ri.addNativeFunction(entryOf("Symbol"));
+        go.putl("Symbol", Rv._Symbol);
+    }
+
+    static NativeFunctionListEntry entryOf(String name) {
+        for (int i = 0; i < ENTRIES.length; i++) {
+            if (ENTRIES[i].name.equals(name)) return ENTRIES[i];
+        }
+        throw new RuntimeException("StdLib entry not found: " + name);
+    }
+
+    // ------------------------------------------------------------------
+    //  Entries
+    // ------------------------------------------------------------------
+
+    static final NativeFunctionListEntry[] ENTRIES = new NativeFunctionListEntry[] {
+
+        // ============================================================
+        //                          ARRAY
+        // ============================================================
+
+        new NativeFunctionListEntry("Array.map", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv fn = arg(args, start, num, 0);
+                Rv thisArg = arg(args, start, num, 1);
+                int len = thiz.num;
+                Rv out = newArray(len);
+                for (int i = 0; i < len; i++) {
+                    Rv v = getIdx(thiz, i);
+                    Rv r = ri.invokeJS3(fn, thisArg, v, new Rv(i), thiz);
+                    out.putl(i, r);
+                }
+                return out;
+            }
+        }),
+
+        new NativeFunctionListEntry("Array.filter", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv fn = arg(args, start, num, 0);
+                Rv thisArg = arg(args, start, num, 1);
+                int len = thiz.num;
+                Rv out = newArray();
+                for (int i = 0; i < len; i++) {
+                    Rv v = getIdx(thiz, i);
+                    if (ri.invokeJS3(fn, thisArg, v, new Rv(i), thiz).asBool()) pushItem(out, v);
+                }
+                return out;
+            }
+        }),
+
+        new NativeFunctionListEntry("Array.forEach", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv fn = arg(args, start, num, 0);
+                Rv thisArg = arg(args, start, num, 1);
+                int len = thiz.num;
+                for (int i = 0; i < len; i++) {
+                    ri.invokeJS3(fn, thisArg, getIdx(thiz, i), new Rv(i), thiz);
+                }
+                return Rv._undefined;
+            }
+        }),
+
+        new NativeFunctionListEntry("Array.reduce", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv fn = arg(args, start, num, 0);
+                int len = thiz.num;
+                int i = 0;
+                Rv acc;
+                if (num >= 2) {
+                    acc = arg(args, start, num, 1);
+                } else {
+                    if (len == 0) return Rv.error("Reduce of empty array with no initial value");
+                    acc = getIdx(thiz, 0);
+                    i = 1;
+                }
+                Pack p = new Pack(-1, 4);
+                for (; i < len; i++) {
+                    p.iSize = 0; p.oSize = 0;
+                    p.add(acc); p.add(getIdx(thiz, i)); p.add(new Rv(i)); p.add(thiz);
+                    acc = ri.invokeJS(fn, Rv._undefined, p, 0, 4);
+                }
+                return acc;
+            }
+        }),
+
+        new NativeFunctionListEntry("Array.reduceRight", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv fn = arg(args, start, num, 0);
+                int len = thiz.num;
+                int i = len - 1;
+                Rv acc;
+                if (num >= 2) {
+                    acc = arg(args, start, num, 1);
+                } else {
+                    if (len == 0) return Rv.error("Reduce of empty array with no initial value");
+                    acc = getIdx(thiz, i);
+                    i--;
+                }
+                Pack p = new Pack(-1, 4);
+                for (; i >= 0; i--) {
+                    p.iSize = 0; p.oSize = 0;
+                    p.add(acc); p.add(getIdx(thiz, i)); p.add(new Rv(i)); p.add(thiz);
+                    acc = ri.invokeJS(fn, Rv._undefined, p, 0, 4);
+                }
+                return acc;
+            }
+        }),
+
+        new NativeFunctionListEntry("Array.find", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv fn = arg(args, start, num, 0);
+                Rv thisArg = arg(args, start, num, 1);
+                int len = thiz.num;
+                for (int i = 0; i < len; i++) {
+                    Rv v = getIdx(thiz, i);
+                    if (ri.invokeJS3(fn, thisArg, v, new Rv(i), thiz).asBool()) return v;
+                }
+                return Rv._undefined;
+            }
+        }),
+
+        new NativeFunctionListEntry("Array.findIndex", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv fn = arg(args, start, num, 0);
+                Rv thisArg = arg(args, start, num, 1);
+                int len = thiz.num;
+                for (int i = 0; i < len; i++) {
+                    if (ri.invokeJS3(fn, thisArg, getIdx(thiz, i), new Rv(i), thiz).asBool()) return new Rv(i);
+                }
+                return new Rv(-1);
+            }
+        }),
+
+        new NativeFunctionListEntry("Array.some", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv fn = arg(args, start, num, 0);
+                Rv thisArg = arg(args, start, num, 1);
+                int len = thiz.num;
+                for (int i = 0; i < len; i++) {
+                    if (ri.invokeJS3(fn, thisArg, getIdx(thiz, i), new Rv(i), thiz).asBool()) return Rv._true;
+                }
+                return Rv._false;
+            }
+        }),
+
+        new NativeFunctionListEntry("Array.every", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv fn = arg(args, start, num, 0);
+                Rv thisArg = arg(args, start, num, 1);
+                int len = thiz.num;
+                for (int i = 0; i < len; i++) {
+                    if (!ri.invokeJS3(fn, thisArg, getIdx(thiz, i), new Rv(i), thiz).asBool()) return Rv._false;
+                }
+                return Rv._true;
+            }
+        }),
+
+        new NativeFunctionListEntry("Array.includes", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv needle = arg(args, start, num, 0);
+                int from = toInt(arg(args, start, num, 1), 0);
+                int len = thiz.num;
+                if (from < 0) from = Math.max(0, len + from);
+                for (int i = from; i < len; i++) {
+                    Rv v = getIdx(thiz, i);
+                    if (strictEq(v, needle)) return Rv._true;
+                }
+                return Rv._false;
+            }
+        }),
+
+        new NativeFunctionListEntry("Array.indexOf", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv needle = arg(args, start, num, 0);
+                int from = toInt(arg(args, start, num, 1), 0);
+                int len = thiz.num;
+                if (from < 0) from = Math.max(0, len + from);
+                for (int i = from; i < len; i++) {
+                    if (strictEq(getIdx(thiz, i), needle)) return new Rv(i);
+                }
+                return new Rv(-1);
+            }
+        }),
+
+        new NativeFunctionListEntry("Array.lastIndexOf", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv needle = arg(args, start, num, 0);
+                int len = thiz.num;
+                int from = num >= 2 ? toInt(arg(args, start, num, 1), len - 1) : len - 1;
+                if (from < 0) from += len;
+                if (from >= len) from = len - 1;
+                for (int i = from; i >= 0; i--) {
+                    if (strictEq(getIdx(thiz, i), needle)) return new Rv(i);
+                }
+                return new Rv(-1);
+            }
+        }),
+
+        new NativeFunctionListEntry("Array.fill", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv v = arg(args, start, num, 0);
+                int len = thiz.num;
+                int s = toInt(arg(args, start, num, 1), 0);
+                int e = num >= 3 ? toInt(arg(args, start, num, 2), len) : len;
+                if (s < 0) s = Math.max(0, len + s);
+                if (e < 0) e = Math.max(0, len + e);
+                if (e > len) e = len;
+                for (int i = s; i < e; i++) thiz.putl(i, v);
+                return thiz;
+            }
+        }),
+
+        new NativeFunctionListEntry("Array.flat", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                int depth = num >= 1 ? toInt(arg(args, start, num, 0), 1) : 1;
+                Rv out = newArray();
+                flatInto(thiz, out, depth);
+                return out;
+            }
+        }),
+
+        new NativeFunctionListEntry("Array.copyWithin", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                int len = thiz.num;
+                int target = toInt(arg(args, start, num, 0), 0);
+                int s = toInt(arg(args, start, num, 1), 0);
+                int e = num >= 3 ? toInt(arg(args, start, num, 2), len) : len;
+                if (target < 0) target = Math.max(0, len + target);
+                if (s < 0) s = Math.max(0, len + s);
+                if (e < 0) e = Math.max(0, len + e);
+                if (e > len) e = len;
+                int count = Math.min(e - s, len - target);
+                // copy to a buffer first (handles overlap)
+                Rv[] buf = new Rv[count];
+                for (int i = 0; i < count; i++) buf[i] = getIdx(thiz, s + i);
+                for (int i = 0; i < count; i++) thiz.putl(target + i, buf[i]);
+                return thiz;
+            }
+        }),
+
+        new NativeFunctionListEntry("Array.isArray", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv v = arg(args, start, num, 0);
+                return isArray(v) ? Rv._true : Rv._false;
+            }
+        }),
+
+        new NativeFunctionListEntry("Array.of", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv out = newArray();
+                for (int i = 0; i < num; i++) out.putl(i, arg(args, start, num, i));
+                return out;
+            }
+        }),
+
+        new NativeFunctionListEntry("Array.from", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv src = arg(args, start, num, 0);
+                Rv mapfn = arg(args, start, num, 1);
+                boolean hasMap = mapfn != null && mapfn.isCallable();
+                Rv out = newArray();
+                if (src == null || src == Rv._undefined) return out;
+                if (src.type == Rv.STRING || src.type == Rv.STRING_OBJECT) {
+                    String s = src.toStr().str;
+                    for (int i = 0, n = s.length(); i < n; i++) {
+                        Rv v = new Rv(String.valueOf(s.charAt(i)));
+                        if (hasMap) v = ri.invokeJS3(mapfn, Rv._undefined, v, new Rv(i), src);
+                        out.putl(i, v);
+                    }
+                    return out;
+                }
+                int len = src.num;
+                for (int i = 0; i < len; i++) {
+                    Rv v = getIdx(src, i);
+                    if (hasMap) v = ri.invokeJS3(mapfn, Rv._undefined, v, new Rv(i), src);
+                    out.putl(i, v);
+                }
+                return out;
+            }
+        }),
+
+        // ============================================================
+        //                          OBJECT
+        // ============================================================
+
+        new NativeFunctionListEntry("Object.keys", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv src = arg(args, start, num, 0);
+                Rv out = newArray();
+                if (src == null || src.prop == null) return out;
+                Pack keys = src.prop.keys();
+                for (int i = 0, n = keys.oSize; i < n; i++) {
+                    out.putl(i, new Rv((String) keys.oArray[i]));
+                }
+                return out;
+            }
+        }),
+
+        new NativeFunctionListEntry("Object.values", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv src = arg(args, start, num, 0);
+                Rv out = newArray();
+                if (src == null || src.prop == null) return out;
+                Pack keys = src.prop.keys();
+                for (int i = 0, n = keys.oSize; i < n; i++) {
+                    out.putl(i, src.prop.get((String) keys.oArray[i]));
+                }
+                return out;
+            }
+        }),
+
+        new NativeFunctionListEntry("Object.entries", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv src = arg(args, start, num, 0);
+                Rv out = newArray();
+                if (src == null || src.prop == null) return out;
+                Pack keys = src.prop.keys();
+                for (int i = 0, n = keys.oSize; i < n; i++) {
+                    String k = (String) keys.oArray[i];
+                    Rv pair = newArray();
+                    pair.putl(0, new Rv(k));
+                    pair.putl(1, src.prop.get(k));
+                    out.putl(i, pair);
+                }
+                return out;
+            }
+        }),
+
+        new NativeFunctionListEntry("Object.assign", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv target = arg(args, start, num, 0);
+                if (target == null || target == Rv._undefined) return Rv.error("Cannot convert undefined to object");
+                for (int a = 1; a < num; a++) {
+                    Rv src = arg(args, start, num, a);
+                    if (src == null || src.prop == null) continue;
+                    Pack keys = src.prop.keys();
+                    for (int i = 0, n = keys.oSize; i < n; i++) {
+                        String k = (String) keys.oArray[i];
+                        target.putl(k, src.prop.get(k));
+                    }
+                }
+                return target;
+            }
+        }),
+
+        new NativeFunctionListEntry("Object.freeze", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv v = arg(args, start, num, 0);
+                if (v != null) v.opaque = FROZEN;
+                return v;
+            }
+        }),
+
+        new NativeFunctionListEntry("Object.isFrozen", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv v = arg(args, start, num, 0);
+                return v != null && v.opaque == FROZEN ? Rv._true : Rv._false;
+            }
+        }),
+
+        new NativeFunctionListEntry("Object.getPrototypeOf", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv v = arg(args, start, num, 0);
+                if (v == null || v.ctorOrProt == null) return Rv._null;
+                // ctorOrProt for instances points to the ctor; prototype is ctor.ctorOrProt
+                Rv ctor = v.ctorOrProt;
+                return ctor.ctorOrProt != null ? ctor.ctorOrProt : Rv._null;
+            }
+        }),
+
+        new NativeFunctionListEntry("Object.create", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv proto = arg(args, start, num, 0);
+                Rv props = arg(args, start, num, 1);
+                // In this interpreter, `Rv.ctorOrProt` of an *instance* points
+                // to the constructor function and the property lookup walks
+                // `ctor.ctorOrProt` to reach the actual proto object. If the
+                // caller passed an arbitrary object as `proto` (e.g. the common
+                // `Object.create(Base.prototype)` pattern from class desugaring),
+                // the standard `new Rv(OBJECT, proto)` constructor rejects it
+                // because that proto isn't flagged as a constructor. Wrap it in
+                // a synthetic ctor so the chain walk still reaches the given
+                // proto object correctly.
+                Rv out;
+                if (proto == null || proto == Rv._null || proto == Rv._undefined) {
+                    out = new Rv(Rv.OBJECT, Rv._Object);
+                } else if (proto.type >= Rv.CTOR_MASK) {
+                    out = new Rv(Rv.OBJECT, proto);
+                } else {
+                    Rv synthCtor = new Rv();
+                    synthCtor.type = Rv.FUNCTION | Rv.CTOR_MASK;
+                    synthCtor.ctorOrProt = proto;
+                    synthCtor.prop = new Rhash(3);
+                    out = new Rv();
+                    out.type = Rv.OBJECT;
+                    out.ctorOrProt = synthCtor;
+                    out.prop = new Rhash(11);
+                }
+                if (props != null && props.prop != null) {
+                    Pack keys = props.prop.keys();
+                    for (int i = 0, n = keys.oSize; i < n; i++) {
+                        String k = (String) keys.oArray[i];
+                        Rv desc = props.prop.get(k);
+                        Rv val = desc != null ? desc.get("value") : null;
+                        if (val != null) out.putl(k, val);
+                    }
+                }
+                return out;
+            }
+        }),
+
+        // ============================================================
+        //                          STRING
+        // ============================================================
+
+        new NativeFunctionListEntry("String.trim", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                return new Rv(thiz.toStr().str.trim());
+            }
+        }),
+
+        new NativeFunctionListEntry("String.trimStart", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                String s = thiz.toStr().str;
+                int i = 0, n = s.length();
+                while (i < n && s.charAt(i) <= ' ') i++;
+                return new Rv(i == 0 ? s : s.substring(i));
+            }
+        }),
+
+        new NativeFunctionListEntry("String.trimEnd", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                String s = thiz.toStr().str;
+                int e = s.length();
+                while (e > 0 && s.charAt(e - 1) <= ' ') e--;
+                return new Rv(e == s.length() ? s : s.substring(0, e));
+            }
+        }),
+
+        new NativeFunctionListEntry("String.includes", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                String s = thiz.toStr().str;
+                String needle = toStr(arg(args, start, num, 0));
+                int from = toInt(arg(args, start, num, 1), 0);
+                return s.indexOf(needle, from) >= 0 ? Rv._true : Rv._false;
+            }
+        }),
+
+        new NativeFunctionListEntry("String.startsWith", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                String s = thiz.toStr().str;
+                String needle = toStr(arg(args, start, num, 0));
+                int from = toInt(arg(args, start, num, 1), 0);
+                return s.startsWith(needle, from) ? Rv._true : Rv._false;
+            }
+        }),
+
+        new NativeFunctionListEntry("String.endsWith", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                String s = thiz.toStr().str;
+                String needle = toStr(arg(args, start, num, 0));
+                int endIndex = num >= 2 ? toInt(arg(args, start, num, 1), s.length()) : s.length();
+                if (endIndex > s.length()) endIndex = s.length();
+                int startIdx = endIndex - needle.length();
+                if (startIdx < 0) return Rv._false;
+                return s.regionMatches(false, startIdx, needle, 0, needle.length()) ? Rv._true : Rv._false;
+            }
+        }),
+
+        new NativeFunctionListEntry("String.repeat", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                String s = thiz.toStr().str;
+                int n2 = toInt(arg(args, start, num, 0), 0);
+                if (n2 < 0) return Rv.error("Invalid count value");
+                if (n2 == 0 || s.length() == 0) return new Rv("");
+                StringBuffer buf = new StringBuffer(s.length() * n2);
+                for (int i = 0; i < n2; i++) buf.append(s);
+                return new Rv(buf.toString());
+            }
+        }),
+
+        new NativeFunctionListEntry("String.padStart", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                return new Rv(pad(thiz.toStr().str,
+                        toInt(arg(args, start, num, 0), 0),
+                        num >= 2 ? toStr(arg(args, start, num, 1)) : " ",
+                        true));
+            }
+        }),
+
+        new NativeFunctionListEntry("String.padEnd", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                return new Rv(pad(thiz.toStr().str,
+                        toInt(arg(args, start, num, 0), 0),
+                        num >= 2 ? toStr(arg(args, start, num, 1)) : " ",
+                        false));
+            }
+        }),
+
+        new NativeFunctionListEntry("String.replace", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                String s = thiz.toStr().str;
+                String from = toStr(arg(args, start, num, 0));
+                Rv rep = arg(args, start, num, 1);
+                int idx = s.indexOf(from);
+                if (idx < 0 || from.length() == 0) return new Rv(s);
+                String repStr = rep != null && rep.isCallable()
+                        ? ri.invokeJS3(rep, Rv._undefined, new Rv(from), new Rv(idx), new Rv(s)).toStr().str
+                        : toStr(rep);
+                return new Rv(s.substring(0, idx) + repStr + s.substring(idx + from.length()));
+            }
+        }),
+
+        new NativeFunctionListEntry("String.replaceAll", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                String s = thiz.toStr().str;
+                String from = toStr(arg(args, start, num, 0));
+                Rv rep = arg(args, start, num, 1);
+                if (from.length() == 0) return new Rv(s);
+                boolean isFn = rep != null && rep.isCallable();
+                String repStr = isFn ? null : toStr(rep);
+                StringBuffer out = new StringBuffer(s.length());
+                int i = 0;
+                while (i < s.length()) {
+                    int idx = s.indexOf(from, i);
+                    if (idx < 0) { out.append(s.substring(i)); break; }
+                    out.append(s.substring(i, idx));
+                    if (isFn) {
+                        out.append(ri.invokeJS3(rep, Rv._undefined, new Rv(from), new Rv(idx), new Rv(s)).toStr().str);
+                    } else {
+                        out.append(repStr);
+                    }
+                    i = idx + from.length();
+                }
+                return new Rv(out.toString());
+            }
+        }),
+
+        new NativeFunctionListEntry("String.toLowerCase", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                return new Rv(thiz.toStr().str.toLowerCase());
+            }
+        }),
+
+        new NativeFunctionListEntry("String.toUpperCase", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                return new Rv(thiz.toStr().str.toUpperCase());
+            }
+        }),
+
+        new NativeFunctionListEntry("String.concat", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                StringBuffer buf = new StringBuffer();
+                buf.append(thiz.toStr().str);
+                for (int i = 0; i < num; i++) buf.append(toStr(arg(args, start, num, i)));
+                return new Rv(buf.toString());
+            }
+        }),
+
+        new NativeFunctionListEntry("String.slice", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                String s = thiz.toStr().str;
+                int len = s.length();
+                int a = toInt(arg(args, start, num, 0), 0);
+                int b = num >= 2 ? toInt(arg(args, start, num, 1), len) : len;
+                if (a < 0) a = Math.max(0, len + a);
+                if (b < 0) b = Math.max(0, len + b);
+                if (a > len) a = len;
+                if (b > len) b = len;
+                if (a >= b) return new Rv("");
+                return new Rv(s.substring(a, b));
+            }
+        }),
+
+        // ============================================================
+        //                          JSON
+        // ============================================================
+
+        new NativeFunctionListEntry("JSON.parse", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                String src = toStr(arg(args, start, num, 0));
+                int[] pos = new int[] { 0 };
+                try {
+                    Rv r = jsonParse(src, pos);
+                    skipWs(src, pos);
+                    if (pos[0] != src.length()) return Rv.error("JSON.parse: trailing input");
+                    return r;
+                } catch (RuntimeException e) {
+                    return Rv.error("JSON.parse: " + e.getMessage());
+                }
+            }
+        }),
+
+        new NativeFunctionListEntry("JSON.stringify", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv v = arg(args, start, num, 0);
+                Rv indentArg = arg(args, start, num, 2);
+                String indent = null;
+                if (indentArg != null && indentArg != Rv._undefined) {
+                    if (indentArg.type == Rv.NUMBER || indentArg.type == Rv.NUMBER_OBJECT) {
+                        int n2 = Math.min(10, Math.max(0, indentArg.num));
+                        StringBuffer b = new StringBuffer();
+                        for (int i = 0; i < n2; i++) b.append(' ');
+                        indent = b.toString();
+                    } else if (indentArg.type == Rv.STRING || indentArg.type == Rv.STRING_OBJECT) {
+                        String s = indentArg.str;
+                        indent = s.length() > 10 ? s.substring(0, 10) : s;
+                    }
+                }
+                StringBuffer buf = new StringBuffer();
+                boolean ok = jsonStringify(v, buf, indent, 0);
+                return ok ? new Rv(buf.toString()) : Rv._undefined;
+            }
+        }),
+
+        // ============================================================
+        //                          NUMBER
+        // ============================================================
+
+        new NativeFunctionListEntry("Number.isInteger", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv v = arg(args, start, num, 0);
+                return v != null && (v.type == Rv.NUMBER || v.type == Rv.NUMBER_OBJECT) && v != Rv._NaN
+                        ? Rv._true : Rv._false;
+            }
+        }),
+
+        new NativeFunctionListEntry("Number.isFinite", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv v = arg(args, start, num, 0);
+                return v != null && (v.type == Rv.NUMBER || v.type == Rv.NUMBER_OBJECT) && v != Rv._NaN
+                        ? Rv._true : Rv._false;
+            }
+        }),
+
+        new NativeFunctionListEntry("Number.isNaN", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv v = arg(args, start, num, 0);
+                return v == Rv._NaN ? Rv._true : Rv._false;
+            }
+        }),
+
+        new NativeFunctionListEntry("Number.parseInt", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                return parseIntImpl(arg(args, start, num, 0), arg(args, start, num, 1));
+            }
+        }),
+
+        new NativeFunctionListEntry("Number.parseFloat", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                return parseIntImpl(arg(args, start, num, 0), null);
+            }
+        }),
+
+        new NativeFunctionListEntry("parseFloat", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                return parseIntImpl(arg(args, start, num, 0), null);
+            }
+        }),
+
+        // ============================================================
+        //                          MATH
+        // ============================================================
+
+        new NativeFunctionListEntry("Math.abs", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                int v = toInt(arg(args, start, num, 0), 0);
+                return new Rv(v < 0 ? -v : v);
+            }
+        }),
+
+        new NativeFunctionListEntry("Math.floor", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                return new Rv(toInt(arg(args, start, num, 0), 0));
+            }
+        }),
+
+        new NativeFunctionListEntry("Math.ceil", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                // integer interpreter: ceil(x) == x for ints
+                return new Rv(toInt(arg(args, start, num, 0), 0));
+            }
+        }),
+
+        new NativeFunctionListEntry("Math.round", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                return new Rv(toInt(arg(args, start, num, 0), 0));
+            }
+        }),
+
+        new NativeFunctionListEntry("Math.sqrt", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                int v = toInt(arg(args, start, num, 0), 0);
+                if (v < 0) return Rv._NaN;
+                int s = 0;
+                while ((s + 1) * (s + 1) <= v) s++;
+                return new Rv(s);
+            }
+        }),
+
+        new NativeFunctionListEntry("Math.pow", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                int b = toInt(arg(args, start, num, 0), 0);
+                int e = toInt(arg(args, start, num, 1), 0);
+                if (e < 0) return new Rv(0);
+                int r = 1;
+                while (e-- > 0) r *= b;
+                return new Rv(r);
+            }
+        }),
+
+        new NativeFunctionListEntry("Math.sin", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                // input in "milli-radians" (since interp is integer-only).
+                int mr = toInt(arg(args, start, num, 0), 0);
+                return new Rv((int) (Math.sin(mr / 1000.0) * 1000));
+            }
+        }),
+
+        new NativeFunctionListEntry("Math.cos", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                int mr = toInt(arg(args, start, num, 0), 0);
+                return new Rv((int) (Math.cos(mr / 1000.0) * 1000));
+            }
+        }),
+
+        new NativeFunctionListEntry("Math.tan", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                int mr = toInt(arg(args, start, num, 0), 0);
+                double c = Math.cos(mr / 1000.0);
+                if (c == 0) return Rv._NaN;
+                return new Rv((int) (Math.sin(mr / 1000.0) / c * 1000));
+            }
+        }),
+
+        new NativeFunctionListEntry("Math.atan", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                int mr = toInt(arg(args, start, num, 0), 0);
+                double r = myAtan(mr / 1000.0);
+                return new Rv((int) (r * 1000));
+            }
+        }),
+
+        new NativeFunctionListEntry("Math.atan2", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                int y = toInt(arg(args, start, num, 0), 0);
+                int x = toInt(arg(args, start, num, 1), 0);
+                if (x == 0 && y == 0) return new Rv(0);
+                double r = myAtan2(y, x);
+                return new Rv((int) (r * 1000));
+            }
+        }),
+
+        new NativeFunctionListEntry("Math.exp", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                int v = toInt(arg(args, start, num, 0), 0);
+                return new Rv((int) (myExp(v / 1000.0) * 1000));
+            }
+        }),
+
+        new NativeFunctionListEntry("Math.log", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                int v = toInt(arg(args, start, num, 0), 1);
+                if (v <= 0) return Rv._NaN;
+                return new Rv((int) (myLog(v) * 1000));
+            }
+        }),
+
+        new NativeFunctionListEntry("Math.sign", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                int v = toInt(arg(args, start, num, 0), 0);
+                return new Rv(v > 0 ? 1 : v < 0 ? -1 : 0);
+            }
+        }),
+
+        new NativeFunctionListEntry("Math.trunc", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                return new Rv(toInt(arg(args, start, num, 0), 0));
+            }
+        }),
+
+        // ============================================================
+        //                  MAP / SET / SYMBOL (Fase D)
+        // ============================================================
+
+        new NativeFunctionListEntry("Map", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv m = isNew ? thiz : new Rv(Rv.OBJECT, Rv._Map);
+                m.type = Rv.OBJECT;
+                m.ctorOrProt = Rv._Map;
+                m.opaque = new MapBacking();
+                Rv src = arg(args, start, num, 0);
+                if (src != null && src.type == Rv.ARRAY) {
+                    int len = src.num;
+                    for (int i = 0; i < len; i++) {
+                        Rv pair = getIdx(src, i);
+                        if (pair != null && pair.type == Rv.ARRAY && pair.num >= 2) {
+                            mapSet(m, getIdx(pair, 0), getIdx(pair, 1));
+                        }
+                    }
+                }
+                return m;
+            }
+        }),
+
+        new NativeFunctionListEntry("Map.get", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                MapBacking mb = mapOf(thiz);
+                if (mb == null) return Rv._undefined;
+                Rv k = arg(args, start, num, 0);
+                int idx = mb.indexOf(k);
+                return idx < 0 ? Rv._undefined : (Rv) mb.values.getObject(idx);
+            }
+        }),
+
+        new NativeFunctionListEntry("Map.set", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                mapSet(thiz, arg(args, start, num, 0), arg(args, start, num, 1));
+                return thiz;
+            }
+        }),
+
+        new NativeFunctionListEntry("Map.has", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                MapBacking mb = mapOf(thiz);
+                return mb != null && mb.indexOf(arg(args, start, num, 0)) >= 0 ? Rv._true : Rv._false;
+            }
+        }),
+
+        new NativeFunctionListEntry("Map.delete", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                MapBacking mb = mapOf(thiz);
+                if (mb == null) return Rv._false;
+                int idx = mb.indexOf(arg(args, start, num, 0));
+                if (idx < 0) return Rv._false;
+                mb.removeAt(idx);
+                return Rv._true;
+            }
+        }),
+
+        new NativeFunctionListEntry("Map.clear", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                MapBacking mb = mapOf(thiz);
+                if (mb != null) mb.clear();
+                return Rv._undefined;
+            }
+        }),
+
+        new NativeFunctionListEntry("Map.forEach", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                MapBacking mb = mapOf(thiz);
+                if (mb == null) return Rv._undefined;
+                Rv fn = arg(args, start, num, 0);
+                Rv thisArg = arg(args, start, num, 1);
+                for (int i = 0, n = mb.keys.oSize; i < n; i++) {
+                    ri.invokeJS3(fn, thisArg, (Rv) mb.values.getObject(i), (Rv) mb.keys.getObject(i), thiz);
+                }
+                return Rv._undefined;
+            }
+        }),
+
+        new NativeFunctionListEntry("Map.keys", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                MapBacking mb = mapOf(thiz);
+                Rv out = newArray();
+                if (mb != null) {
+                    for (int i = 0, n = mb.keys.oSize; i < n; i++) out.putl(i, (Rv) mb.keys.getObject(i));
+                }
+                return out;
+            }
+        }),
+
+        new NativeFunctionListEntry("Map.values", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                MapBacking mb = mapOf(thiz);
+                Rv out = newArray();
+                if (mb != null) {
+                    for (int i = 0, n = mb.values.oSize; i < n; i++) out.putl(i, (Rv) mb.values.getObject(i));
+                }
+                return out;
+            }
+        }),
+
+        new NativeFunctionListEntry("Map.entries", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                MapBacking mb = mapOf(thiz);
+                Rv out = newArray();
+                if (mb != null) {
+                    for (int i = 0, n = mb.keys.oSize; i < n; i++) {
+                        Rv pair = newArray();
+                        pair.putl(0, (Rv) mb.keys.getObject(i));
+                        pair.putl(1, (Rv) mb.values.getObject(i));
+                        out.putl(i, pair);
+                    }
+                }
+                return out;
+            }
+        }),
+
+        new NativeFunctionListEntry("Set", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv s = isNew ? thiz : new Rv(Rv.OBJECT, Rv._Set);
+                s.type = Rv.OBJECT;
+                s.ctorOrProt = Rv._Set;
+                s.opaque = new SetBacking();
+                Rv src = arg(args, start, num, 0);
+                if (src != null && src.type == Rv.ARRAY) {
+                    int len = src.num;
+                    for (int i = 0; i < len; i++) setAdd(s, getIdx(src, i));
+                }
+                return s;
+            }
+        }),
+
+        new NativeFunctionListEntry("Set.add", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                setAdd(thiz, arg(args, start, num, 0));
+                return thiz;
+            }
+        }),
+
+        new NativeFunctionListEntry("Set.has", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                SetBacking sb = setOf(thiz);
+                return sb != null && sb.indexOf(arg(args, start, num, 0)) >= 0 ? Rv._true : Rv._false;
+            }
+        }),
+
+        new NativeFunctionListEntry("Set.delete", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                SetBacking sb = setOf(thiz);
+                if (sb == null) return Rv._false;
+                int idx = sb.indexOf(arg(args, start, num, 0));
+                if (idx < 0) return Rv._false;
+                sb.removeAt(idx);
+                return Rv._true;
+            }
+        }),
+
+        new NativeFunctionListEntry("Set.clear", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                SetBacking sb = setOf(thiz);
+                if (sb != null) sb.items.oSize = 0;
+                return Rv._undefined;
+            }
+        }),
+
+        new NativeFunctionListEntry("Set.forEach", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                SetBacking sb = setOf(thiz);
+                if (sb == null) return Rv._undefined;
+                Rv fn = arg(args, start, num, 0);
+                Rv thisArg = arg(args, start, num, 1);
+                for (int i = 0, n = sb.items.oSize; i < n; i++) {
+                    Rv v = (Rv) sb.items.getObject(i);
+                    ri.invokeJS3(fn, thisArg, v, v, thiz);
+                }
+                return Rv._undefined;
+            }
+        }),
+
+        new NativeFunctionListEntry("Set.values", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                SetBacking sb = setOf(thiz);
+                Rv out = newArray();
+                if (sb != null) {
+                    for (int i = 0, n = sb.items.oSize; i < n; i++) out.putl(i, (Rv) sb.items.getObject(i));
+                }
+                return out;
+            }
+        }),
+
+        new NativeFunctionListEntry("Symbol", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                String desc = num > 0 ? toStr(arg(args, start, num, 0)) : "";
+                Rv s = new Rv(Rv.OBJECT, Rv._Object);
+                s.str = desc;
+                s.opaque = UNIQUE_SYMBOL;
+                return s;
+            }
+        }),
+
+    };
+
+    // ------------------------------------------------------------------
+    //  Helpers used by the entries above
+    // ------------------------------------------------------------------
+
+    private static final Object FROZEN = new Object();
+    private static final Object UNIQUE_SYMBOL = new Object();
+
+    static final boolean strictEq(Rv a, Rv b) {
+        if (a == b) return true;
+        if (a == null || b == null) return false;
+        if (a.type != b.type) return false;
+        switch (a.type) {
+            case Rv.UNDEFINED: return true;
+            case Rv.NUMBER:    return a != Rv._NaN && b != Rv._NaN && a.num == b.num;
+            case Rv.STRING:    return a.str.equals(b.str);
+            default:           return a == b;
+        }
+    }
+
+    static final void flatInto(Rv src, Rv dst, int depth) {
+        int len = src.num;
+        for (int i = 0; i < len; i++) {
+            Rv v = getIdx(src, i);
+            if (depth > 0 && isArray(v)) {
+                flatInto(v, dst, depth - 1);
+            } else {
+                pushItem(dst, v);
+            }
+        }
+    }
+
+    static final String pad(String s, int targetLen, String filler, boolean atStart) {
+        int need = targetLen - s.length();
+        if (need <= 0 || filler.length() == 0) return s;
+        StringBuffer buf = new StringBuffer(targetLen);
+        int fl = filler.length();
+        StringBuffer fillBuf = new StringBuffer(need);
+        for (int i = 0; i < need; i++) fillBuf.append(filler.charAt(i % fl));
+        if (atStart) {
+            buf.append(fillBuf.toString()).append(s);
+        } else {
+            buf.append(s).append(fillBuf.toString());
+        }
+        return buf.toString();
+    }
+
+    static final Rv parseIntImpl(Rv src, Rv radixRv) {
+        if (src == null) return Rv._NaN;
+        String s = src.toStr().str.trim();
+        if (s.length() == 0) return Rv._NaN;
+        int radix = 10;
+        if (radixRv != null && radixRv != Rv._undefined) {
+            radix = toInt(radixRv, 10);
+            if (radix == 0) radix = 10;
+        }
+        int sign = 1, i = 0;
+        if (s.charAt(0) == '+') i = 1;
+        else if (s.charAt(0) == '-') { i = 1; sign = -1; }
+        if (i < s.length() - 1 && s.charAt(i) == '0' && (s.charAt(i + 1) == 'x' || s.charAt(i + 1) == 'X')) {
+            radix = 16;
+            i += 2;
+        }
+        if (i >= s.length()) return Rv._NaN;
+        int v = 0;
+        boolean any = false;
+        for (; i < s.length(); i++) {
+            int d = digitOf(s.charAt(i), radix);
+            if (d < 0) break;
+            v = v * radix + d;
+            any = true;
+        }
+        return any ? new Rv(sign * v) : Rv._NaN;
+    }
+
+    static final int digitOf(char c, int radix) {
+        int d = -1;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'Z') d = c - 'A' + 10;
+        return d < radix ? d : -1;
+    }
+
+    // ---- JSON parse ----
+
+    static final void skipWs(String s, int[] pos) {
+        int i = pos[0], n = s.length();
+        while (i < n && s.charAt(i) <= ' ') i++;
+        pos[0] = i;
+    }
+
+    static final Rv jsonParse(String s, int[] pos) {
+        skipWs(s, pos);
+        if (pos[0] >= s.length()) throw new RuntimeException("unexpected end");
+        char c = s.charAt(pos[0]);
+        if (c == '{') return jsonParseObject(s, pos);
+        if (c == '[') return jsonParseArray(s, pos);
+        if (c == '"') return new Rv(jsonParseString(s, pos));
+        if (c == 't' || c == 'f') return jsonParseBool(s, pos);
+        if (c == 'n') { expect(s, pos, "null"); return Rv._null; }
+        if (c == '-' || (c >= '0' && c <= '9')) return jsonParseNumber(s, pos);
+        throw new RuntimeException("unexpected '" + c + "' at " + pos[0]);
+    }
+
+    static final Rv jsonParseObject(String s, int[] pos) {
+        pos[0]++; // consume {
+        Rv obj = newObject();
+        skipWs(s, pos);
+        if (pos[0] < s.length() && s.charAt(pos[0]) == '}') { pos[0]++; return obj; }
+        while (true) {
+            skipWs(s, pos);
+            if (pos[0] >= s.length() || s.charAt(pos[0]) != '"') throw new RuntimeException("expected key");
+            String key = jsonParseString(s, pos);
+            skipWs(s, pos);
+            if (pos[0] >= s.length() || s.charAt(pos[0]) != ':') throw new RuntimeException("expected ':'");
+            pos[0]++;
+            obj.putl(key, jsonParse(s, pos));
+            skipWs(s, pos);
+            if (pos[0] >= s.length()) throw new RuntimeException("unterminated object");
+            char c = s.charAt(pos[0]);
+            if (c == ',') { pos[0]++; continue; }
+            if (c == '}') { pos[0]++; return obj; }
+            throw new RuntimeException("expected ',' or '}'");
+        }
+    }
+
+    static final Rv jsonParseArray(String s, int[] pos) {
+        pos[0]++; // consume [
+        Rv arr = newArray();
+        skipWs(s, pos);
+        if (pos[0] < s.length() && s.charAt(pos[0]) == ']') { pos[0]++; return arr; }
+        int i = 0;
+        while (true) {
+            arr.putl(i++, jsonParse(s, pos));
+            skipWs(s, pos);
+            if (pos[0] >= s.length()) throw new RuntimeException("unterminated array");
+            char c = s.charAt(pos[0]);
+            if (c == ',') { pos[0]++; continue; }
+            if (c == ']') { pos[0]++; return arr; }
+            throw new RuntimeException("expected ',' or ']'");
+        }
+    }
+
+    static final String jsonParseString(String s, int[] pos) {
+        pos[0]++; // consume "
+        StringBuffer buf = new StringBuffer();
+        while (pos[0] < s.length()) {
+            char c = s.charAt(pos[0]++);
+            if (c == '"') return buf.toString();
+            if (c == '\\') {
+                if (pos[0] >= s.length()) throw new RuntimeException("bad escape");
+                char e = s.charAt(pos[0]++);
+                switch (e) {
+                    case '"':  buf.append('"'); break;
+                    case '\\': buf.append('\\'); break;
+                    case '/':  buf.append('/'); break;
+                    case 'n':  buf.append('\n'); break;
+                    case 't':  buf.append('\t'); break;
+                    case 'r':  buf.append('\r'); break;
+                    case 'b':  buf.append('\b'); break;
+                    case 'f':  buf.append('\f'); break;
+                    case 'u':
+                        if (pos[0] + 4 > s.length()) throw new RuntimeException("bad \\u escape");
+                        buf.append((char) Integer.parseInt(s.substring(pos[0], pos[0] + 4), 16));
+                        pos[0] += 4;
+                        break;
+                    default: throw new RuntimeException("bad escape \\" + e);
+                }
+            } else {
+                buf.append(c);
+            }
+        }
+        throw new RuntimeException("unterminated string");
+    }
+
+    static final Rv jsonParseBool(String s, int[] pos) {
+        if (s.charAt(pos[0]) == 't') { expect(s, pos, "true"); return Rv._true; }
+        expect(s, pos, "false"); return Rv._false;
+    }
+
+    static final void expect(String s, int[] pos, String lit) {
+        int n = lit.length();
+        if (pos[0] + n > s.length() || !s.substring(pos[0], pos[0] + n).equals(lit)) {
+            throw new RuntimeException("expected " + lit);
+        }
+        pos[0] += n;
+    }
+
+    static final Rv jsonParseNumber(String s, int[] pos) {
+        int st = pos[0];
+        if (s.charAt(pos[0]) == '-') pos[0]++;
+        while (pos[0] < s.length() && s.charAt(pos[0]) >= '0' && s.charAt(pos[0]) <= '9') pos[0]++;
+        // skip fractional / exponent (truncated to int)
+        if (pos[0] < s.length() && s.charAt(pos[0]) == '.') {
+            pos[0]++;
+            while (pos[0] < s.length() && s.charAt(pos[0]) >= '0' && s.charAt(pos[0]) <= '9') pos[0]++;
+        }
+        if (pos[0] < s.length() && (s.charAt(pos[0]) == 'e' || s.charAt(pos[0]) == 'E')) {
+            pos[0]++;
+            if (pos[0] < s.length() && (s.charAt(pos[0]) == '+' || s.charAt(pos[0]) == '-')) pos[0]++;
+            while (pos[0] < s.length() && s.charAt(pos[0]) >= '0' && s.charAt(pos[0]) <= '9') pos[0]++;
+        }
+        String lit = s.substring(st, pos[0]);
+        int dot = lit.indexOf('.');
+        int e = lit.indexOf('e');
+        if (e < 0) e = lit.indexOf('E');
+        String intPart = dot >= 0 ? lit.substring(0, dot) : (e >= 0 ? lit.substring(0, e) : lit);
+        try {
+            return new Rv(Integer.parseInt(intPart));
+        } catch (NumberFormatException ex) {
+            return Rv._NaN;
+        }
+    }
+
+    // ---- JSON stringify ----
+
+    static final boolean jsonStringify(Rv v, StringBuffer buf, String indent, int depth) {
+        if (v == null || v == Rv._undefined || v.isCallable()) return false;
+        if (v == Rv._null) { buf.append("null"); return true; }
+        if (v == Rv._true) { buf.append("true"); return true; }
+        if (v == Rv._false) { buf.append("false"); return true; }
+        int t = v.type;
+        if (t == Rv.NUMBER || t == Rv.NUMBER_OBJECT) {
+            if (v == Rv._NaN) { buf.append("null"); return true; }
+            buf.append(v.num);
+            return true;
+        }
+        if (t == Rv.STRING || t == Rv.STRING_OBJECT) {
+            jsonEncodeString(v.str, buf);
+            return true;
+        }
+        if (t == Rv.ARRAY) {
+            int len = v.num;
+            buf.append('[');
+            boolean first = true;
+            for (int i = 0; i < len; i++) {
+                if (!first) buf.append(',');
+                if (indent != null) { buf.append('\n'); appendIndent(buf, indent, depth + 1); }
+                Rv item = getIdx(v, i);
+                StringBuffer tmp = new StringBuffer();
+                if (!jsonStringify(item, tmp, indent, depth + 1)) tmp.append("null");
+                buf.append(tmp.toString());
+                first = false;
+            }
+            if (!first && indent != null) { buf.append('\n'); appendIndent(buf, indent, depth); }
+            buf.append(']');
+            return true;
+        }
+        // generic object
+        if (v.prop == null) { buf.append("{}"); return true; }
+        Pack keys = v.prop.keys();
+        buf.append('{');
+        boolean first = true;
+        for (int i = 0, n = keys.oSize; i < n; i++) {
+            String k = (String) keys.oArray[i];
+            Rv val = v.prop.get(k);
+            StringBuffer tmp = new StringBuffer();
+            if (!jsonStringify(val, tmp, indent, depth + 1)) continue;
+            if (!first) buf.append(',');
+            if (indent != null) { buf.append('\n'); appendIndent(buf, indent, depth + 1); }
+            jsonEncodeString(k, buf);
+            buf.append(':');
+            if (indent != null) buf.append(' ');
+            buf.append(tmp.toString());
+            first = false;
+        }
+        if (!first && indent != null) { buf.append('\n'); appendIndent(buf, indent, depth); }
+        buf.append('}');
+        return true;
+    }
+
+    static final void appendIndent(StringBuffer buf, String indent, int depth) {
+        for (int i = 0; i < depth; i++) buf.append(indent);
+    }
+
+    static final void jsonEncodeString(String s, StringBuffer buf) {
+        buf.append('"');
+        for (int i = 0, n = s.length(); i < n; i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"':  buf.append("\\\""); break;
+                case '\\': buf.append("\\\\"); break;
+                case '\n': buf.append("\\n"); break;
+                case '\t': buf.append("\\t"); break;
+                case '\r': buf.append("\\r"); break;
+                case '\b': buf.append("\\b"); break;
+                case '\f': buf.append("\\f"); break;
+                default:
+                    if (c < 0x20) {
+                        buf.append("\\u");
+                        String hex = Integer.toHexString(c);
+                        for (int p = hex.length(); p < 4; p++) buf.append('0');
+                        buf.append(hex);
+                    } else {
+                        buf.append(c);
+                    }
+            }
+        }
+        buf.append('"');
+    }
+
+    // ---- Map / Set ----
+
+    static final class MapBacking {
+        final Pack keys = new Pack(-1, 8);
+        final Pack values = new Pack(-1, 8);
+
+        int indexOf(Rv k) {
+            for (int i = 0, n = keys.oSize; i < n; i++) {
+                if (strictEq(k, (Rv) keys.getObject(i))) return i;
+            }
+            return -1;
+        }
+
+        void set(Rv k, Rv v) {
+            int i = indexOf(k);
+            if (i >= 0) {
+                values.oArray[i] = v;
+            } else {
+                keys.add(k);
+                values.add(v);
+            }
+        }
+
+        void removeAt(int i) {
+            int n = keys.oSize;
+            for (int j = i + 1; j < n; j++) {
+                keys.oArray[j - 1] = keys.oArray[j];
+                values.oArray[j - 1] = values.oArray[j];
+            }
+            keys.oSize = n - 1;
+            values.oSize = n - 1;
+        }
+
+        void clear() {
+            keys.oSize = 0;
+            values.oSize = 0;
+        }
+    }
+
+    static final class SetBacking {
+        final Pack items = new Pack(-1, 8);
+
+        int indexOf(Rv v) {
+            for (int i = 0, n = items.oSize; i < n; i++) {
+                if (strictEq(v, (Rv) items.getObject(i))) return i;
+            }
+            return -1;
+        }
+
+        void removeAt(int i) {
+            int n = items.oSize;
+            for (int j = i + 1; j < n; j++) items.oArray[j - 1] = items.oArray[j];
+            items.oSize = n - 1;
+        }
+    }
+
+    static final MapBacking mapOf(Rv r) {
+        return r != null && r.opaque instanceof MapBacking ? (MapBacking) r.opaque : null;
+    }
+
+    static final SetBacking setOf(Rv r) {
+        return r != null && r.opaque instanceof SetBacking ? (SetBacking) r.opaque : null;
+    }
+
+    static final void mapSet(Rv m, Rv k, Rv v) {
+        MapBacking mb = mapOf(m);
+        if (mb == null) { mb = new MapBacking(); m.opaque = mb; }
+        mb.set(k, v);
+    }
+
+    static final void setAdd(Rv s, Rv v) {
+        SetBacking sb = setOf(s);
+        if (sb == null) { sb = new SetBacking(); s.opaque = sb; }
+        if (sb.indexOf(v) < 0) sb.items.add(v);
+    }
+}

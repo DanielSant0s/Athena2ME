@@ -60,18 +60,30 @@ New types are always being added and this list can grow a lot over time, so stay
 - [x] Physical pad functions
 - [x] Keypad functions
 - [x] Timer functions
+- [x] `let` / `const` (tokenizer + parser aliases of `var`)
+- [x] Arrow functions with lexical `this`
+- [x] Template literals (`` `hi ${x}` ``)
+- [x] Default params / object shorthand / computed keys
+- [x] Spread / rest operators (call-site, rest params)
+- [x] Destructuring (object and array) in declarations
+- [x] `for...of` over arrays, strings and Map/Set
+- [x] ES6+ classes, `extends`, `super`, `static`
+- [x] `Map`, `Set`, `Symbol` built-ins
+- [x] Array prototype: map/filter/reduce/find/some/every/includes/…
+- [x] Object: keys/values/entries/assign/freeze
+- [x] String: trim/includes/startsWith/repeat/padStart/replaceAll/…
+- [x] JSON.parse / JSON.stringify
+- [x] Extended Number / Math (parseInt, sqrt, pow, sin/cos/tan, …)
 - [ ] OS external file functions
 - [ ] OS platform functions
-- [ ] std functions
 - [ ] Thread functions
 - [ ] 3D Render functions
 - [ ] Network (requests, sockets, websockets)
 - [ ] Archive (zip, 7zip, tar, rar) system
 - [ ] Add float support
 - [ ] Add ArrayBuffer support
-- [ ] Add let, const
-- [ ] Add array functions
-- [ ] Add more JS standard functions
+- [ ] Block-scoped `let`/`const` (currently hoisted like `var`)
+- [ ] `async`/`await`, generators, regex literals
 
 ### Built With
 
@@ -94,30 +106,44 @@ Oh, and I also have to mention that an essential prerequisite for using Athena2M
 
 ## Quick start with Athena
 
-Hello World:  
+Hello World (ES6+ style):
 ```js
-var font = new Font("default");
+const font = new Font("default");
+const WHITE = Color.new(255, 255, 255);
 
-os.setExitHandler(function () {
-    os.stopFrameLoop();
-});
+class Counter {
+    constructor() { this.n = 0; }
+    tick() { this.n++; }
+}
+const c = new Counter();
+
+os.setExitHandler(() => os.stopFrameLoop());
 
 // Native frame loop: Pad.update() and Screen.update() are called for you.
-os.startFrameLoop(function () {
+os.startFrameLoop(() => {
     Screen.clear();
-    font.print("Hello from Athena2ME!", 15, 15);
+    c.tick();
+    font.print(`Hello from Athena2ME! frame=${c.n}`, 15, 15);
 }, 60);
 ```
+
+Classic ES5 source still works unchanged; the new syntax is opt-in and is
+rewritten to ES5 by a source-level preprocessor before parsing.
 
 The legacy pattern (`while (running) { Screen.clear(); …; Screen.update(); os.sleep(16); }`) still works, but `os.startFrameLoop` is strongly preferred: it runs in a dedicated native `Thread`, paces frames precisely, and removes the interpreter from the frame critical path. On resource-constrained phones this is the difference between smooth 60 FPS and an "application not responding" dialog.
 
 ## Features
 
-Athena2ME uses a heavily modified version of the RockScript interpreter for JavaScript language, which means that it brings some basic ES5 JavaScript features so far.
+Athena2ME ships a heavily forked version of the RockScript interpreter. On top
+of the upstream ES3/ES5 core it adds a large subset of ES6/ES7 syntax
+(let/const, arrows, template literals, classes, destructuring, spread/rest,
+for…of) implemented as a source-level preprocessor, plus a modern standard
+library (Array/Object/String/JSON/Number/Math, Map/Set/Symbol) exposed through
+a fast native-binding path.
 
 ### Changes from upstream RockScript / javascript4me
 
-This fork diverges substantially from the original [RockScript](https://code.google.com/archive/p/javascript4me/) sources that ship in [`src/net/cnjm/j2me/tinybro/`](src/net/cnjm/j2me/tinybro/). The public JavaScript surface is **100% compatible** with upstream — every change listed below is internal. All modifications were driven by profiling on S40/SE mid-range hardware (4–8 MB heap, ARM9 200–400 MHz), where the original interpreter is dominated by hashtable lookups and short-lived allocations in the `eval` loop.
+This fork diverges substantially from the original [RockScript](https://code.google.com/archive/p/javascript4me/) sources that ship in [`src/net/cnjm/j2me/tinybro/`](src/net/cnjm/j2me/tinybro/). The performance-oriented changes keep the upstream JavaScript surface intact (legacy ES3/ES5 sources run as-is); the ES6+ changes are strictly additive on top. All modifications were driven by profiling on S40/SE mid-range hardware (4–8 MB heap, ARM9 200–400 MHz), where the original interpreter is dominated by hashtable lookups and short-lived allocations in the `eval` loop.
 
 #### New files
 
@@ -129,6 +155,33 @@ This fork diverges substantially from the original [RockScript](https://code.goo
   ```
   Native bindings that extend this class are invoked **without** building an `arguments` `Rv`, without allocating a call-scope `funCo`, and without hashing `"0"`/`"1"`/… string keys for positional arguments. Legacy `NativeFunction` subclasses keep working unchanged (the default `func()` implementation bridges back to `callFast`).
 
+* [`Es6Preproc.java`](src/net/cnjm/j2me/tinybro/Es6Preproc.java) — source-level
+  preprocessor that runs before the tokenizer. Each pass rewrites one piece of
+  ES6+ syntax into ES3/ES5 that the original parser already understands:
+  template literals → string concatenation, arrow functions → `function`
+  expressions (with `this` captured via a temporary), classes/`extends`/`super`
+  → `function` + `prototype` + explicit parent calls, `for...of` → index-based
+  `for`, default params → leading `if (x === undefined) x = …;`, object
+  destructuring → individual `var` assignments, array destructuring → indexed
+  reads, shorthand props `{a, b}` → `{a: a, b: b}`, computed keys `{[k]: v}`
+  → object build + `obj[k] = v`, call-site spread `f(...xs)` → `f.apply(null,
+  xs)`, rest params `function f(...r)` → `var r = Array.prototype.slice.call
+  (arguments, N)`. Each pass is string-to-string, O(n) in source length, and
+  runs exactly once per `reset()`.
+
+* [`StdLib.java`](src/net/cnjm/j2me/tinybro/StdLib.java) — installs the modern
+  built-ins under their standard paths: `Array.prototype.*`, `Array.of/from/
+  isArray`, `Object.keys/values/entries/assign/freeze/…`, `String.prototype.*`
+  (trim, includes, startsWith, repeat, padStart/End, replace, replaceAll, …),
+  `JSON.parse` / `JSON.stringify` (with optional indent), `Number.isInteger/
+  isFinite/isNaN/parseInt/parseFloat`, extended `Math` (sqrt, pow, sin/cos/tan,
+  atan/atan2, exp, log, PI, E — driven by lookup tables to avoid `java.lang.
+  Math` drift on CLDC 1.1), and the `Map`/`Set`/`Symbol` constructors backed
+  by `Rhash` + `Pack`. Every binding is a `NativeFunctionFast` so it
+  participates in the zero-allocation dispatch path. `installStdLib(Rv go)` is
+  called from `initGlobalObject()`; the MIDlet only has to register its own
+  bindings on top.
+
 #### `RocksInterpreter`
 
 * **Dense operator tables.** The per-token `Rhash` tables `htOptrIndex` and `htOptrType` were replaced by `static final int[2048]` arrays indexed directly by token id. The hottest read in the interpreter — the operator dispatch inside `eval()` — is now a single array load instead of `hashCode() % len` + bucket walk + `String.equals`. Same change applies to `Rv.binary` and `expression()`.
@@ -136,6 +189,20 @@ This fork diverges substantially from the original [RockScript](https://code.goo
 * **Fast native dispatch.** `call()` checks `function.obj instanceof NativeFunctionFast` and, when true, short-circuits the entire `new Rv(ARGUMENTS) / putl("callee") / putl("this") / Integer.toString(i)` prologue (upstream lines ~811–839) and invokes `callFast()` directly against the operand `Pack`.
 * **Direct native reference.** `addNativeFunction` now stores the concrete `NativeFunction` instance in the resulting `Rv.obj`. `callNative` uses that direct reference instead of performing `function_list.get(function.str)` on every invocation — one `Hashtable<String, NativeFunction>` lookup per native call removed.
 * **Graceful destroy.** The interpreter no longer relies on the JS side to exit cleanly; see the `os.startFrameLoop` / `os.stopFrameLoop` bindings added at the MIDlet layer.
+* **Preprocessor hook.** `reset()` now invokes `Es6Preproc.process(src)` on
+  the top-level script before tokenization. The output is plain ES3/ES5, so
+  every subsequent stage (tokenizer, parser, RPN builder, evaluator) remained
+  untouched.
+* **Tokenizer additions.** `let` and `const` are recognised as keywords and
+  emitted as `RC.TOK_VAR` (block scope is left for a future phase). `=>`
+  produces `RC.TOK_ARROW`, the parser then folds the preceding parameter list
+  into a `function` expression with a captured lexical `this`. Template
+  literals (`` ` `` … `` ` ``) enter a sub-lexer that alternates string chunks
+  with embedded `${…}` expressions.
+* **`invokeJS(fn, thiz, Pack args, start, num)`** helper. Exposes a single
+  entry point used by every native binding that calls back into JS
+  (`Array.forEach`, `Array.map`, `os.startFrameLoop`, …). Centralises
+  `funCo`/`callObj` save-restore and error propagation.
 
 #### `Rv`
 
@@ -143,7 +210,29 @@ This fork diverges substantially from the original [RockScript](https://code.goo
 * **Symbol interning.** `Rv.symbol(String)` routes through a `static java.util.Hashtable _symbolPool`. Identical symbol literals (`"Draw"`, `"rect"`, `"draw"`, property names produced by the parser, …) share a single canonical `Rv` instance. Combined with the hash cache below, repeated property accesses become `==`-cheap.
 * **Cached `hashCode`.** New field `public int hash`, populated once for `SYMBOL`/`STRING` values. Used as the key hash when the `Rv` is fed into `Rhash` lookups, removing the recomputation of `String.hashCode()` on every property access.
 * **`getByKey(Rv key)`** — variant of `get` that consumes the cached `key.hash` so `evalVal(TOK_SYMBOL)` can resolve scope chains without re-hashing.
-* **Monomorphic inline cache for `LVALUE`.** New fields `icHolder`, `icValue`, `icKey`, `icStamp` on each `Rv` RPN token. After the first successful property resolution the token remembers the holder `Rv`, the resolved value, and the holder's `Rhash.gen` stamp. Subsequent evaluations validate the stamp (O(1)) and return `icValue` directly, skipping the prototype-chain walk in `Rv.get`. Cache is invalidated automatically whenever `Rhash.gen` is bumped.
+* **Strict-equality fix.** Upstream `Rv.isIden()` (which implements `===` /
+  `!==`) had the type-compare branch inverted — it returned `false` whenever
+  the operands shared a type. Silent, and catastrophic for any `x === literal`
+  check (they all resolved to `false`, driving code into default branches).
+  The fork restores the correct semantics: same type ⇒ compare values, else
+  return `false`.
+* **`for (init; cond; update)` header fix.** Upstream `shouldIgnoreSemicolon`
+  dropped any `;` whose previous token was `)`, `]`, `}` or `\n`. Inside a
+  `for` header that quietly swallowed the mandatory init/cond separator
+  whenever the init expression ended in `)` — e.g. `for (var a = (1+2);
+  cond; upd)` or anything produced by the ES6 preprocessor's
+  `for…of` desugaring. The collapsed init+cond clause then tripped
+  `eatUntil` with an unmatched `)` at parse time (`ArrayIndexOutOfBoundsException`
+  in `Pack.getInt`). The fork narrows the heuristic to `}` and `\n` only,
+  preserving the `;` separator inside any parenthesised sub-expression.
+* **String indexing.** `Rv.get("N")` on a primitive `STRING` value now
+  returns the one-character substring at index `N` (`"abc"[1] === "b"`),
+  matching ES5 semantics. Upstream returned `undefined` for every
+  non-`length` property, which forced runtime branches whenever generic
+  container code (for…of desugaring, iterator helpers, …) wanted to walk
+  a string the same way it walks an array.
+* **Monomorphic inline cache for `LVALUE`.** Fields `icHolder`, `icValue`, `icKey`, `icRhash`, `icStamp` on each `Rv` RPN token. After the first successful property resolution the token remembers the holder `Rv`, the resolved value, the **backing** `Rhash` instance, and that map’s `gen` stamp. Subsequent evaluations validate **both** `icRhash == holder.prop` and `icStamp == holder.prop.gen` (O(1)) and return `icValue` directly, skipping the prototype-chain walk in `Rv.get`. Relying on `gen` alone is insufficient: several `Array.*` natives (`unshift`, `sort`, `reverse`, …) **replace** `thiz.prop` with a freshly built `Rhash`. The new map starts its own `gen` counter from 0, so two unrelated maps can accidentally share the same `gen` value — the identity check prevents stale reads (e.g. `arr[0]` still pointing at the pre-`unshift` head).
+* **`Rv.shift()` / `Array.pop` + `length` cache.** `Array.pop` and `Array.shift` are implemented via `Rv.shift(idx)`. When removing the **last** element, the inner copy loop runs zero times (no `put` calls), so historically `Rhash.gen` did not change even though `num` (logical length) did. Any monomorphic cache keyed by `gen` could then keep returning the **old** length. The fork always increments `prop.gen` and `this.gen` at the end of `shift()`, so `arr.length` and tight cleanup loops like `while (arr.length > w) arr.pop()` stay consistent (this showed up as a device freeze once particles started dying and the particle array was trimmed every frame).
 * **`isCallable()`** public helper. Replaces ad-hoc checks against the package-private constants `FUNCTION` / `NATIVE` so the MIDlet layer can validate callback arguments without exposing interpreter internals.
 
 #### `Rhash`
@@ -170,68 +259,98 @@ While migrating hot-path bindings to `NativeFunctionFast`, a few correctness bug
 * [`AthenaTimer`](src/AthenaTimer.java) — unified time base. `get()`/`set()` used to mix a `tick`-relative counter with `System.currentTimeMillis()`; all methods now operate on a consistent relative-ms scale with a proper pause/resume accumulator.
 * New MIDlet-level bindings **`os.sleep(ms)`** and **`os.startFrameLoop(fn, fps)` / `os.stopFrameLoop()`** (see the native frame loop section below). The former was required to fix ANR on real devices when JS code used a `while (running) { … }` main loop; the latter moves pacing, `Pad.update`, callback dispatch, and `Screen.update` to a dedicated Java `Thread`, removing the interpreted loop from the critical path entirely.
 
-### JavaScript standard functions
-  
-* Object  
-  • toString  
-  • hasOwnProperty  
-  
-* Function  
-  • call  
-  • apply   
-  
-* Number  
-  • MAX_VALUE  
-  • MIN_VALUE  
-  • NaN  
-  • valueOf  
-  
-* String  
-  • fromCharCode  
-  • valueOf  
-  • charAt  
-  • charCodeAt  
-  • indexOf  
-  • lastIndexOf  
-  • substring  
-  • split  
-  
-* Array  
-  • concat  
-  • join  
-  • push  
-  • pop  
-  • shift  
-  • unshift  
-  • slice  
-  • sort  
-  • reverse  
-  
-* Date  
-  • now  
-  • getTime  
-  • setTime  
-  
-* Error  
-  • name  
-  • message  
-  • toString  
-  
-* Math  
-  • random  
-  • min  
-  • max  
-  
-* Misc  
-  • console.log  
-  • isNaN  
-  • parseInt  
-  • eval  
-  • es - evalString  
-  
+### JavaScript syntax (ES6+)
+
+Everything below is supported out of the box. The preprocessor rewrites it to
+an equivalent ES5 program before parsing, so there is no runtime cost for
+sources that do not use the feature.
+
+```js
+// let / const (hoisted like var today; const is a compile-time hint)
+let hp = 100;
+const MAX = 255;
+
+// Arrow functions with lexical `this`
+const square = n => n * n;
+const add = (a, b) => a + b;
+button.on("click", () => this.fire());
+
+// Template literals
+const msg = `player ${name} scored ${score} pts`;
+
+// Object shorthand + computed keys
+const x = 1, y = 2;
+const point = { x, y, [`tag_${x}`]: true };
+
+// Default parameters
+function greet(name = "world") { return `hi ${name}`; }
+
+// Destructuring (declarations)
+const [first, second] = list;
+const { width, height } = screen;
+
+// Rest / spread at the call site and in parameters
+function sum(...xs) { return xs.reduce((a, b) => a + b, 0); }
+sum(...[1, 2, 3]);                        // => 6
+
+// for...of over arrays, strings, Map, Set
+for (const v of array) total += v;
+for (const ch of "abc") out += ch.toUpperCase();
+
+// Classes, inheritance, static methods, super
+class Enemy {
+    constructor(hp) { this.hp = hp; }
+    damage(n) { this.hp -= n; }
+    static spawn(hp) { return new Enemy(hp); }
+}
+class Boss extends Enemy {
+    constructor(hp) { super(hp); this.phase = 1; }
+    damage(n) { super.damage(n / 2 | 0); }
+}
+```
+
+Known limitations versus full ES6: `let`/`const` do not yet introduce block
+scope (they behave like hoisted `var`); no regex literals, no generators, no
+`async`/`await`, no tagged templates, no `Proxy`/`Reflect`, no symbols as
+object keys (they compare by identity but do not participate in property
+lookup), and no numeric separators. See [`res/tests.js`](res/tests.js) for a
+runnable smoke suite covering every feature listed above.
+
+### JavaScript standard library
+
+Hot paths (Array/Object/String/JSON/Number/Math/Map/Set/Symbol) are implemented
+as `NativeFunctionFast` bindings in [`StdLib.java`](src/net/cnjm/j2me/tinybro/StdLib.java)
+and are resolved with the fast-dispatch path described above.
+
+* **Object** — `toString`, `hasOwnProperty`, `Object.keys`, `Object.values`,
+  `Object.entries`, `Object.assign`, `Object.freeze`, `Object.isFrozen`,
+  `Object.getPrototypeOf`, `Object.create` (minimal)
+* **Function** — `call`, `apply`, `bind` (via preprocessor)
+* **Number** — `MAX_VALUE`, `MIN_VALUE`, `NaN`, `EPSILON`,
+  `MAX_SAFE_INTEGER`, `valueOf`, `Number.isInteger`, `Number.isFinite`,
+  `Number.isNaN`, `Number.parseInt`, `Number.parseFloat`
+* **String** — `fromCharCode`, `valueOf`, `charAt`, `charCodeAt`, `indexOf`,
+  `lastIndexOf`, `substring`, `split`, `slice`, `trim`, `trimStart`,
+  `trimEnd`, `includes`, `startsWith`, `endsWith`, `repeat`, `padStart`,
+  `padEnd`, `replace`, `replaceAll`, `toLowerCase`, `toUpperCase`, `concat`
+* **Array** — `concat`, `join`, `push`, `pop`, `shift`, `unshift`, `slice`,
+  `sort`, `reverse`, `map`, `filter`, `reduce`, `reduceRight`, `forEach`,
+  `find`, `findIndex`, `some`, `every`, `includes`, `indexOf`, `lastIndexOf`,
+  `fill`, `flat`, `copyWithin`, `Array.isArray`, `Array.of`, `Array.from`
+* **JSON** — `JSON.parse`, `JSON.stringify(value, replacer?, indent?)`
+* **Math** — `random`, `min`, `max`, `abs`, `floor`, `ceil`, `round`, `sign`,
+  `sqrt`, `pow`, `sin`, `cos`, `tan`, `atan`, `atan2`, `exp`, `log`, `PI`,
+  `E` (trigonometric / transcendental functions use precomputed lookup tables
+  to stay predictable on CLDC 1.1)
+* **Map** / **Set** / **Symbol** — constructors, `size`, `get`/`set`/`has`/
+  `delete`, `keys`/`values`/`entries`, iteration via `for...of`
+* **Date** — `now`, `getTime`, `setTime`
+* **Error** — `name`, `message`, `toString`
+* **Misc** — `console.log`, `isNaN`, `parseInt`, `eval`, `es - evalString`
+
 **How to run it**
 
-Athena is basically a JavaScript loader, so it loads .js files inside .jar file (which is a zip file). It runs "main.js" by default.
+Athena is basically a JavaScript loader, so it loads .js files inside .jar file (which is a zip file). It runs "main.js" by default. To run the regression suite, rename [`res/tests.js`](res/tests.js) to `main.js` (or paste its contents on top of your main).
 
 ## Functions, classes and consts
 

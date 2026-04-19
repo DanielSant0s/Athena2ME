@@ -35,12 +35,19 @@ public class Rv {
 
     /** Inline cache slots, only meaningful when {@code type == LVALUE}. Store the
      *  last resolved value, the holder it was fetched from, the property key we
-     *  looked up, and the holder's {@link #gen} at resolution time. Treated as
-     *  a best-effort hint: a miss just falls through to the normal chain-walking
-     *  lookup. */
+     *  looked up, the Rhash we found it in, and the Rhash's {@link Rhash#gen} at
+     *  resolution time. Treated as a best-effort hint: a miss just falls through
+     *  to the normal chain-walking lookup.
+     *
+     *  <p>Both {@code icRhash} identity and {@code icStamp} are required: holders
+     *  like arrays may wholesale-replace their backing {@link Rhash} (e.g.
+     *  {@code Array.unshift}/{@code sort}/{@code reverse}) and the replacement
+     *  Rhash starts its own {@code gen} counter from 0 — so the stamp check
+     *  alone can spuriously match on a structurally unrelated map. */
     public Rv icHolder;
     public Rv icValue;
     public String icKey;
+    public Rhash icRhash;
     public int icStamp;
     
     // ------- NUM STR SYM LVA OBJ NOB SOB ARR ARG FUN NAT cob CTR
@@ -205,20 +212,26 @@ public class Rv {
             this.co = newco;
         }
         // ---- monomorphic inline cache ----
-        // Identical holder + key + unchanged Rhash generation => return cached value.
+        // Identical holder + same backing Rhash + unchanged gen + same key
+        // => return cached value. We compare Rhash identity (not just the gen
+        // stamp) because mutating natives like Array.unshift/sort/reverse
+        // replace the holder's Rhash entirely, and the replacement can happen
+        // to carry the same `gen` value as the map that was cached against.
         Rv holder = this.co;
         String key = this.str;
         Rhash hp;
         if (this.icHolder == holder
                 && this.icValue != null
                 && (hp = holder.prop) != null
+                && this.icRhash == hp
                 && this.icStamp == hp.gen
                 && (this.icKey == key || (this.icKey != null && this.icKey.equals(key)))) {
             return this.icValue;
         }
         Rv v = holder.get(key);
         this.icHolder = holder;
-        this.icStamp = (hp = holder.prop) != null ? hp.gen : 0;
+        this.icRhash = (hp = holder.prop);
+        this.icStamp = hp != null ? hp.gen : 0;
         this.icKey = key;
         this.icValue = v;
         return v;
@@ -245,16 +258,72 @@ public class Rv {
     
     public final Rv get(String p) {
         int type;
-        if ((type = this.type) < Rv.OBJECT) {
+        // ES5 string indexing / length. Works for both the primitive STRING (e.g.
+        // directly holding a string literal) and for STRING_OBJECT (produced when
+        // `Rv.get()` promotes a primitive string holder into a boxed object so
+        // properties can be looked up via the member operators `.`/`[]`).
+        // Required so that generic container code (for..of desugaring, iterator
+        // helpers, …) can treat strings as read-only arrays of one-character
+        // strings without a per-call typeof branch.
+        if ((type = this.type) == Rv.STRING || type == Rv.STRING_OBJECT) {
+            if ("length".equals(p)) {
+                return new Rv(this.str.length());
+            }
+            int pl = p.length();
+            if (pl > 0) {
+                char c0 = p.charAt(0);
+                if (c0 >= '0' && c0 <= '9') {
+                    try {
+                        int idx = Integer.parseInt(p);
+                        if (idx >= 0 && idx < this.str.length()) {
+                            return new Rv(String.valueOf(this.str.charAt(idx)));
+                        }
+                    } catch (NumberFormatException ex) { /* non-numeric, fall through */ }
+                }
+            }
+            if (type == Rv.STRING) {
+                return Rv._undefined;
+            }
+            // STRING_OBJECT: fall through to prototype lookup below for things
+            // like "abc".charAt, "abc".indexOf, etc.
+        } else if (type < Rv.OBJECT) {
             return Rv._undefined;
+        }
+        // `.prototype` on a plain FUNCTION/NATIVE that hasn't been used as a
+        // constructor yet. In stock ES every function is born with its own
+        // `.prototype` object; upstream RockScript only materialised one lazily
+        // on the first `new`, so code like `Entity.prototype.update = fn`
+        // silently wrote into `undefined` (desugared classes install their
+        // methods *before* ever calling `new`). Materialise the prototype on
+        // first read and flip CTOR_MASK so `call(isInit, ...)` won't overwrite
+        // it on the first `new`. Note: at this point `ctorOrProt` is set to
+        // `Rv._Function` (the global Function proto, installed by the Rv
+        // constructor) — it is *not* null, which is why the existing check
+        // below doesn't cover this case.
+        if ("prototype".equals(p) && (type == Rv.FUNCTION || type == Rv.NATIVE)) {
+            // If user already wrote `fn.prototype = X` before this first read,
+            // the value landed in `this.prop["prototype"]` because the function
+            // didn't yet carry CTOR_MASK (see `put()`), and the constructor
+            // path below wasn't taken. Promote it now instead of shadowing it
+            // with a freshly materialised empty proto: otherwise the explicit
+            // assignment is silently lost (class desugar does exactly this:
+            // `Player.prototype = Object.create(Entity.prototype)` followed
+            // by method installs on `Player.prototype.*`).
+            Rv proto = this.prop != null ? this.prop.get(p) : null;
+            if (proto != null) {
+                this.prop.remove(p.hashCode(), p);
+            } else {
+                proto = new Rv(Rv.OBJECT, Rv._Object);
+            }
+            this.ctorOrProt = proto;
+            this.type = type | Rv.CTOR_MASK;
+            return proto;
         }
         if (type >= Rv.CTOR_MASK && "prototype".equals(p) // this is a constructor
                 || type >= Rv.OBJECT && type < Rv.CTOR_MASK && "constructor".equals(p)) { 
             return this.ctorOrProt != null ? this.ctorOrProt : Rv._undefined;
         } else if ("length".equals(p)) { // array/arguments/function/native
-            int num = type >= Rv.ARRAY ? this.num 
-                    : type == Rv.STRING || type == Rv.STRING_OBJECT ? this.str.length() 
-                    : -1;
+            int num = type >= Rv.ARRAY ? this.num : -1;
             if (num >= 0) return new Rv(num);
         }
         int ph = p.hashCode();
@@ -263,6 +332,23 @@ public class Rv {
                 && (ctor = obj.ctorOrProt) != null
                 && (prot = ctor.ctorOrProt) != null; obj = prot)
             ;
+        // Upstream initialises every plain function with `ctorOrProt =
+        // Rv._Function`, which is how lookups like `fn.call`/`fn.apply` reach
+        // `Function.prototype.*`. The moment the function is used as a
+        // constructor (or `fn.prototype = X` is assigned), that slot is
+        // replaced by the instance-proto, severing the Function.prototype
+        // chain. Class desugar relies on both semantics simultaneously (an
+        // `Entity.prototype.m = ...` install before `new`, plus a
+        // `Entity.call(this, ...)` super invocation), so fall back to
+        // `Function.prototype` once the normal walk has run dry.
+        if (ret == null && (type == Rv.FUNCTION || type == Rv.NATIVE
+                || type == (Rv.FUNCTION | Rv.CTOR_MASK)
+                || type == (Rv.NATIVE | Rv.CTOR_MASK))) {
+            Rv fp = Rv._Function != null ? Rv._Function.ctorOrProt : null;
+            if (fp != null && fp.prop != null) {
+                ret = fp.prop.getH(ph, p);
+            }
+        }
         if (ret == null && (prev = this.prev) != null) { // this is a call object
             for (obj = prev; (ret = obj.prop.getH(ph, p)) == null
                     && (prev = obj.prev) != null; obj = prev)
@@ -283,10 +369,22 @@ public class Rv {
         int type;
         if ((type = o.type) < Rv.OBJECT) {
             // do nothing
-        } else if (type >= Rv.CTOR_MASK && "prototype".equals(p)) { // this is a constructor
+        } else if ("prototype".equals(p)
+                && (type == (Rv.FUNCTION | Rv.CTOR_MASK)
+                        || type == (Rv.NATIVE | Rv.CTOR_MASK)
+                        || type == Rv.FUNCTION
+                        || type == Rv.NATIVE)) {
+            // Writing `.prototype` on any function installs the value as the
+            // constructor's prototype. Upstream only honoured this when the
+            // function was already flagged as a constructor; class desugar
+            // assigns `Player.prototype = Object.create(Entity.prototype)`
+            // on a brand new `Player` function that still has no CTOR_MASK,
+            // so the assignment used to fall through to the plain property
+            // branch below and was later discarded on the first `new`.
             int valty;
             if ((valty = val.type) >= Rv.OBJECT && valty < Rv.CTOR_MASK) {
                 o.ctorOrProt = val;
+                if ((type & Rv.CTOR_MASK) == 0) o.type = type | Rv.CTOR_MASK;
             }
         } else if (type >= Rv.ARRAY && "length".equals(p)) {
             if (type == Rv.ARRAY && (val = val.toNum()) != Rv._NaN) {
@@ -344,6 +442,13 @@ public class Rv {
             Rv val = prop.get(intStr(i + 1));
             prop.put(intStr(i), val != null ? val : Rv._undefined);
         }
+        // Always bump gen: pop() (idx == num-1) walks zero iterations of the
+        // loop above and would otherwise leave the Rhash generation unchanged.
+        // The monomorphic IC on `array.length` validates via Rhash gen, so a
+        // no-bump pop stale-caches length -> tight `while (arr.length > n)
+        // arr.pop()` loops spin forever.
+        ++prop.gen;
+        ++this.gen;
         return ret != null ? ret : Rv._undefined;
     }
 
@@ -879,6 +984,12 @@ public class Rv {
     public static final Rv _String;
     public static final Rv _Date;
     public static final Rv _Error;
+    /** ES6 Map constructor slot (initialized lazily by StdLib). */
+    public static Rv _Map;
+    /** ES6 Set constructor slot (initialized lazily by StdLib). */
+    public static Rv _Set;
+    /** ES6 Symbol constructor slot (initialized lazily by StdLib). */
+    public static Rv _Symbol;
     
     static {
         (_null = new Rv(0)).type = Rv.UNDEFINED;
@@ -925,16 +1036,17 @@ public class Rv {
     }
     
     private static final boolean isIden(Rv r1, Rv r2) {
+        // Strict equality (===): same type AND same value. The upstream RockScript
+        // had the condition inverted (returned false when types matched), which
+        // silently broke every `a === literal` check in user code.
         int t1;
-        if ((t1 = r1.type) != r2.type) {
-            switch (t1) {
-            case Rv.UNDEFINED: return true;
-            case Rv.NUMBER: return r1 != Rv._NaN && r2 != Rv._NaN && r1.num == r2.num;
-            case Rv.STRING: return r1.str.equals(r2.str);
-            default: return r1 == r2;
-            }
+        if ((t1 = r1.type) != r2.type) return false;
+        switch (t1) {
+        case Rv.UNDEFINED: return true;
+        case Rv.NUMBER:    return r1 != Rv._NaN && r2 != Rv._NaN && r1.num == r2.num;
+        case Rv.STRING:    return r1.str.equals(r2.str);
+        default:           return r1 == r2;
         }
-        return false;
     }
     
 }
