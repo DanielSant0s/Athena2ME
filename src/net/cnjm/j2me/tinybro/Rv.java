@@ -16,6 +16,8 @@ public class Rv {
     static final int ARRAY =            OBJECT + 0x0A;
     static final int ARGUMENTS =        OBJECT + 0x0B;
     static final int ERROR =            OBJECT + 0x0C;
+    /** Uint8Array: uses {@link #opaque} {@link Uint8View}; {@code num} is element count. */
+    public static final int UINT8_ARRAY = OBJECT + 0x0E;
     
     static final int FUNCTION =         0x2C;
     static final int NATIVE =           0x2D; // native function
@@ -335,6 +337,17 @@ public class Rv {
             return this.ctorOrProt != null;
         } else if (type >= Rv.ARRAY && "length".equals(p)) { // array/arguments/function/native
             return true;
+        } else if (type == Rv.UINT8_ARRAY) {
+            int pl = p.length();
+            if (pl > 0) {
+                char c0 = p.charAt(0);
+                if (c0 >= '0' && c0 <= '9') {
+                    try {
+                        int idx = Integer.parseInt(p);
+                        return idx >= 0 && idx < this.num;
+                    } catch (NumberFormatException ex) { /* fall through */ }
+                }
+            }
         }
         int ph = p.hashCode();
         Rv ctor, prot, obj, ret;
@@ -414,6 +427,20 @@ public class Rv {
         } else if ("length".equals(p)) { // array/arguments/function/native
             int num = type >= Rv.ARRAY ? this.num : -1;
             if (num >= 0) return new Rv(num);
+        } else if (type == Rv.UINT8_ARRAY) {
+            int pl = p.length();
+            if (pl > 0) {
+                char c0 = p.charAt(0);
+                if (c0 >= '0' && c0 <= '9') {
+                    try {
+                        int idx = Integer.parseInt(p);
+                        Uint8View uv = (Uint8View) this.opaque;
+                        if (idx >= 0 && idx < uv.byteLength) {
+                            return new Rv(uv.data[uv.offset + idx] & 0xff);
+                        }
+                    } catch (NumberFormatException ex) { /* fall through */ }
+                }
+            }
         }
         int ph = p.hashCode();
         Rv ctor, prot, prev, obj, ret;
@@ -497,6 +524,17 @@ public class Rv {
                 try {
                     int idx = Integer.parseInt(p);
                     obj.putl(idx, val);
+                    return this;
+                } catch (Exception ex) { }
+            } else if (obj.type == Rv.UINT8_ARRAY) {
+                try {
+                    int idx = Integer.parseInt(p);
+                    Uint8View uv = (Uint8View) obj.opaque;
+                    if (idx >= 0 && idx < uv.byteLength) {
+                        Rv n = val.toNum();
+                        int b = toInt32(numValue(n));
+                        uv.data[uv.offset + idx] = (byte) (b & 0xff);
+                    }
                     return this;
                 } catch (Exception ex) { }
             }
@@ -670,6 +708,20 @@ public class Rv {
                     : type == Rv.STRING || type == Rv.STRING_OBJECT ? this.str.length()
                     : -1;
             if (num >= 0) return new Rv(num);
+        } else if (type == Rv.UINT8_ARRAY) {
+            int pl = p.length();
+            if (pl > 0) {
+                char c0 = p.charAt(0);
+                if (c0 >= '0' && c0 <= '9') {
+                    try {
+                        int idx = Integer.parseInt(p);
+                        Uint8View uv = (Uint8View) this.opaque;
+                        if (idx >= 0 && idx < uv.byteLength) {
+                            return new Rv(uv.data[uv.offset + idx] & 0xff);
+                        }
+                    } catch (NumberFormatException ex) { /* fall through */ }
+                }
+            }
         }
         int ph = key.hash;
         if (ph == 0) ph = key.hash = p.hashCode();
@@ -1240,6 +1292,48 @@ public class Rv {
     public static Rv _Set;
     /** ES6 Symbol constructor slot (initialized lazily by StdLib). */
     public static Rv _Symbol;
+    /** ArrayBuffer constructor (initialized lazily by StdLib). */
+    public static Rv _ArrayBuffer;
+    /** Uint8Array constructor (initialized lazily by StdLib). */
+    public static Rv _Uint8Array;
+    /** DataView constructor (initialized lazily by StdLib). */
+    public static Rv _DataView;
+
+    /** Backing store for {@code ArrayBuffer} instances ({@code opaque}). */
+    public static final class ArrayBufferBacking {
+        public final byte[] data;
+        public ArrayBufferBacking(byte[] data) {
+            this.data = data;
+        }
+    }
+
+    /** Shared byte view for {@code Uint8Array} ({@code opaque} when {@link #type} is {@link #UINT8_ARRAY}). */
+    public static final class Uint8View {
+        public final byte[] data;
+        public final int offset;
+        public final int byteLength;
+        public final Rv bufferRv;
+        public Uint8View(byte[] data, int offset, int byteLength, Rv bufferRv) {
+            this.data = data;
+            this.offset = offset;
+            this.byteLength = byteLength;
+            this.bufferRv = bufferRv;
+        }
+    }
+
+    /** Byte range for {@code DataView} instances ({@code opaque}). */
+    public static final class DataViewState {
+        public final byte[] data;
+        public final int offset;
+        public final int byteLength;
+        public final Rv bufferRv;
+        public DataViewState(byte[] data, int offset, int byteLength, Rv bufferRv) {
+            this.data = data;
+            this.offset = offset;
+            this.byteLength = byteLength;
+            this.bufferRv = bufferRv;
+        }
+    }
     
     static {
         (_null = new Rv(0)).type = Rv.UNDEFINED;

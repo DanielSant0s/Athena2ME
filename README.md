@@ -81,7 +81,7 @@ New types are always being added and this list can grow a lot over time, so stay
 - [ ] Network (requests, sockets, websockets)
 - [ ] Archive (zip, 7zip, tar, rar) system
 - [x] Add float support
-- [ ] Add ArrayBuffer support
+- [x] Add ArrayBuffer support (`ArrayBuffer`, `Uint8Array`, `DataView` subset — see standard library list)
 - [ ] Block-scoped `let`/`const` (currently hoisted like `var`)
 - [ ] `async`/`await`, generators, regex literals
 
@@ -326,7 +326,7 @@ runnable smoke suite covering every feature listed above.
 
 ### JavaScript standard library
 
-Hot paths (Array/Object/String/JSON/Number/Math/Map/Set/Symbol) are implemented
+Hot paths (Array/Object/String/JSON/Number/Math/binary views/Map/Set/Symbol) are implemented
 as `NativeFunctionFast` bindings in [`StdLib.java`](src/net/cnjm/j2me/tinybro/StdLib.java)
 and are resolved with the fast-dispatch path described above.
 
@@ -350,6 +350,11 @@ and are resolved with the fast-dispatch path described above.
   `sqrt`, `pow`, `sin`, `cos`, `tan`, `atan`, `atan2`, `exp`, `log`, `PI`,
   `E` (trigonometric / transcendental functions use precomputed lookup tables
   to stay predictable on CLDC 1.1)
+* **ArrayBuffer** — `byteLength`, `slice`
+* **Uint8Array** — `length`, `buffer`, `byteOffset`, `byteLength`, `subarray`,
+  numeric index `u[i]` (read/write 0–255), `for...of` via index desugaring
+* **DataView** — `getUint8`/`setUint8`, `getUint16`/`setUint16`, `getInt32`/`setInt32`
+  with optional `littleEndian`
 * **Map** / **Set** / **Symbol** — constructors, `size`, `get`/`set`/`has`/
   `delete`, `keys`/`values`/`entries`, iteration via `for...of`
 * **Date** — `now`, `getTime`, `setTime`

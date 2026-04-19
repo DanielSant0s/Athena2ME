@@ -6,6 +6,7 @@
 //    * arrow functions                         * template literals
 //    * destructuring (array, object, params)   * for...of
 //    * default parameters / rest parameters    * Array.map / filter / some
+//    * Uint8Array (compact board occupancy for apple placement)
 //
 //  Keep the visual language TIGHT and cheap: we only have ~1ms per frame on
 //  an S40 mid-range. Every draw call matters.
@@ -26,6 +27,19 @@ const BOARD_W   = COLS * CELL;
 const BOARD_H   = ROWS * CELL;
 const BOARD_X1  = BOARD_X0 + BOARD_W;
 const BOARD_Y1  = BOARD_Y0 + BOARD_H;
+
+// One byte per grid cell: 0 = free, 1 = snake. Reused every apple respawn so we
+// avoid O(snake) Array.some() inside the random-retry and fallback scans.
+const boardOcc = new Uint8Array(COLS * ROWS);
+
+function syncBoardOcc(occ, snake_body) {
+    let i;
+    for (i = 0; i < occ.length; i++) occ[i] = 0;
+    for (i = 0; i < snake_body.length; i++) {
+        const s = snake_body[i];
+        occ[s.y * COLS + s.x] = 1;
+    }
+}
 
 // ---- palette (neon) ---------------------------------------------------------
 
@@ -225,17 +239,18 @@ class Apple {
     constructor() { this.x = 0; this.y = 0; this.pulse = 0; this.respawn([]); }
 
     respawn(snake_body) {
+        syncBoardOcc(boardOcc, snake_body);
         // Try random; if collides with snake, scan linearly for a free cell.
         for (let attempts = 0; attempts < 40; attempts++) {
             const rx = Math.floor(Math.random() * COLS);
             const ry = Math.floor(Math.random() * ROWS);
-            if (!snake_body.some(s => s.x === rx && s.y === ry)) {
+            if (boardOcc[ry * COLS + rx] === 0) {
                 this.x = rx; this.y = ry; return;
             }
         }
         for (let y = 0; y < ROWS; y++) {
             for (let x = 0; x < COLS; x++) {
-                if (!snake_body.some(s => s.x === x && s.y === y)) {
+                if (boardOcc[y * COLS + x] === 0) {
                     this.x = x; this.y = y; return;
                 }
             }

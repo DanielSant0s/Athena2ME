@@ -216,6 +216,45 @@ line`, "multi\nline", "template newline");
         eq(a === a, true, "Symbol identity");
     }
 
+    function testArrayBuffer() {
+        var ab = new ArrayBuffer(8);
+        eq(ab.byteLength, 8, "ArrayBuffer.byteLength");
+        eq(ab instanceof ArrayBuffer, true, "instanceof ArrayBuffer");
+
+        var u = new Uint8Array(ab);
+        eq(u.length, 8, "Uint8Array.length");
+        eq(u instanceof Uint8Array, true, "instanceof Uint8Array");
+        u[0] = 200;
+        u[7] = 99;
+        eq(u[0], 200, "Uint8Array[] read");
+        eq(u[7], 99, "Uint8Array[] end");
+
+        var u2 = new Uint8Array(ab);
+        eq(u2[0], 200, "Uint8Array shares ArrayBuffer");
+
+        var sub = ab.slice(2, 6);
+        eq(sub.byteLength, 4, "ArrayBuffer.slice length");
+        var us = new Uint8Array(sub);
+        eq(us[0], 0, "slice is zero-filled copy");
+
+        var v = u.subarray(2, 6);
+        v[0] = 55;
+        eq(u[2], 55, "subarray shares memory");
+
+        var empty = new Uint8Array();
+        eq(empty.length, 0, "Uint8Array no-args");
+
+        var d = new DataView(ab);
+        d.setUint16(0, 0x3412, true);
+        eq(d.getUint16(0, true), 0x3412, "DataView uint16 LE");
+        d.setUint32(0, -1, false);
+        eq(d.getInt32(0, false), -1, "DataView int32 BE");
+
+        var sum = 0;
+        for (var i = 0; i < u.length; i++) sum = sum + u[i];
+        truthy(sum >= 200, "indexed sum over Uint8Array");
+    }
+
     // ------------------------------------------------------------------------
 
     function runAll() {
@@ -237,6 +276,7 @@ line`, "multi\nline", "template newline");
         try { testClass(); }         catch (e) { failed++; console.log("FAIL class: " + e.message); }
         try { testMapSet(); }        catch (e) { failed++; console.log("FAIL mapset: " + e.message); }
         try { testSymbol(); }        catch (e) { failed++; console.log("FAIL symbol: " + e.message); }
+        try { testArrayBuffer(); }   catch (e) { failed++; console.log("FAIL arraybuffer: " + e.message); }
 
         console.log("----------");
         console.log("Tests run: " + total + ", failed: " + failed);

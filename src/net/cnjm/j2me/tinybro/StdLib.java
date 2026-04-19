@@ -83,6 +83,109 @@ final class StdLib {
         arr.putl(arr.num, v);
     }
 
+    /** Caps single ArrayBuffer allocation size for J2ME heap safety. */
+    static final int MAX_ARRAY_BUFFER_BYTES = 16 * 1024 * 1024;
+
+    static final int clampArrayBufferLength(double d) {
+        if (Double.isNaN(d) || d <= 0) return 0;
+        if (d > MAX_ARRAY_BUFFER_BYTES) return MAX_ARRAY_BUFFER_BYTES;
+        return (int) d;
+    }
+
+    static final int sliceIndex(double x, int len) {
+        int k = Rv.toInt32(x);
+        if (k < 0) {
+            k = len + k;
+            if (k < 0) k = 0;
+        }
+        if (k > len) k = len;
+        return k;
+    }
+
+    static final int sliceEndIndex(double x, int len, int start) {
+        int k = Rv.toInt32(x);
+        if (k < 0) {
+            k = len + k;
+            if (k < 0) k = 0;
+        }
+        if (k > len) k = len;
+        if (k < start) k = start;
+        return k;
+    }
+
+    static final Rv newArrayBufferRv(int rawLen) {
+        int n = clampArrayBufferLength((double) rawLen);
+        Rv bufRv = new Rv(Rv.OBJECT, Rv._ArrayBuffer);
+        bufRv.type = Rv.OBJECT;
+        bufRv.ctorOrProt = Rv._ArrayBuffer;
+        bufRv.opaque = new Rv.ArrayBufferBacking(n > 0 ? new byte[n] : new byte[0]);
+        bufRv.putl("byteLength", new Rv(n));
+        return bufRv;
+    }
+
+    static final boolean littleEndianArg(Pack args, int start, int num, int i) {
+        Rv v = arg(args, start, num, i);
+        return v != null && v != Rv._undefined && v.asBool();
+    }
+
+    static final int readUint16(byte[] data, int pos, boolean le) {
+        if (le) {
+            return (data[pos] & 0xff) | ((data[pos + 1] & 0xff) << 8);
+        }
+        return ((data[pos] & 0xff) << 8) | (data[pos + 1] & 0xff);
+    }
+
+    static final void writeUint16(byte[] data, int pos, int v, boolean le) {
+        v &= 0xffff;
+        if (le) {
+            data[pos] = (byte) (v & 0xff);
+            data[pos + 1] = (byte) ((v >> 8) & 0xff);
+        } else {
+            data[pos] = (byte) ((v >> 8) & 0xff);
+            data[pos + 1] = (byte) (v & 0xff);
+        }
+    }
+
+    static final int readInt32(byte[] data, int pos, boolean le) {
+        int b0 = data[pos] & 0xff;
+        int b1 = data[pos + 1] & 0xff;
+        int b2 = data[pos + 2] & 0xff;
+        int b3 = data[pos + 3] & 0xff;
+        if (le) {
+            return (b3 << 24) | (b2 << 16) | (b1 << 8) | b0;
+        }
+        return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+    }
+
+    static final void writeInt32(byte[] data, int pos, int v, boolean le) {
+        if (le) {
+            data[pos] = (byte) (v & 0xff);
+            data[pos + 1] = (byte) ((v >> 8) & 0xff);
+            data[pos + 2] = (byte) ((v >> 16) & 0xff);
+            data[pos + 3] = (byte) ((v >> 24) & 0xff);
+        } else {
+            data[pos] = (byte) ((v >> 24) & 0xff);
+            data[pos + 1] = (byte) ((v >> 16) & 0xff);
+            data[pos + 2] = (byte) ((v >> 8) & 0xff);
+            data[pos + 3] = (byte) (v & 0xff);
+        }
+    }
+
+    static final Rv.ArrayBufferBacking arrayBufferOf(Rv r) {
+        return r != null && r.opaque instanceof Rv.ArrayBufferBacking
+                ? (Rv.ArrayBufferBacking) r.opaque : null;
+    }
+
+    static final Rv.Uint8View uint8ViewOf(Rv r) {
+        return r != null && r.type == Rv.UINT8_ARRAY && r.opaque instanceof Rv.Uint8View
+                ? (Rv.Uint8View) r.opaque : null;
+    }
+
+    static final Rv.DataViewState dataViewOf(Rv r) {
+        return r != null && r.opaque instanceof Rv.DataViewState
+                ? (Rv.DataViewState) r.opaque : null;
+    }
+
     // ------------------------------------------------------------------
     //  Installation
     // ------------------------------------------------------------------
@@ -177,6 +280,27 @@ final class StdLib {
             math.putl("PI",     new Rv(Math.PI));
             math.putl("E",      new Rv(Math.E));
         }
+
+        // ---- ArrayBuffer / Uint8Array / DataView ----
+        Rv._ArrayBuffer = new Rv();
+        Rv._ArrayBuffer.nativeCtor("ArrayBuffer", go).ctorOrProt
+                .putl("slice", ri.addNativeFunction(entryOf("ArrayBuffer.slice")));
+        go.putl("ArrayBuffer", Rv._ArrayBuffer);
+
+        Rv._Uint8Array = new Rv();
+        Rv._Uint8Array.nativeCtor("Uint8Array", go).ctorOrProt
+                .putl("subarray", ri.addNativeFunction(entryOf("Uint8Array.subarray")));
+        go.putl("Uint8Array", Rv._Uint8Array);
+
+        Rv._DataView = new Rv();
+        Rv._DataView.nativeCtor("DataView", go).ctorOrProt
+                .putl("getUint8", ri.addNativeFunction(entryOf("DataView.getUint8")))
+                .putl("setUint8", ri.addNativeFunction(entryOf("DataView.setUint8")))
+                .putl("getUint16", ri.addNativeFunction(entryOf("DataView.getUint16")))
+                .putl("setUint16", ri.addNativeFunction(entryOf("DataView.setUint16")))
+                .putl("getInt32", ri.addNativeFunction(entryOf("DataView.getInt32")))
+                .putl("setInt32", ri.addNativeFunction(entryOf("DataView.setInt32")));
+        go.putl("DataView", Rv._DataView);
 
         // ---- Map / Set / Symbol (Fase D) ----
         Rv._Map = new Rv();
@@ -1042,6 +1166,230 @@ final class StdLib {
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
                 double v = toDouble(arg(args, start, num, 0), 0);
                 return new Rv(v < 0 ? Math.ceil(v) : Math.floor(v));
+            }
+        }),
+
+        // ============================================================
+        //           ArrayBuffer / Uint8Array / DataView
+        // ============================================================
+
+        new NativeFunctionListEntry("ArrayBuffer", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv inst = isNew ? thiz : new Rv(Rv.OBJECT, Rv._ArrayBuffer);
+                inst.type = Rv.OBJECT;
+                inst.ctorOrProt = Rv._ArrayBuffer;
+                int byteLen = clampArrayBufferLength(toDouble(arg(args, start, num, 0), 0));
+                byte[] data = byteLen > 0 ? new byte[byteLen] : new byte[0];
+                inst.opaque = new Rv.ArrayBufferBacking(data);
+                inst.putl("byteLength", new Rv(byteLen));
+                return inst;
+            }
+        }),
+
+        new NativeFunctionListEntry("ArrayBuffer.slice", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv.ArrayBufferBacking bb = arrayBufferOf(thiz);
+                if (bb == null) return Rv._undefined;
+                int len = bb.data.length;
+                int b = sliceIndex(toDouble(arg(args, start, num, 0), 0), len);
+                int e = num > 1
+                        ? sliceEndIndex(toDouble(arg(args, start, num, 1), len), len, b)
+                        : len;
+                int n = e - b;
+                byte[] copy = n > 0 ? new byte[n] : new byte[0];
+                if (n > 0) System.arraycopy(bb.data, b, copy, 0, n);
+                Rv out = new Rv(Rv.OBJECT, Rv._ArrayBuffer);
+                out.type = Rv.OBJECT;
+                out.ctorOrProt = Rv._ArrayBuffer;
+                out.opaque = new Rv.ArrayBufferBacking(copy);
+                out.putl("byteLength", new Rv(n));
+                return out;
+            }
+        }),
+
+        new NativeFunctionListEntry("Uint8Array", new NativeFunctionFast() {
+            public final int length = 3;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv inst = isNew ? thiz : new Rv(Rv.UINT8_ARRAY, Rv._Uint8Array);
+                inst.type = Rv.UINT8_ARRAY;
+                inst.ctorOrProt = Rv._Uint8Array;
+                Rv a0 = arg(args, start, num, 0);
+                if (a0 == null || a0 == Rv._undefined) {
+                    Rv bufRv = newArrayBufferRv(0);
+                    Rv.ArrayBufferBacking bb = arrayBufferOf(bufRv);
+                    inst.opaque = new Rv.Uint8View(bb.data, 0, 0, bufRv);
+                    inst.num = 0;
+                    inst.putl("buffer", bufRv);
+                    inst.putl("byteOffset", new Rv(0));
+                    inst.putl("byteLength", new Rv(0));
+                    return inst;
+                }
+                Rv.ArrayBufferBacking bb0 = arrayBufferOf(a0);
+                if (bb0 != null) {
+                    int bufLen = bb0.data.length;
+                    int bo = toInt(arg(args, start, num, 1), 0);
+                    if (bo < 0) bo = 0;
+                    if (bo > bufLen) bo = bufLen;
+                    int elen;
+                    if (num >= 3 && arg(args, start, num, 2) != Rv._undefined) {
+                        elen = toInt(arg(args, start, num, 2), bufLen - bo);
+                    } else {
+                        elen = bufLen - bo;
+                    }
+                    if (elen < 0) elen = 0;
+                    if (bo + elen > bufLen) elen = bufLen - bo;
+                    inst.opaque = new Rv.Uint8View(bb0.data, bo, elen, a0);
+                    inst.num = elen;
+                    inst.putl("buffer", a0);
+                    inst.putl("byteOffset", new Rv(bo));
+                    inst.putl("byteLength", new Rv(elen));
+                    return inst;
+                }
+                int n = clampArrayBufferLength(toDouble(a0, 0));
+                Rv bufRv = newArrayBufferRv(n);
+                Rv.ArrayBufferBacking bb = arrayBufferOf(bufRv);
+                inst.opaque = new Rv.Uint8View(bb.data, 0, n, bufRv);
+                inst.num = n;
+                inst.putl("buffer", bufRv);
+                inst.putl("byteOffset", new Rv(0));
+                inst.putl("byteLength", new Rv(n));
+                return inst;
+            }
+        }),
+
+        new NativeFunctionListEntry("Uint8Array.subarray", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv.Uint8View uv = uint8ViewOf(thiz);
+                if (uv == null) return Rv._undefined;
+                int len = uv.byteLength;
+                int b = sliceIndex(toDouble(arg(args, start, num, 0), 0), len);
+                int e = num > 1
+                        ? sliceEndIndex(toDouble(arg(args, start, num, 1), len), len, b)
+                        : len;
+                int n = e - b;
+                Rv out = new Rv(Rv.UINT8_ARRAY, Rv._Uint8Array);
+                out.type = Rv.UINT8_ARRAY;
+                out.ctorOrProt = Rv._Uint8Array;
+                out.opaque = new Rv.Uint8View(uv.data, uv.offset + b, n, uv.bufferRv);
+                out.num = n;
+                out.putl("buffer", uv.bufferRv);
+                out.putl("byteOffset", new Rv(uv.offset + b));
+                out.putl("byteLength", new Rv(n));
+                return out;
+            }
+        }),
+
+        new NativeFunctionListEntry("DataView", new NativeFunctionFast() {
+            public final int length = 3;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv inst = isNew ? thiz : new Rv(Rv.OBJECT, Rv._DataView);
+                inst.type = Rv.OBJECT;
+                inst.ctorOrProt = Rv._DataView;
+                Rv buf = arg(args, start, num, 0);
+                Rv.ArrayBufferBacking bb = arrayBufferOf(buf);
+                if (bb == null) {
+                    inst.opaque = new Rv.DataViewState(new byte[0], 0, 0, buf);
+                    return inst;
+                }
+                int bufLen = bb.data.length;
+                int bo = toInt(arg(args, start, num, 1), 0);
+                if (bo < 0) bo = 0;
+                if (bo > bufLen) bo = bufLen;
+                int vlen;
+                if (num >= 3 && arg(args, start, num, 2) != Rv._undefined) {
+                    vlen = toInt(arg(args, start, num, 2), bufLen - bo);
+                } else {
+                    vlen = bufLen - bo;
+                }
+                if (vlen < 0) vlen = 0;
+                if (bo + vlen > bufLen) vlen = bufLen - bo;
+                inst.opaque = new Rv.DataViewState(bb.data, bo, vlen, buf);
+                return inst;
+            }
+        }),
+
+        new NativeFunctionListEntry("DataView.getUint8", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv.DataViewState dv = dataViewOf(thiz);
+                if (dv == null) return Rv._undefined;
+                int rel = toInt(arg(args, start, num, 0), 0);
+                if (rel < 0 || rel >= dv.byteLength) return Rv._undefined;
+                return new Rv(dv.data[dv.offset + rel] & 0xff);
+            }
+        }),
+
+        new NativeFunctionListEntry("DataView.setUint8", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv.DataViewState dv = dataViewOf(thiz);
+                if (dv == null) return Rv._undefined;
+                int rel = toInt(arg(args, start, num, 0), 0);
+                if (rel < 0 || rel >= dv.byteLength) return Rv._undefined;
+                Rv a1 = arg(args, start, num, 1);
+                if (a1 == null || a1 == Rv._undefined) return Rv._undefined;
+                int b = Rv.toInt32(Rv.numValue(a1.toNum())) & 0xff;
+                dv.data[dv.offset + rel] = (byte) b;
+                return Rv._undefined;
+            }
+        }),
+
+        new NativeFunctionListEntry("DataView.getUint16", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv.DataViewState dv = dataViewOf(thiz);
+                if (dv == null) return Rv._undefined;
+                int rel = toInt(arg(args, start, num, 0), 0);
+                boolean le = littleEndianArg(args, start, num, 1);
+                if (rel < 0 || rel + 2 > dv.byteLength) return Rv._undefined;
+                return new Rv(readUint16(dv.data, dv.offset + rel, le));
+            }
+        }),
+
+        new NativeFunctionListEntry("DataView.setUint16", new NativeFunctionFast() {
+            public final int length = 3;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv.DataViewState dv = dataViewOf(thiz);
+                if (dv == null) return Rv._undefined;
+                int rel = toInt(arg(args, start, num, 0), 0);
+                boolean le = littleEndianArg(args, start, num, 2);
+                if (rel < 0 || rel + 2 > dv.byteLength) return Rv._undefined;
+                Rv av = arg(args, start, num, 1);
+                if (av == null || av == Rv._undefined) return Rv._undefined;
+                int v = Rv.toInt32(Rv.numValue(av.toNum())) & 0xffff;
+                writeUint16(dv.data, dv.offset + rel, v, le);
+                return Rv._undefined;
+            }
+        }),
+
+        new NativeFunctionListEntry("DataView.getInt32", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv.DataViewState dv = dataViewOf(thiz);
+                if (dv == null) return Rv._undefined;
+                int rel = toInt(arg(args, start, num, 0), 0);
+                boolean le = littleEndianArg(args, start, num, 1);
+                if (rel < 0 || rel + 4 > dv.byteLength) return Rv._undefined;
+                return new Rv(readInt32(dv.data, dv.offset + rel, le));
+            }
+        }),
+
+        new NativeFunctionListEntry("DataView.setInt32", new NativeFunctionFast() {
+            public final int length = 3;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv.DataViewState dv = dataViewOf(thiz);
+                if (dv == null) return Rv._undefined;
+                int rel = toInt(arg(args, start, num, 0), 0);
+                boolean le = littleEndianArg(args, start, num, 2);
+                if (rel < 0 || rel + 4 > dv.byteLength) return Rv._undefined;
+                Rv av = arg(args, start, num, 1);
+                if (av == null || av == Rv._undefined) return Rv._undefined;
+                int v = Rv.toInt32(Rv.numValue(av.toNum()));
+                writeInt32(dv.data, dv.offset + rel, v, le);
+                return Rv._undefined;
             }
         }),
 
