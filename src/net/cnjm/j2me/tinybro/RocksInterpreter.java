@@ -93,25 +93,54 @@ mainswitch:
                 if (continueline && c == RC.TOK_EOL) {
                     ++pos;
                     continueline = false;
-                } else if (c >= '0' && c <= '9') { // number
-                    int next, p = pos, ival;
+                } else if (c >= '0' && c <= '9'
+                        || c == '.' && pos + 1 < endpos && cc[pos + 1] >= '0' && cc[pos + 1] <= '9') { // number
+                    int next, p = pos;
                     if (c == '0' && pos + 1 < endpos && ((next = cc[pos + 1]) == 'x' || next == 'X')) {
                         int d;
                         for (d = 8, pos += 2, c = cc[pos]; --d >= 0 
                                 && (c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F');
                                 c = cc[++pos])
                             ;
-                        ival = (int) Long.parseLong(new String(cc, p + 2, pos - p - 2), 16);
+                        int ival = (int) Long.parseLong(new String(cc, p + 2, pos - p - 2), 16);
+                        addToken(tt, RC.TOK_NUMBER, p, pos - p, new Rv(ival));
                     } else {
-                        boolean noPoint = true;
-                        while (c >= '0' && c <= '9' || noPoint && c == '.') {
-                            if (c == '.') noPoint = false;
+                        if (c == '.') {
                             ++pos;
                             c = pos < endpos ? cc[pos] : 0;
+                            while (c >= '0' && c <= '9') {
+                                ++pos;
+                                c = pos < endpos ? cc[pos] : 0;
+                            }
+                        } else {
+                            while (c >= '0' && c <= '9') {
+                                ++pos;
+                                c = pos < endpos ? cc[pos] : 0;
+                            }
+                            if (c == '.') {
+                                ++pos;
+                                c = pos < endpos ? cc[pos] : 0;
+                                while (c >= '0' && c <= '9') {
+                                    ++pos;
+                                    c = pos < endpos ? cc[pos] : 0;
+                                }
+                            }
                         }
-                        ival = Integer.parseInt(new String(cc, p, pos - p)); 
+                        if (c == 'e' || c == 'E') {
+                            ++pos;
+                            c = pos < endpos ? cc[pos] : 0;
+                            if (c == '+' || c == '-') {
+                                ++pos;
+                                c = pos < endpos ? cc[pos] : 0;
+                            }
+                            while (c >= '0' && c <= '9') {
+                                ++pos;
+                                c = pos < endpos ? cc[pos] : 0;
+                            }
+                        }
+                        String sub = new String(cc, p, pos - p);
+                        addToken(tt, RC.TOK_NUMBER, p, pos - p, new Rv(Double.parseDouble(sub)));
                     }
-                    addToken(tt, RC.TOK_NUMBER, p, pos - p, new Integer(ival));
                     afterDot = false; 
                 } else if (c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
                     || c == '_' || c == '$') { // symbol or keyword
@@ -607,7 +636,7 @@ mainloop:
                     break;
                 case 4: // n
                     Object o = to[1];
-                    Rv val = t == RC.TOK_NUMBER ? new Rv(((Integer) o).intValue()) 
+                    Rv val = t == RC.TOK_NUMBER ? (o instanceof Rv ? (Rv) o : new Rv(((Integer) o).intValue()))
                             : t == RC.TOK_STRING ? new Rv((String) o)
                             : Rv.symbol((String) o);
                     rpn.add(t).add(val); // this must be an operand
@@ -1201,7 +1230,9 @@ mainloop:
                             int type;
                             if ((type = arg.type) == Rv.NUMBER || type == Rv.NUMBER_OBJECT) {
                                 ret.type = Rv.NUMBER_OBJECT;
+                                ret.f = arg.f;
                                 ret.num = arg.num;
+                                ret.d = arg.d;
                             } else if (type == Rv.STRING || type == Rv.STRING_OBJECT) {
                                 ret.type = Rv.STRING_OBJECT;
                                 ret.str = arg.str;
@@ -1229,7 +1260,14 @@ mainloop:
                             ret = new Rv(0);
                         }
 
-                        ret.num = arg != null && (arg = arg.toNum()) != Rv._NaN ? arg.num : 0;
+                        if (arg != null && (arg = arg.toNum()) != Rv._NaN) {
+                            ret.f = arg.f;
+                            ret.num = arg.num;
+                            ret.d = arg.d;
+                        } else {
+                            ret.f = false;
+                            ret.num = 0;
+                        }
 
                         return ret;
                     }
@@ -1266,7 +1304,7 @@ mainloop:
                         Rv len;
 
                         if (args.num == 1 && (len = _this.toNum()) != Rv._NaN) {
-                            ret.num = len.num;
+                            ret.num = (int) Rv.numValue(len);
                         } else { // 0 or more
                             ret.num = args.num;
                             for (int i = 0; i < args.num; i++) {
@@ -1287,7 +1325,9 @@ mainloop:
                         Rv ret = isNew ? _this : new Rv(Rv.OBJECT, Rv._Date);
                         ret.type = Rv.NUMBER_OBJECT;
                         ret.ctorOrProt = Rv._Date;
-                        _this.num = arg != null && (arg = arg.toNum()) != Rv._NaN ? arg.num 
+                        _this.f = false;
+                        _this.num = arg != null && (arg = arg.toNum()) != Rv._NaN
+                                ? (int) Rv.numValue(arg)
                                 : (int) (System.currentTimeMillis() - bootTime);
 
                         return ret;
@@ -1350,7 +1390,13 @@ mainloop:
                 new NativeFunction() {
                     public final int length = 0;
                     public Rv func(boolean isNew, Rv _this, Rv args) {
-                        return _this.type == Rv.NUMBER_OBJECT ? _this : Rv._undefined;
+                        if (_this.type != Rv.NUMBER_OBJECT) return Rv._undefined;
+                        Rv r = new Rv(0);
+                        r.type = Rv.NUMBER;
+                        r.f = _this.f;
+                        r.num = _this.num;
+                        r.d = _this.d;
+                        return r;
                     }
                 }
             ),
@@ -1369,7 +1415,7 @@ mainloop:
                     public final int length = 1;
                     public Rv func(boolean isNew, Rv _this, Rv args) {
                         Rv arg = args.get("0");
-                        int pos = (arg = arg.toNum()) != Rv._NaN ? arg.num : -1;
+                        int pos = (arg = arg.toNum()) != Rv._NaN ? (int) Rv.numValue(arg) : -1;
                         return pos < 0 || pos >= _this.str.length() ? Rv._empty
                                 : new Rv(String.valueOf(_this.str.charAt(pos)));
                     }
@@ -1385,7 +1431,7 @@ mainloop:
                         Rv ret = new Rv(-1);
                         if (key != null) {
                             String s = key.toStr().str;
-                            int idx = start != null && (start = start.toNum()) != Rv._NaN ? start.num : 0;
+                            int idx = start != null && (start = start.toNum()) != Rv._NaN ? (int) Rv.numValue(start) : 0;
                             ret = new Rv(_this.str.indexOf(s, idx));
                         }
 
@@ -1406,7 +1452,7 @@ mainloop:
                             String s = arg0.toStr().str;
                             String src = thiz.toStr().str;
                             int l = s.length(), srcl = src.length();
-                            int idx = arg1 != null && (arg1 = arg1.toNum()) != Rv._NaN ? arg1.num : srcl;
+                            int idx = arg1 != null && (arg1 = arg1.toNum()) != Rv._NaN ? (int) Rv.numValue(arg1) : srcl;
                             if (idx >= 0) {
                                 if (idx >= srcl - l) idx = srcl - l;
                                 for (int i = idx + 1; --i >= 0;) {
@@ -1433,8 +1479,8 @@ mainloop:
                         
                         if (arg0 != null) {
                             thiz = thiz.toStr();
-                            int i1 = (arg0 = arg0.toNum()) != Rv._NaN ? arg0.num : 0;
-                            int i2 = arg1 != null && (arg1 = arg1.toNum()) != Rv._NaN ? arg1.num : Integer.MAX_VALUE;
+                            int i1 = (arg0 = arg0.toNum()) != Rv._NaN ? (int) Rv.numValue(arg0) : 0;
+                            int i2 = arg1 != null && (arg1 = arg1.toNum()) != Rv._NaN ? (int) Rv.numValue(arg1) : Integer.MAX_VALUE;
                             int strlen;
                             if (i2 > (strlen = thiz.str.length())) i2 = strlen;
                             ret = new Rv(thiz.str.substring(i1, i2));
@@ -1455,7 +1501,7 @@ mainloop:
                         
                         if (arg0 != null) {
                             thiz = thiz.toStr();
-                            int limit = arg1 != null && (arg1 = arg1.toNum()) != Rv._NaN ? arg1.num : -1;
+                            int limit = arg1 != null && (arg1 = arg1.toNum()) != Rv._NaN ? (int) Rv.numValue(arg1) : -1;
                             String delim;
                             Pack p = split(thiz.str, delim = arg0.toStr().str);
                             if (limit >= 1) {
@@ -1482,7 +1528,7 @@ mainloop:
                     public final int length = 1;
                     public Rv func(boolean isNew, Rv thiz, Rv args) {
                         Rv arg0 = args.get("0");
-                        int pos = (arg0 = arg0.toNum()) != Rv._NaN ? arg0.num : -1;
+                        int pos = (arg0 = arg0.toNum()) != Rv._NaN ? (int) Rv.numValue(arg0) : -1;
                         Rv ret = pos < 0 || pos >= thiz.str.length() ? Rv._NaN
                                 : new Rv(thiz.str.charAt(pos));
                         
@@ -1500,7 +1546,7 @@ mainloop:
                         
                         for (int i = 0; i < argLen; i++) {
                             Rv charcode = args.get(Rv.intStr(i)).toNum();
-                            if (charcode != Rv._NaN) buf.append((char) charcode.num);
+                            if (charcode != Rv._NaN) buf.append((char) (int) Rv.numValue(charcode));
                         }
                         Rv ret = new Rv(buf.toString());
                         
@@ -1631,8 +1677,8 @@ mainloop:
                         Rhash prop = thiz.prop;
                         
                         if (arg0 != null) {
-                            int i1 = (arg0 = arg0.toNum()) != Rv._NaN ? arg0.num : 0;
-                            int i2 = arg1 != null && (arg1 = arg1.toNum()) != Rv._NaN ? arg1.num : thiz.num;
+                            int i1 = (arg0 = arg0.toNum()) != Rv._NaN ? (int) Rv.numValue(arg0) : 0;
+                            int i2 = arg1 != null && (arg1 = arg1.toNum()) != Rv._NaN ? (int) Rv.numValue(arg1) : thiz.num;
                             ret = new Rv(Rv.ARRAY, Rv._Array);
                             Rhash ht = ret.prop;
                             int i = 0, n = ret.num = i2 - i1;
@@ -1675,7 +1721,7 @@ mainloop:
                                         Rv funCo = new Rv(Rv.OBJECT, Rv._Object);
                                         funCo.prev = comp.co.prev;
                                         Rv cobak = comp.co;
-                                        grtr = call(false, comp, comp.co = funCo, thiz, argSrc, 0, 2).toNum().num > 0;
+                                        grtr = Rv.numValue(call(false, comp, comp.co = funCo, thiz, argSrc, 0, 2).toNum()) > 0;
                                         comp.co = cobak;
                                     }
                                 }
@@ -1732,7 +1778,9 @@ mainloop:
                         Rv arg0 = args.get("0");
 
                         if (arg0 != null && (arg0 = arg0.toNum()) != Rv._NaN) {
+                            thiz.f = arg0.f;
                             thiz.num = arg0.num;
+                            thiz.d = arg0.d;
                         }
 
                         return thiz;
@@ -1764,21 +1812,22 @@ mainloop:
                     public final int length = 2;
                     public Rv func(boolean isNew, Rv thiz, Rv args) {
                         Rv arg0 = args.get("0");
-                        Rv arg1 = args.get("1");
-                        Rv ret = Rv._undefined;
-                    
-                        if (arg0 != null && arg0.toNum() != Rv._NaN) {
-                            int low = arg0.num;
-                            int high = arg1 != null && arg1.toNum() != Rv._NaN ? arg1.num : low - 1;
-                            if (high <= low) {
-                                high = low;
-                                low = 0;
-                            }
-                            int rand = (random.nextInt() & 0x7FFFFFFF) % (high - low);
-                            ret = new Rv(low + rand);
+                        if (arg0 == null || arg0 == Rv._undefined) {
+                            return new Rv(random.nextDouble());
                         }
-
-                        return ret;
+                        if (arg0.toNum() == Rv._NaN) return Rv._undefined;
+                        int low = (int) Rv.numValue(arg0.toNum());
+                        Rv arg1 = args.get("1");
+                        int high = arg1 != null && arg1.toNum() != Rv._NaN
+                                ? (int) Rv.numValue(arg1.toNum()) : low - 1;
+                        if (high <= low) {
+                            high = low;
+                            low = 0;
+                        }
+                        int span = high - low;
+                        if (span <= 0) return new Rv(low);
+                        int rand = (random.nextInt() & 0x7FFFFFFF) % span;
+                        return new Rv(low + rand);
                     }
                 }
             ),
@@ -1791,14 +1840,17 @@ mainloop:
                         Rv ret = Rv._undefined;
 
                         if (argLen > 0) {
-                            int iret = Integer.MAX_VALUE;
+                            double iret = Double.POSITIVE_INFINITY;
                             for (int i = 0; i < argLen; i++) {
                                 Rv val = args.get(Rv.intStr(i)).toNum();
                                 if (val == Rv._NaN) {
-                                    ret = val;
-                                    return ret;
+                                    return val;
                                 }
-                                if (iret > val.num) iret = val.num;
+                                double v = Rv.numValue(val);
+                                if (Double.isNaN(v)) {
+                                    return Rv._NaN;
+                                }
+                                if (v < iret) iret = v;
                             }
                             ret = new Rv(iret);
                         }
@@ -1816,14 +1868,17 @@ mainloop:
                         Rv ret = Rv._undefined;
 
                         if (argLen > 0) {
-                            int iret = Integer.MIN_VALUE;
+                            double iret = Double.NEGATIVE_INFINITY;
                             for (int i = 0; i < argLen; i++) {
                                 Rv val = args.get(Rv.intStr(i)).toNum();
                                 if (val == Rv._NaN) {
-                                    ret = val;
-                                    return ret;
+                                    return val;
                                 }
-                                if (iret < val.num) iret = val.num;
+                                double v = Rv.numValue(val);
+                                if (Double.isNaN(v)) {
+                                    return Rv._NaN;
+                                }
+                                if (v > iret) iret = v;
                             }
                             ret = new Rv(iret);
                         }
@@ -1838,8 +1893,9 @@ mainloop:
                     public final int length = 1;
                     public Rv func(boolean isNew, Rv thiz, Rv args) {
                         Rv arg0 = args.get("0");
-                        Rv ret = arg0 != null && arg0 == Rv._NaN ? Rv._true : Rv._false;
-                        return ret;
+                        if (arg0 == null) return Rv._true;
+                        Rv n = arg0.toNum();
+                        return Double.isNaN(Rv.numValue(n)) ? Rv._true : Rv._false;
                     }
                 }
             ),
@@ -1852,7 +1908,7 @@ mainloop:
                         Rv arg1 = args.get("1");
                         Rv ret = Rv._undefined;
 
-                        int radix = arg1 != null && arg1.toNum() != Rv._NaN ? arg1.num : 10;
+                        int radix = arg1 != null && arg1.toNum() != Rv._NaN ? (int) Rv.numValue(arg1.toNum()) : 10;
                         String sNum = arg0 != null ? arg0.toStr().str : null;
                         try {
                             ret = new Rv(Integer.parseInt(sNum, radix));

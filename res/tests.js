@@ -90,12 +90,18 @@ var tests = (function () {
 
     function testNumber() {
         eq(Number.isInteger(3), true, "Number.isInteger(3)");
-        eq(Number.isNaN(NaN), true, "Number.isNaN(NaN)");
+        eq(Number.isNaN(0 / 0), true, "Number.isNaN(0/0)");
         eq(Number.parseInt("42"), 42, "Number.parseInt");
         eq(Math.abs(-7), 7, "Math.abs");
         eq(Math.sqrt(16), 4, "Math.sqrt(16)");
         eq(Math.pow(2, 10), 1024, "Math.pow(2,10)");
         eq(Math.sign(-5), -1, "Math.sign(-5)");
+        eq(5 / 2, 2.5, "division float");
+        eq(1.5 + 1.5, 3, "float add");
+        truthy(Math.abs(Math.sin(Math.PI / 2) - 1) < 0.02, "Math.sin PI/2");
+        eq(Math.floor(9.9), 9, "Math.floor float");
+        eq(Number.parseFloat("3.14"), 3.14, "parseFloat");
+        eq(1.9 | 0, 1, "bitwise | ToInt32");
     }
 
     // -- Fase B --------------------------------------------------------------

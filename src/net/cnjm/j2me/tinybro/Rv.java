@@ -63,6 +63,10 @@ public class Rv {
     public Object opaque;
     /** For function & native it's number of formal arguments */
     public int num;
+    /** When {@code true}, numeric value is in {@link #d} (IEEE-754); else integer fast path in {@link #num}. */
+    public boolean f;
+    /** IEEE-754 value when {@link #f} is {@code true}. */
+    public double d;
     /** For native it's the name of native function */
     public String str;
     /** For non-native function only */
@@ -88,6 +92,89 @@ public class Rv {
     public Rv(int n) {
         this.type = Rv.NUMBER;
         this.num = n;
+        this.f = false;
+    }
+
+    /** Primitive number from IEEE-754. */
+    public Rv(double x) {
+        this.type = Rv.NUMBER;
+        setPrimitiveFromDouble(x);
+    }
+
+    /** Prefer int storage when the value is an integer in int32 range; else {@link #f}/{@link #d}. */
+    public final void setPrimitiveFromDouble(double x) {
+        if (Double.isNaN(x)) {
+            this.f = true;
+            this.d = Double.NaN;
+            this.num = 0;
+            return;
+        }
+        if (Double.isInfinite(x)) {
+            this.f = true;
+            this.d = x;
+            this.num = 0;
+            return;
+        }
+        if (x >= (double) Integer.MIN_VALUE && x <= (double) Integer.MAX_VALUE) {
+            int ix = (int) x;
+            if (x == (double) ix) {
+                this.f = false;
+                this.num = ix;
+                return;
+            }
+        }
+        this.f = true;
+        this.d = x;
+        this.num = 0;
+    }
+
+    /** Numeric value as IEEE-754 (primitive or boxed number). */
+    public static final double numValue(Rv r) {
+        if (r == null || r == Rv._undefined) return Double.NaN;
+        if (r == Rv._NaN) return Double.NaN;
+        int t = r.type;
+        if (t != Rv.NUMBER && t != Rv.NUMBER_OBJECT) return Double.NaN;
+        return r.f ? r.d : (double) r.num;
+    }
+
+    public static final int toInt32(double x) {
+        if (Double.isNaN(x) || Double.isInfinite(x) || x == 0.0) {
+            return 0;
+        }
+        double mod = x % 4294967296.0;
+        if (mod >= 2147483648.0) {
+            mod -= 4294967296.0;
+        } else if (mod < -2147483648.0) {
+            mod += 4294967296.0;
+        }
+        return (int) mod;
+    }
+
+    public static final long toUint32(double x) {
+        return (long) (toInt32(x) & 0xffffffffL);
+    }
+
+    static final double jsRemainder(double n, double d) {
+        if (Double.isNaN(n) || Double.isNaN(d)) {
+            return Double.NaN;
+        }
+        if (Double.isInfinite(n)) {
+            return Double.NaN;
+        }
+        if (d == 0.0) {
+            return Double.NaN;
+        }
+        if (Double.isInfinite(d)) {
+            return n;
+        }
+        return n % d;
+    }
+
+    public static final boolean sameNumberStrict(double a, double b) {
+        if (Double.isNaN(a) || Double.isNaN(b)) {
+            return false;
+        }
+        return a == b;
     }
     
     /**
@@ -209,6 +296,8 @@ public class Rv {
             Rv newco = new Rv(t + Rv.OBJECT, t == Rv.STRING ? Rv._String : Rv._Number);
             newco.str = co.str;
             newco.num = co.num;
+            newco.f = co.f;
+            newco.d = co.d;
             this.co = newco;
         }
         // ---- monomorphic inline cache ----
@@ -389,7 +478,13 @@ public class Rv {
         } else if (type >= Rv.ARRAY && "length".equals(p)) {
             if (type == Rv.ARRAY && (val = val.toNum()) != Rv._NaN) {
                 int newNum;
-                if ((newNum = val.num) < o.num) { // trim array
+                double nv = numValue(val);
+                if (Double.isNaN(nv)) {
+                    newNum = 0;
+                } else {
+                    newNum = (int) nv;
+                }
+                if (newNum < o.num) { // trim array
                     Rhash prop = o.prop;
                     for (int i = o.num; --i >= newNum; prop.remove(0, intStr(i)));
                     ++o.gen;
@@ -461,12 +556,18 @@ public class Rv {
         switch (this.type) {
         case Rv.NUMBER:
             return this;
-        case Rv.NUMBER_OBJECT:
-            return new Rv(this.num);
+        case Rv.NUMBER_OBJECT: {
+            Rv u = new Rv(0);
+            u.type = Rv.NUMBER;
+            u.f = this.f;
+            u.num = this.num;
+            u.d = this.d;
+            return u;
+        }
         case Rv.STRING:
         case Rv.STRING_OBJECT:
             try {
-                return new Rv(Integer.parseInt(this.str));
+                return new Rv(Double.parseDouble(this.str.trim()));
             } catch (Exception ex) { }
         } 
         return Rv._NaN;
@@ -487,7 +588,18 @@ public class Rv {
             break;
         case Rv.NUMBER:
         case Rv.NUMBER_OBJECT:
-            ret = this == Rv._NaN ? "NaN" : Integer.toString(this.num);
+            if (this == Rv._NaN) {
+                ret = "NaN";
+            } else if (this.f) {
+                double v = this.d;
+                if (Double.isInfinite(v)) {
+                    ret = v > 0 ? "Infinity" : "-Infinity";
+                } else {
+                    ret = Double.toString(v);
+                }
+            } else {
+                ret = Integer.toString(this.num);
+            }
             break;
         default:
             ret = t >= Rv.OBJECT ? "object"
@@ -516,7 +628,12 @@ public class Rv {
         switch (t = this.type) {
         case Rv.NUMBER:
         case Rv.NUMBER_OBJECT:
-            return this.num != 0; // for NaN.num == 0, +/-Infinity.num != 0
+            if (this == Rv._NaN) return false;
+            if (this.f) {
+                double v = this.d;
+                return v != 0.0 && !Double.isNaN(v);
+            }
+            return this.num != 0;
         case Rv.STRING:
         case Rv.STRING_OBJECT:
             return this.str.length() > 0;
@@ -582,9 +699,20 @@ public class Rv {
     
     public final Rv pv() {
         int t;
-        return (t = this.type) == Rv.UNDEFINED || t >= Rv.OBJECT || this == Rv._NaN
-                ? this // object type, pass by reference
-                : (t == Rv.NUMBER ? new Rv(this.num) : new Rv(this.str)); // primary type, pass by value
+        if ((t = this.type) == Rv.UNDEFINED || t >= Rv.OBJECT || this == Rv._NaN) {
+            return this;
+        }
+        if (t == Rv.NUMBER) {
+            if (this.f) {
+                Rv c = new Rv(0);
+                c.type = Rv.NUMBER;
+                c.f = true;
+                c.d = this.d;
+                return c;
+            }
+            return new Rv(this.num);
+        }
+        return new Rv(this.str);
     }
     
     /**
@@ -603,8 +731,24 @@ public class Rv {
         case RC.TOK_ADD:
             if ((t1 == Rv.NUMBER || t1 == Rv.NUMBER_OBJECT) &&
                     (t2 == Rv.NUMBER || t2 == Rv.NUMBER_OBJECT)) {
+                if (!r1.f && !r2.f && r1 != Rv._NaN && r2 != Rv._NaN) {
+                    long sum = (long) r1.num + (long) r2.num;
+                    if (sum >= (long) Integer.MIN_VALUE && sum <= (long) Integer.MAX_VALUE) {
+                        this.type = Rv.NUMBER;
+                        this.f = false;
+                        this.num = (int) sum;
+                        return this;
+                    }
+                }
+                double a = numValue(r1), b = numValue(r2);
+                if (Double.isNaN(a) || Double.isNaN(b)) {
+                    this.type = Rv.NUMBER;
+                    this.setPrimitiveFromDouble(Double.NaN);
+                    return this;
+                }
                 this.type = Rv.NUMBER;
-                this.num = r1.num + r2.num;
+                this.setPrimitiveFromDouble(a + b);
+                return this;
             } else {
                 this.type = Rv.STRING;
                 this.str = r1.toStr().str + r2.toStr().str;
@@ -625,19 +769,37 @@ public class Rv {
         }
         if (op >= 0 && op < RocksInterpreter.OPTR_TABLE_SIZE
                 && RocksInterpreter.optrIndex[op] == 5) { // >, >=, <, <=
-            if (r1 == Rv._undefined || r2 == Rv._undefined 
-                    || r1 == Rv._NaN || r2 == Rv._NaN) return Rv._NaN;
+            if (r1 == Rv._undefined || r2 == Rv._undefined) {
+                return Rv._false;
+            }
             if ((t1 == Rv.NUMBER || t1 == Rv.NUMBER_OBJECT) &&
                     (t2 == Rv.NUMBER || t2 == Rv.NUMBER_OBJECT)) {
+                if (!r1.f && !r2.f && r1 != Rv._NaN && r2 != Rv._NaN) {
+                    int ai = r1.num, bi = r2.num;
+                    switch (op) {
+                    case RC.TOK_GRT:
+                        return ai > bi ? Rv._true : Rv._false;
+                    case RC.TOK_GE:
+                        return ai >= bi ? Rv._true : Rv._false;
+                    case RC.TOK_LES:
+                        return ai < bi ? Rv._true : Rv._false;
+                    case RC.TOK_LE:
+                        return ai <= bi ? Rv._true : Rv._false;
+                    }
+                }
+                double a = numValue(r1), b = numValue(r2);
+                if (Double.isNaN(a) || Double.isNaN(b)) {
+                    return Rv._false;
+                }
                 switch (op) {
                 case RC.TOK_GRT:
-                    return r1.num > r2.num ? Rv._true : Rv._false;
+                    return a > b ? Rv._true : Rv._false;
                 case RC.TOK_GE:
-                    return r1.num >= r2.num ? Rv._true : Rv._false;
+                    return a >= b ? Rv._true : Rv._false;
                 case RC.TOK_LES:
-                    return r1.num < r2.num ? Rv._true : Rv._false;
+                    return a < b ? Rv._true : Rv._false;
                 case RC.TOK_LE:
-                    return r1.num <= r2.num ? Rv._true : Rv._false;
+                    return a <= b ? Rv._true : Rv._false;
                 }
             }
             String s1 = r1.toStr().str, s2 = r2.toStr().str;
@@ -653,48 +815,102 @@ public class Rv {
             }
         } else {
             // **, *, /, %, -, <<, >>, >>>, &, ^, |
-            if ((r1 = r1.toNum()) == Rv._NaN || (r2 = r2.toNum()) == Rv._NaN) return Rv._NaN;
-            int n1 = r1.num, n2 = r2.num;
-            switch (op) {
-            case RC.TOK_MIN:
-                n1 -= n2;
-                break;
-            case RC.TOK_MUL:
-                n1 *= n2;
-                break;
-            case RC.TOK_DIV:
-                if (n2 == 0) return Rv._NaN;
-                n1 /= n2;
-                break;
-            case RC.TOK_MOD:
-                if (n2 == 0) return Rv._NaN;
-                n1 %= n2;
-                break;
-            case RC.TOK_POW:
-                int n, i;
-                for (n = n1, n1 = 1, i = n2; --i >= 0; n1 *= n);
-                break;
-            case RC.TOK_LSH:
-                n1 <<= n2;
-                break;
-            case RC.TOK_RSH:
-                n1 >>= n2;
-                break;
-            case RC.TOK_RSZ:
-                n1 >>>= n2;
-                break;
-            case RC.TOK_BAN:
-                n1 &= n2;
-                break;
-            case RC.TOK_BXO:
-                n1 ^= n2;
-                break;
-            case RC.TOK_BOR:
-                n1 |= n2;
-                break;
+            if ((r1 = r1.toNum()) == Rv._NaN || (r2 = r2.toNum()) == Rv._NaN) {
+                return Rv._NaN;
             }
-            this.num = n1;
-            return this;
+            double n1d = numValue(r1), n2d = numValue(r2);
+            if (Double.isNaN(n1d) || Double.isNaN(n2d)) {
+                this.type = Rv.NUMBER;
+                this.setPrimitiveFromDouble(Double.NaN);
+                return this;
+            }
+            switch (op) {
+            case RC.TOK_MIN: {
+                if (!r1.f && !r2.f && r1 != Rv._NaN && r2 != Rv._NaN) {
+                    long diff = (long) r1.num - (long) r2.num;
+                    if (diff >= (long) Integer.MIN_VALUE && diff <= (long) Integer.MAX_VALUE) {
+                        this.type = Rv.NUMBER;
+                        this.f = false;
+                        this.num = (int) diff;
+                        return this;
+                    }
+                }
+                this.type = Rv.NUMBER;
+                this.setPrimitiveFromDouble(n1d - n2d);
+                return this;
+            }
+            case RC.TOK_MUL: {
+                if (!r1.f && !r2.f && r1 != Rv._NaN && r2 != Rv._NaN) {
+                    long prod = (long) r1.num * (long) r2.num;
+                    if (prod >= (long) Integer.MIN_VALUE && prod <= (long) Integer.MAX_VALUE) {
+                        this.type = Rv.NUMBER;
+                        this.f = false;
+                        this.num = (int) prod;
+                        return this;
+                    }
+                }
+                this.type = Rv.NUMBER;
+                this.setPrimitiveFromDouble(n1d * n2d);
+                return this;
+            }
+            case RC.TOK_DIV: {
+                this.type = Rv.NUMBER;
+                this.setPrimitiveFromDouble(n1d / n2d);
+                return this;
+            }
+            case RC.TOK_MOD: {
+                this.type = Rv.NUMBER;
+                this.setPrimitiveFromDouble(jsRemainder(n1d, n2d));
+                return this;
+            }
+            case RC.TOK_POW: {
+                this.type = Rv.NUMBER;
+                this.setPrimitiveFromDouble(CldcMath.pow(n1d, n2d));
+                return this;
+            }
+            case RC.TOK_LSH: {
+                int a32 = toInt32(n1d), b32 = toInt32(n2d) & 31;
+                this.type = Rv.NUMBER;
+                this.f = false;
+                this.num = a32 << b32;
+                return this;
+            }
+            case RC.TOK_RSH: {
+                int a32 = toInt32(n1d), b32 = toInt32(n2d) & 31;
+                this.type = Rv.NUMBER;
+                this.f = false;
+                this.num = a32 >> b32;
+                return this;
+            }
+            case RC.TOK_RSZ: {
+                int a32 = toInt32(n1d), b32 = toInt32(n2d) & 31;
+                this.type = Rv.NUMBER;
+                this.f = false;
+                this.num = a32 >>> b32;
+                return this;
+            }
+            case RC.TOK_BAN: {
+                int a32 = toInt32(n1d), b32 = toInt32(n2d);
+                this.type = Rv.NUMBER;
+                this.f = false;
+                this.num = a32 & b32;
+                return this;
+            }
+            case RC.TOK_BXO: {
+                int a32 = toInt32(n1d), b32 = toInt32(n2d);
+                this.type = Rv.NUMBER;
+                this.f = false;
+                this.num = a32 ^ b32;
+                return this;
+            }
+            case RC.TOK_BOR: {
+                int a32 = toInt32(n1d), b32 = toInt32(n2d);
+                this.type = Rv.NUMBER;
+                this.f = false;
+                this.num = a32 | b32;
+                return this;
+            }
+            }
         }
         return Rv._undefined; // never happens
     }
@@ -709,7 +925,14 @@ public class Rv {
         case RC.TOK_NEG:
         case RC.TOK_POS:
             if ((rv = rv.evalVal(callObj).toNum()) == Rv._NaN) return Rv._NaN;
-            this.num = op == RC.TOK_NEG ? -rv.num : rv.num;
+            this.type = Rv.NUMBER;
+            if (rv.f) {
+                this.f = true;
+                this.d = op == RC.TOK_NEG ? -rv.d : rv.d;
+            } else {
+                this.f = false;
+                this.num = op == RC.TOK_NEG ? -rv.num : rv.num;
+            }
             break;
         case RC.TOK_INC:
         case RC.TOK_DEC:
@@ -719,23 +942,43 @@ public class Rv {
             if (rv == Rv._undefined) return Rv._NaN;
             Rv prop;
             if ((prop = rv.get()) == Rv._undefined || (prop = prop.toNum()) == Rv._NaN) return Rv._NaN;
-            int n = prop.num;
-            if (op == RC.TOK_INC || op == RC.TOK_POSTINC) {
-                prop.num++;
-            } else {
-                prop.num--;
+            int delta = (op == RC.TOK_INC || op == RC.TOK_POSTINC) ? 1 : -1;
+            if (!prop.f) {
+                int oldi = prop.num;
+                long newL = (long) oldi + (long) delta;
+                if (newL >= (long) Integer.MIN_VALUE && newL <= (long) Integer.MAX_VALUE) {
+                    prop.type = Rv.NUMBER;
+                    prop.f = false;
+                    prop.num = (int) newL;
+                    rv.put(prop);
+                    if (op == RC.TOK_INC || op == RC.TOK_DEC) {
+                        return prop;
+                    }
+                    this.type = Rv.NUMBER;
+                    this.f = false;
+                    this.num = oldi;
+                    break;
+                }
             }
+            double oldv = numValue(prop);
+            if (Double.isNaN(oldv)) return Rv._NaN;
+            double newv = oldv + (double) delta;
+            prop.type = Rv.NUMBER;
+            prop.setPrimitiveFromDouble(newv);
             rv.put(prop); // rv is a lvalue
             if (op == RC.TOK_INC || op == RC.TOK_DEC) {
                 return prop;
             }
-            this.num = n;
+            this.type = Rv.NUMBER;
+            this.setPrimitiveFromDouble(oldv);
             break; // postinc or postdec
         case RC.TOK_NOT:
             return rv.evalVal(callObj).asBool() ? Rv._false : Rv._true;
         case RC.TOK_BNO:
             if ((rv = rv.evalVal(callObj).toNum()) == Rv._NaN) return Rv._NaN;
-            this.num = ~rv.num;
+            this.type = Rv.NUMBER;
+            this.f = false;
+            this.num = ~toInt32(numValue(rv));
             break;
         case RC.TOK_TYPEOF:
             this.type = Rv.STRING;
@@ -782,7 +1025,12 @@ public class Rv {
             Rv obj = new Rv(Rv.OBJECT, Rv._Object);
             for (int i = idx, n = opnd.oSize - 1; i < n; i += 2) {
                 Rv k = (Rv) opnd.getObject(i);
-                String ks = k.type == Rv.NUMBER ? intStr(k.num) : k.str;
+                String ks;
+                if (k.type == Rv.NUMBER) {
+                    ks = k.f ? Double.toString(k.d) : intStr(k.num);
+                } else {
+                    ks = k.str;
+                }
                 Rv v = ((Rv) opnd.getObject(i + 1)).evalVal(callObj);
                 obj.putl(ks, v);
             }
@@ -857,7 +1105,9 @@ public class Rv {
         boolean ret = false;
         switch (rv.type) {
         case Rv.NUMBER:
-            return this.num == rv.num;
+            if (this == Rv._NaN || rv == Rv._NaN) return false;
+            if (!this.f && !rv.f) return this.num == rv.num;
+            return sameNumberStrict(numValue(this), numValue(rv));
         case Rv.STRING:
         case Rv.SYMBOL:
             return this.str.equals(rv.str);
@@ -871,7 +1121,7 @@ public class Rv {
         case Rv.ARRAY:
         case Rv.ARGUMENTS:
         case Rv.NUMBER_OBJECT:
-            return this.num == rv.num;
+            return this.f == rv.f && (this.f ? this.d == rv.d : this.num == rv.num);
         case Rv.NATIVE:
         case Rv.NATIVE | Rv.CTOR_MASK:
         case Rv.STRING_OBJECT:
@@ -892,7 +1142,7 @@ public class Rv {
         case Rv.NUMBER_OBJECT:
             s = "_object";
         case Rv.NUMBER:
-            return "number" + s + "(" + this.num + ")";
+            return "number" + s + "(" + (this.f ? Double.toString(this.d) : Integer.toString(this.num)) + ")";
         case Rv.STRING_OBJECT:
             s = "_object";
         case Rv.STRING:
@@ -1013,7 +1263,13 @@ public class Rv {
         if ((t1 = r1.type) == (t2 = r2.type)) {
             switch (t1) {
             case Rv.UNDEFINED: return true;
-            case Rv.NUMBER: return r1 != Rv._NaN && r2 != Rv._NaN && r1.num == r2.num;
+            case Rv.NUMBER: {
+                if (r1 == Rv._NaN || r2 == Rv._NaN) return false;
+                if (!r1.f && !r2.f) return r1.num == r2.num;
+                double a = numValue(r1), b = numValue(r2);
+                if (Double.isNaN(a) || Double.isNaN(b)) return false;
+                return a == b;
+            }
             case Rv.STRING: return r1.str.equals(r2.str);
             default: return r1.equals(r2);
             }
@@ -1024,7 +1280,9 @@ public class Rv {
             Rv ns = first ? r2.toNum() : r1.toNum();
             if (ns == Rv._NaN) return false;
             Rv nn = first ? r1 : r2;
-            return ns.num == nn.num;
+            double a = numValue(ns), b = numValue(nn);
+            if (Double.isNaN(a) || Double.isNaN(b)) return false;
+            return a == b;
         }
         if ((first = t1 <= Rv.STRING) && t2 >= Rv.OBJECT || t1 >= Rv.OBJECT && t2 <= Rv.STRING) {
             Rv po = first ? r2.toPrim() : r1.toPrim();
@@ -1043,7 +1301,10 @@ public class Rv {
         if ((t1 = r1.type) != r2.type) return false;
         switch (t1) {
         case Rv.UNDEFINED: return true;
-        case Rv.NUMBER:    return r1 != Rv._NaN && r2 != Rv._NaN && r1.num == r2.num;
+        case Rv.NUMBER:
+            if (r1 == Rv._NaN || r2 == Rv._NaN) return false;
+            if (!r1.f && !r2.f) return r1.num == r2.num;
+            return sameNumberStrict(numValue(r1), numValue(r2));
         case Rv.STRING:    return r1.str.equals(r2.str);
         default:           return r1 == r2;
         }

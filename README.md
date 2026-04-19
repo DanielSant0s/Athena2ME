@@ -80,7 +80,7 @@ New types are always being added and this list can grow a lot over time, so stay
 - [ ] 3D Render functions
 - [ ] Network (requests, sockets, websockets)
 - [ ] Archive (zip, 7zip, tar, rar) system
-- [ ] Add float support
+- [x] Add float support
 - [ ] Add ArrayBuffer support
 - [ ] Block-scoped `let`/`const` (currently hoisted like `var`)
 - [ ] `async`/`await`, generators, regex literals
@@ -175,8 +175,8 @@ This fork diverges substantially from the original [RockScript](https://code.goo
   (trim, includes, startsWith, repeat, padStart/End, replace, replaceAll, …),
   `JSON.parse` / `JSON.stringify` (with optional indent), `Number.isInteger/
   isFinite/isNaN/parseInt/parseFloat`, extended `Math` (sqrt, pow, sin/cos/tan,
-  atan/atan2, exp, log, PI, E — driven by lookup tables to avoid `java.lang.
-  Math` drift on CLDC 1.1), and the `Map`/`Set`/`Symbol` constructors backed
+  atan/atan2, exp, log, PI, E — **radians**, implemented with `java.lang.Math`
+  on doubles), and the `Map`/`Set`/`Symbol` constructors backed
   by `Rhash` + `Pack`. Every binding is a `NativeFunctionFast` so it
   participates in the zero-allocation dispatch path. `installStdLib(Rv go)` is
   called from `initGlobalObject()`; the MIDlet only has to register its own
@@ -206,6 +206,14 @@ This fork diverges substantially from the original [RockScript](https://code.goo
 
 #### `Rv`
 
+* **Numbers (int fast path + IEEE double).** Primitive `NUMBER` values store
+  either a 32-bit integer in `num` (`f == false`) or an IEEE 754 double in `d`
+  (`f == true`). When both operands are ints and the result still fits 32 bits,
+  `+`, `-`, `*`, relational compares, `==`/`===`, and `++`/`--` stay on the int
+  path (important on slow J2ME CPUs). Otherwise mixed operations promote as in
+  ECMAScript: `/` and `%` use real arithmetic; bitwise ops apply
+  `ToInt32`/`ToUint32`; `===` distinguishes `+0` and `-0` and treats `NaN` as
+  never equal to itself.
 * **`INT_STR` cache.** A `static final String[] INT_STR` of size 512 caches `Integer.toString(i)` for small indices. `putl(int,…)`, `shift`, `keyArray`, and every `Array.*` built-in (`push`, `pop`, `unshift`, `slice`, `sort`, `reverse`, `concat`, `join`) now use `intStr(i)` instead of allocating a fresh `String` per element operation. For `i ≥ 512` it transparently falls back to `Integer.toString(i)`.
 * **Symbol interning.** `Rv.symbol(String)` routes through a `static java.util.Hashtable _symbolPool`. Identical symbol literals (`"Draw"`, `"rect"`, `"draw"`, property names produced by the parser, …) share a single canonical `Rv` instance. Combined with the hash cache below, repeated property accesses become `==`-cheap.
 * **Cached `hashCode`.** New field `public int hash`, populated once for `SYMBOL`/`STRING` values. Used as the key hash when the `Rv` is fed into `Rhash` lookups, removing the recomputation of `String.hashCode()` on every property access.

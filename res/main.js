@@ -89,9 +89,9 @@ function vline(x, y, h, c) { Draw.rect(x, y, 1, h, c); }
 
 // ---- particles --------------------------------------------------------------
 
-// Integer-only particles. Positions and velocities are stored in "sub-pixels"
-// (1/8 px) so we get reasonably smooth motion without any floating-point math
-// (the interpreter is strictly 32-bit-int, and J2ME's Canvas is pixel-aligned).
+// Particles use sub-pixel coords (1/8 px). Velocities are sub-px/frame; sin/cos
+// are real radians — scale with `mag` only (do not divide by 1000; that was for
+// the old int-scaled trig).
 const SUB = 8;
 
 class Particle {
@@ -118,15 +118,14 @@ class Particle {
 const particles = [];
 
 function spawnBurst(cx, cy, col, n = 10) {
+    const TAU = Math.PI * 2;
     for (let i = 0; i < n; i++) {
-        // cos/sin are milli-radian in, milli-unit out: range -1000..1000.
-        // scale 24/1000 => max 24 sub-pixels per frame = 3 px/frame.
-        const ang  = Math.random(0, 6283);
-        const mag  = 16 + Math.random(0, 16); // 16..32 sub-px/frame
-        const vx   = Math.cos(ang) * mag / 1000;
-        const vy   = Math.sin(ang) * mag / 1000 - 8; // initial upward bias
+        const ang = Math.random() * TAU;
+        const mag = 16 + Math.random() * 16; // 16..32 sub-px/frame radial speed
+        const vx  = Math.cos(ang) * mag;
+        const vy  = Math.sin(ang) * mag - 8; // initial upward bias
         particles.push(new Particle(cx * SUB, cy * SUB, vx, vy,
-                                    14 + Math.random(0, 10), col));
+                                    14 + Math.floor(Math.random() * 10), col));
     }
 }
 
@@ -228,8 +227,8 @@ class Apple {
     respawn(snake_body) {
         // Try random; if collides with snake, scan linearly for a free cell.
         for (let attempts = 0; attempts < 40; attempts++) {
-            const rx = Math.random(0, COLS);
-            const ry = Math.random(0, ROWS);
+            const rx = Math.floor(Math.random() * COLS);
+            const ry = Math.floor(Math.random() * ROWS);
             if (!snake_body.some(s => s.x === rx && s.y === ry)) {
                 this.x = rx; this.y = ry; return;
             }
@@ -306,10 +305,10 @@ function drawHUD(score, best, speedLevel) {
 class Star {
     constructor() { this.reset(true); }
     reset(init) {
-        this.x = Math.random(0, W);
-        this.y = init ? Math.random(0, H) : -2;
-        this.sp = 1 + Math.random(0, 200) / 100;
-        this.c  = Math.random(0, 3);
+        this.x = Math.floor(Math.random() * W);
+        this.y = init ? Math.floor(Math.random() * H) : -2;
+        this.sp = 1 + Math.random() * 2;
+        this.c  = Math.floor(Math.random() * 3);
     }
     step() {
         this.y = this.y + this.sp;

@@ -20,7 +20,14 @@ public class Athena2ME extends MIDlet implements CommandListener {
     volatile boolean jsRunning = false;
     private Thread frameThread = null;
     volatile boolean frameRunning = false;
-    
+
+    /** Truncate a JS number toward zero for integer-only MIDP APIs. */
+    private static int jsInt(Rv v) {
+        if (v == null || v == Rv._undefined) return 0;
+        Rv n = v.toNum();
+        if (n == Rv._NaN) return 0;
+        return (int) Rv.numValue(n);
+    }
 
     public Athena2ME() {
         canvas = new AthenaCanvas(false);
@@ -92,7 +99,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
             public final int length = 2;
             public Rv func(boolean isNew, Rv _this, Rv args) {
                 String path = args.get("0").toStr().str;
-                int flags = args.get("1").toNum().num;
+                int flags = jsInt(args.get("1"));
             
                 return new Rv(AthenaFile.open(path, flags));
             }
@@ -102,7 +109,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
             ri.addNativeFunction(new NativeFunctionListEntry("os.close", new NativeFunction() {
             public final int length = 1;
             public Rv func(boolean isNew, Rv _this, Rv args) {
-                int fd = args.get("0").toNum().num;
+                int fd = jsInt(args.get("0"));
 
                 AthenaFile.close(fd);
             
@@ -114,9 +121,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
             ri.addNativeFunction(new NativeFunctionListEntry("os.seek", new NativeFunction() {
             public final int length = 1;
             public Rv func(boolean isNew, Rv _this, Rv args) {
-                int fd = args.get("0").toNum().num;
-                int offset = args.get("1").toNum().num;
-                int whence = args.get("2").toNum().num;
+                int fd = jsInt(args.get("0"));
+                int offset = jsInt(args.get("1"));
+                int whence = jsInt(args.get("2"));
             
                 return new Rv(AthenaFile.seek(fd, offset, whence));
             }
@@ -126,7 +133,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
             ri.addNativeFunction(new NativeFunctionListEntry("os.sleep", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
-                int ms = Rv.argAt(args, start, num, 0).toNum().num;
+                int ms = jsInt(Rv.argAt(args, start, num, 0));
                 if (ms < 0) ms = 0;
                 try { Thread.sleep(ms); } catch (InterruptedException e) {}
                 return Rv._undefined;
@@ -146,7 +153,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 if (self.frameRunning) return Rv._undefined;
                 final Rv fn = Rv.argAt(args, start, num, 0);
                 if (!fn.isCallable()) return Rv._undefined;
-                int fps = num > 1 ? Rv.argAt(args, start, num, 1).toNum().num : 30;
+                int fps = num > 1 ? jsInt(Rv.argAt(args, start, num, 1)) : 30;
                 if (fps < 1) fps = 1;
                 if (fps > 120) fps = 120;
                 final int frameMs = 1000 / fps;
@@ -203,7 +210,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
             ri.addNativeFunction(new NativeFunctionListEntry("Screen.clear", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
-                int color = num > 0 ? Rv.argAt(args, start, num, 0).toNum().num : canvas.CLEAR_COLOR;
+                int color = num > 0 ? jsInt(Rv.argAt(args, start, num, 0)) : canvas.CLEAR_COLOR;
 
                 canvas.clearScreen(color);
 
@@ -226,11 +233,11 @@ public class Athena2ME extends MIDlet implements CommandListener {
             ri.addNativeFunction(new NativeFunctionListEntry("Draw.line", new NativeFunctionFast() {
                 public final int length = 5;
                 public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
-                    int x1 = Rv.argAt(args, start, num, 0).toNum().num;
-                    int y1 = Rv.argAt(args, start, num, 1).toNum().num;
-                    int x2 = Rv.argAt(args, start, num, 2).toNum().num;
-                    int y2 = Rv.argAt(args, start, num, 3).toNum().num;
-                    int color = Rv.argAt(args, start, num, 4).toNum().num;
+                    int x1 = jsInt(Rv.argAt(args, start, num, 0));
+                    int y1 = jsInt(Rv.argAt(args, start, num, 1));
+                    int x2 = jsInt(Rv.argAt(args, start, num, 2));
+                    int y2 = jsInt(Rv.argAt(args, start, num, 3));
+                    int color = jsInt(Rv.argAt(args, start, num, 4));
 
                     canvas.drawLine(x1, y1, x2, y2, color);
 
@@ -242,13 +249,13 @@ public class Athena2ME extends MIDlet implements CommandListener {
             ri.addNativeFunction(new NativeFunctionListEntry("Draw.triangle", new NativeFunctionFast() {
                 public final int length = 5;
                 public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
-                    int x1 = Rv.argAt(args, start, num, 0).toNum().num;
-                    int y1 = Rv.argAt(args, start, num, 1).toNum().num;
-                    int x2 = Rv.argAt(args, start, num, 2).toNum().num;
-                    int y2 = Rv.argAt(args, start, num, 3).toNum().num;
-                    int x3 = Rv.argAt(args, start, num, 4).toNum().num;
-                    int y3 = Rv.argAt(args, start, num, 5).toNum().num;
-                    int color = Rv.argAt(args, start, num, 6).toNum().num;
+                    int x1 = jsInt(Rv.argAt(args, start, num, 0));
+                    int y1 = jsInt(Rv.argAt(args, start, num, 1));
+                    int x2 = jsInt(Rv.argAt(args, start, num, 2));
+                    int y2 = jsInt(Rv.argAt(args, start, num, 3));
+                    int x3 = jsInt(Rv.argAt(args, start, num, 4));
+                    int y3 = jsInt(Rv.argAt(args, start, num, 5));
+                    int color = jsInt(Rv.argAt(args, start, num, 6));
 
                     canvas.drawTriangle(x1, y1, x2, y2, x3, y3, color);
 
@@ -260,11 +267,11 @@ public class Athena2ME extends MIDlet implements CommandListener {
             ri.addNativeFunction(new NativeFunctionListEntry("Draw.rect", new NativeFunctionFast() {
                 public final int length = 5;
                 public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
-                    int x = Rv.argAt(args, start, num, 0).toNum().num;
-                    int y = Rv.argAt(args, start, num, 1).toNum().num;
-                    int w = Rv.argAt(args, start, num, 2).toNum().num;
-                    int h = Rv.argAt(args, start, num, 3).toNum().num;
-                    int color = Rv.argAt(args, start, num, 4).toNum().num;
+                    int x = jsInt(Rv.argAt(args, start, num, 0));
+                    int y = jsInt(Rv.argAt(args, start, num, 1));
+                    int w = jsInt(Rv.argAt(args, start, num, 2));
+                    int h = jsInt(Rv.argAt(args, start, num, 3));
+                    int color = jsInt(Rv.argAt(args, start, num, 4));
 
                     canvas.drawRect(x, y, w, h, color);
 
@@ -303,13 +310,13 @@ public class Athena2ME extends MIDlet implements CommandListener {
             ri.addNativeFunction(new NativeFunctionListEntry("Image.draw", new NativeFunctionFast() {
                 public final int length = 3;
                 public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
-                    int x = Rv.argAt(args, start, num, 0).toNum().num;
-                    int y = Rv.argAt(args, start, num, 1).toNum().num;
+                    int x = jsInt(Rv.argAt(args, start, num, 0));
+                    int y = jsInt(Rv.argAt(args, start, num, 1));
 
-                    int startx = _this.get("startx").toNum().num;
-                    int starty = _this.get("starty").toNum().num;
-                    int endx = _this.get("endx").toNum().num;
-                    int endy = _this.get("endy").toNum().num;
+                    int startx = jsInt(_this.get("startx"));
+                    int starty = jsInt(_this.get("starty"));
+                    int endx = jsInt(_this.get("endx"));
+                    int endy = jsInt(_this.get("endy"));
 
                     canvas._drawImageRegion((Image)_this.opaque, x, y, startx, starty, endx, endy);
 
@@ -348,14 +355,14 @@ public class Athena2ME extends MIDlet implements CommandListener {
                         int font_size =  Font.SIZE_MEDIUM;
 
                         if (args.num > 1) {
-                            font_style = args.get("1").toNum().num;
+                            font_style = jsInt(args.get("1"));
                         }
 
                         if (args.num > 2) {
-                            font_size =  args.get("2").toNum().num;
+                            font_size =  jsInt(args.get("2"));
                         }
 
-                        font = Font.getFont(font_face.toNum().num, font_style, font_size);
+                        font = Font.getFont(jsInt(font_face), font_style, font_size);
                     }
 
                     ret.opaque = (Object)font;
@@ -386,11 +393,11 @@ public class Athena2ME extends MIDlet implements CommandListener {
             public final int length = 3;
                 public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                     String text = Rv.argAt(args, start, num, 0).toStr().str;
-                    int x = Rv.argAt(args, start, num, 1).toNum().num;
-                    int y = Rv.argAt(args, start, num, 2).toNum().num;
+                    int x = jsInt(Rv.argAt(args, start, num, 1));
+                    int y = jsInt(Rv.argAt(args, start, num, 2));
 
-                    int color = _this.get("color").toNum().num;
-                    int align = _this.get("align").toNum().num;
+                    int color = jsInt(_this.get("color"));
+                    int align = jsInt(_this.get("align"));
 
                     canvas.drawFont(text, x, y, align, color);
 
@@ -427,10 +434,10 @@ public class Athena2ME extends MIDlet implements CommandListener {
             ri.addNativeFunction(new NativeFunctionListEntry("Color.new", new NativeFunctionFast() {
             public final int length = 4;
                 public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
-                    int r = Rv.argAt(args, start, num, 0).toNum().num;
-                    int g = Rv.argAt(args, start, num, 1).toNum().num;
-                    int b = Rv.argAt(args, start, num, 2).toNum().num;
-                    int a = num > 3 ? Rv.argAt(args, start, num, 3).toNum().num : 0;
+                    int r = jsInt(Rv.argAt(args, start, num, 0));
+                    int g = jsInt(Rv.argAt(args, start, num, 1));
+                    int b = jsInt(Rv.argAt(args, start, num, 2));
+                    int a = num > 3 ? jsInt(Rv.argAt(args, start, num, 3)) : 0;
 
                     return new Rv(AthenaColor.color(r, g, b, a));
                 }
@@ -450,7 +457,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
         ri.addToObject(_Pad, "pressed", 
             ri.addNativeFunction(new NativeFunctionListEntry("Pad.pressed", new NativeFunctionFast() {
                 public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
-                    int buttons = Rv.argAt(args, start, num, 0).toNum().num;
+                    int buttons = jsInt(Rv.argAt(args, start, num, 0));
                     return new Rv(canvas.padPressed(buttons) ? 1 : 0);
                 }
         })));
@@ -458,7 +465,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
         ri.addToObject(_Pad, "justPressed", 
             ri.addNativeFunction(new NativeFunctionListEntry("Pad.justPressed", new NativeFunctionFast() {
                 public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
-                    int buttons = Rv.argAt(args, start, num, 0).toNum().num;
+                    int buttons = jsInt(Rv.argAt(args, start, num, 0));
                     return new Rv(canvas.padJustPressed(buttons) ? 1 : 0);
                 }
         })));
@@ -528,7 +535,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 public Rv func(boolean isNew, Rv _this, Rv args) {
                     AthenaTimer timer = (AthenaTimer)_this.opaque;
 
-                    int value = args.get("0").toNum().num;
+                    int value = jsInt(args.get("0"));
 
                     timer.set(value);
 

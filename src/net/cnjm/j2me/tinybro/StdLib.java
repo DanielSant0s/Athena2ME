@@ -33,7 +33,18 @@ final class StdLib {
     static final int toInt(Rv v, int def) {
         if (v == null || v == Rv._undefined) return def;
         Rv n = v.toNum();
-        return n == Rv._NaN ? def : n.num;
+        if (n == Rv._NaN) return def;
+        double d = Rv.numValue(n);
+        if (Double.isNaN(d) || Double.isInfinite(d)) return def;
+        return (int) d;
+    }
+
+    static final double toDouble(Rv v, double def) {
+        if (v == null || v == Rv._undefined) return def;
+        Rv n = v.toNum();
+        if (n == Rv._NaN) return def;
+        double d = Rv.numValue(n);
+        return Double.isNaN(d) ? def : d;
     }
 
     static final String toStr(Rv v) {
@@ -45,64 +56,9 @@ final class StdLib {
     }
 
     // ------------------------------------------------------------------
-    //  Transcendental math — CLDC 1.1 ships sin/cos/tan/sqrt/ceil/floor
-    //  but NOT atan, atan2, exp or log. These are small-footprint
-    //  approximations good to ~4 decimal places, which is plenty for the
-    //  fixed-point-times-1000 contract the interpreter uses.
+    //  Transcendental math: see {@link CldcMath} (CLDC Math omits several
+    //  double overloads used by ES Math / ** operator).
     // ------------------------------------------------------------------
-
-    static double myAtan(double x) {
-        boolean neg = x < 0;
-        if (neg) x = -x;
-        boolean inv = x > 1;
-        if (inv) x = 1.0 / x;
-        double x2 = x * x;
-        // 5-term Maclaurin series for atan on |x|<=1
-        double r = x * (1.0 - x2 * (1.0/3.0 - x2 * (1.0/5.0 - x2 * (1.0/7.0 - x2 * (1.0/9.0)))));
-        if (inv) r = Math.PI / 2.0 - r;
-        return neg ? -r : r;
-    }
-
-    static double myAtan2(double y, double x) {
-        if (x > 0) return myAtan(y / x);
-        if (x < 0 && y >= 0) return myAtan(y / x) + Math.PI;
-        if (x < 0 && y < 0)  return myAtan(y / x) - Math.PI;
-        if (x == 0 && y > 0) return Math.PI / 2.0;
-        if (x == 0 && y < 0) return -Math.PI / 2.0;
-        return 0;
-    }
-
-    static final double E_CONST = 2.718281828459045;
-    static final double LN2 = 0.6931471805599453;
-
-    static double myExp(double x) {
-        // e^x = e^n * e^r with n integer, r in [-0.5, 0.5]
-        int n = (int) (x < 0 ? x - 0.5 : x + 0.5);
-        double r = x - n;
-        double term = 1, sum = 1;
-        for (int i = 1; i < 12; i++) {
-            term *= r / i;
-            sum += term;
-        }
-        double eN = 1;
-        if (n >= 0) { for (int i = 0; i < n;  i++) eN *= E_CONST; }
-        else        { for (int i = 0; i < -n; i++) eN /= E_CONST; }
-        return eN * sum;
-    }
-
-    static double myLog(double x) {
-        // ln(x) = k*ln2 + ln(1+u), with x in [1,2) ⇒ u in [0,1)
-        int k = 0;
-        while (x >= 2.0) { x /= 2.0; k++; }
-        while (x <  1.0) { x *= 2.0; k--; }
-        double u = x - 1.0;
-        double term = u, sum = 0;
-        for (int i = 1; i < 25; i++) {
-            sum += (i & 1) == 1 ? term / i : -term / i;
-            term *= u;
-        }
-        return k * LN2 + sum;
-    }
 
     static final Rv newArray() {
         return new Rv(Rv.ARRAY, Rv._Array);
@@ -195,9 +151,9 @@ final class StdLib {
         Rv._Number.putl("isNaN",            ri.addNativeFunction(entryOf("Number.isNaN")));
         Rv._Number.putl("parseInt",         ri.addNativeFunction(entryOf("Number.parseInt")));
         Rv._Number.putl("parseFloat",       ri.addNativeFunction(entryOf("Number.parseFloat")));
-        Rv._Number.putl("EPSILON",          new Rv(0));
-        Rv._Number.putl("MAX_SAFE_INTEGER", new Rv(Integer.MAX_VALUE));
-        Rv._Number.putl("MIN_SAFE_INTEGER", new Rv(Integer.MIN_VALUE));
+        Rv._Number.putl("EPSILON",          new Rv(2.220446049250313e-16));
+        Rv._Number.putl("MAX_SAFE_INTEGER", new Rv(9007199254740991.0));
+        Rv._Number.putl("MIN_SAFE_INTEGER", new Rv(-9007199254740991.0));
         go.putl("parseFloat", ri.addNativeFunction(entryOf("parseFloat")));
 
         // ---- Math extras ----
@@ -218,8 +174,8 @@ final class StdLib {
             math.putl("log",    ri.addNativeFunction(entryOf("Math.log")));
             math.putl("sign",   ri.addNativeFunction(entryOf("Math.sign")));
             math.putl("trunc",  ri.addNativeFunction(entryOf("Math.trunc")));
-            math.putl("PI",     new Rv((int) (Math.PI * 1000)));
-            math.putl("E",      new Rv((int) (Math.E * 1000)));
+            math.putl("PI",     new Rv(Math.PI));
+            math.putl("E",      new Rv(Math.E));
         }
 
         // ---- Map / Set / Symbol (Fase D) ----
@@ -889,7 +845,7 @@ final class StdLib {
                 String indent = null;
                 if (indentArg != null && indentArg != Rv._undefined) {
                     if (indentArg.type == Rv.NUMBER || indentArg.type == Rv.NUMBER_OBJECT) {
-                        int n2 = Math.min(10, Math.max(0, indentArg.num));
+                        int n2 = Math.min(10, Math.max(0, toInt(indentArg, 0)));
                         StringBuffer b = new StringBuffer();
                         for (int i = 0; i < n2; i++) b.append(' ');
                         indent = b.toString();
@@ -912,8 +868,12 @@ final class StdLib {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
                 Rv v = arg(args, start, num, 0);
-                return v != null && (v.type == Rv.NUMBER || v.type == Rv.NUMBER_OBJECT) && v != Rv._NaN
-                        ? Rv._true : Rv._false;
+                if (v == null || (v.type != Rv.NUMBER && v.type != Rv.NUMBER_OBJECT) || v == Rv._NaN) {
+                    return Rv._false;
+                }
+                double x = Rv.numValue(v);
+                if (Double.isNaN(x) || Double.isInfinite(x)) return Rv._false;
+                return Math.floor(x) == x ? Rv._true : Rv._false;
             }
         }),
 
@@ -921,8 +881,9 @@ final class StdLib {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
                 Rv v = arg(args, start, num, 0);
-                return v != null && (v.type == Rv.NUMBER || v.type == Rv.NUMBER_OBJECT) && v != Rv._NaN
-                        ? Rv._true : Rv._false;
+                if (v == null || (v.type != Rv.NUMBER && v.type != Rv.NUMBER_OBJECT)) return Rv._false;
+                double x = Rv.numValue(v);
+                return !Double.isNaN(x) && !Double.isInfinite(x) ? Rv._true : Rv._false;
             }
         }),
 
@@ -930,7 +891,8 @@ final class StdLib {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
                 Rv v = arg(args, start, num, 0);
-                return v == Rv._NaN ? Rv._true : Rv._false;
+                if (v == null) return Rv._false;
+                return Double.isNaN(Rv.numValue(v.toNum())) ? Rv._true : Rv._false;
             }
         }),
 
@@ -944,14 +906,14 @@ final class StdLib {
         new NativeFunctionListEntry("Number.parseFloat", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
-                return parseIntImpl(arg(args, start, num, 0), null);
+                return parseFloatImpl(arg(args, start, num, 0));
             }
         }),
 
         new NativeFunctionListEntry("parseFloat", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
-                return parseIntImpl(arg(args, start, num, 0), null);
+                return parseFloatImpl(arg(args, start, num, 0));
             }
         }),
 
@@ -962,132 +924,124 @@ final class StdLib {
         new NativeFunctionListEntry("Math.abs", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
-                int v = toInt(arg(args, start, num, 0), 0);
-                return new Rv(v < 0 ? -v : v);
+                double v = toDouble(arg(args, start, num, 0), 0);
+                return new Rv(Math.abs(v));
             }
         }),
 
         new NativeFunctionListEntry("Math.floor", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
-                return new Rv(toInt(arg(args, start, num, 0), 0));
+                double v = toDouble(arg(args, start, num, 0), 0);
+                return new Rv(Math.floor(v));
             }
         }),
 
         new NativeFunctionListEntry("Math.ceil", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
-                // integer interpreter: ceil(x) == x for ints
-                return new Rv(toInt(arg(args, start, num, 0), 0));
+                double v = toDouble(arg(args, start, num, 0), 0);
+                return new Rv(Math.ceil(v));
             }
         }),
 
         new NativeFunctionListEntry("Math.round", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
-                return new Rv(toInt(arg(args, start, num, 0), 0));
+                double v = toDouble(arg(args, start, num, 0), 0);
+                return new Rv(Math.floor(v + 0.5));
             }
         }),
 
         new NativeFunctionListEntry("Math.sqrt", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
-                int v = toInt(arg(args, start, num, 0), 0);
-                if (v < 0) return Rv._NaN;
-                int s = 0;
-                while ((s + 1) * (s + 1) <= v) s++;
-                return new Rv(s);
+                double v = toDouble(arg(args, start, num, 0), 0);
+                return new Rv(Math.sqrt(v));
             }
         }),
 
         new NativeFunctionListEntry("Math.pow", new NativeFunctionFast() {
             public final int length = 2;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
-                int b = toInt(arg(args, start, num, 0), 0);
-                int e = toInt(arg(args, start, num, 1), 0);
-                if (e < 0) return new Rv(0);
-                int r = 1;
-                while (e-- > 0) r *= b;
-                return new Rv(r);
+                double b = toDouble(arg(args, start, num, 0), 0);
+                double e = toDouble(arg(args, start, num, 1), 0);
+                return new Rv(CldcMath.pow(b, e));
             }
         }),
 
         new NativeFunctionListEntry("Math.sin", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
-                // input in "milli-radians" (since interp is integer-only).
-                int mr = toInt(arg(args, start, num, 0), 0);
-                return new Rv((int) (Math.sin(mr / 1000.0) * 1000));
+                double r = toDouble(arg(args, start, num, 0), 0);
+                return new Rv(Math.sin(r));
             }
         }),
 
         new NativeFunctionListEntry("Math.cos", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
-                int mr = toInt(arg(args, start, num, 0), 0);
-                return new Rv((int) (Math.cos(mr / 1000.0) * 1000));
+                double r = toDouble(arg(args, start, num, 0), 0);
+                return new Rv(Math.cos(r));
             }
         }),
 
         new NativeFunctionListEntry("Math.tan", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
-                int mr = toInt(arg(args, start, num, 0), 0);
-                double c = Math.cos(mr / 1000.0);
-                if (c == 0) return Rv._NaN;
-                return new Rv((int) (Math.sin(mr / 1000.0) / c * 1000));
+                double r = toDouble(arg(args, start, num, 0), 0);
+                return new Rv(Math.tan(r));
             }
         }),
 
         new NativeFunctionListEntry("Math.atan", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
-                int mr = toInt(arg(args, start, num, 0), 0);
-                double r = myAtan(mr / 1000.0);
-                return new Rv((int) (r * 1000));
+                double r = toDouble(arg(args, start, num, 0), 0);
+                return new Rv(CldcMath.atan(r));
             }
         }),
 
         new NativeFunctionListEntry("Math.atan2", new NativeFunctionFast() {
             public final int length = 2;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
-                int y = toInt(arg(args, start, num, 0), 0);
-                int x = toInt(arg(args, start, num, 1), 0);
-                if (x == 0 && y == 0) return new Rv(0);
-                double r = myAtan2(y, x);
-                return new Rv((int) (r * 1000));
+                double y = toDouble(arg(args, start, num, 0), 0);
+                double x = toDouble(arg(args, start, num, 1), 0);
+                return new Rv(CldcMath.atan2(y, x));
             }
         }),
 
         new NativeFunctionListEntry("Math.exp", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
-                int v = toInt(arg(args, start, num, 0), 0);
-                return new Rv((int) (myExp(v / 1000.0) * 1000));
+                double v = toDouble(arg(args, start, num, 0), 0);
+                return new Rv(CldcMath.exp(v));
             }
         }),
 
         new NativeFunctionListEntry("Math.log", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
-                int v = toInt(arg(args, start, num, 0), 1);
+                double v = toDouble(arg(args, start, num, 0), 0);
                 if (v <= 0) return Rv._NaN;
-                return new Rv((int) (myLog(v) * 1000));
+                return new Rv(CldcMath.log(v));
             }
         }),
 
         new NativeFunctionListEntry("Math.sign", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
-                int v = toInt(arg(args, start, num, 0), 0);
-                return new Rv(v > 0 ? 1 : v < 0 ? -1 : 0);
+                double v = toDouble(arg(args, start, num, 0), 0);
+                if (Double.isNaN(v)) return Rv._NaN;
+                return v == 0.0 ? new Rv(0) : new Rv(v > 0 ? 1 : -1);
             }
         }),
 
         new NativeFunctionListEntry("Math.trunc", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
-                return new Rv(toInt(arg(args, start, num, 0), 0));
+                double v = toDouble(arg(args, start, num, 0), 0);
+                return new Rv(v < 0 ? Math.ceil(v) : Math.floor(v));
             }
         }),
 
@@ -1325,7 +1279,7 @@ final class StdLib {
         if (a.type != b.type) return false;
         switch (a.type) {
             case Rv.UNDEFINED: return true;
-            case Rv.NUMBER:    return a != Rv._NaN && b != Rv._NaN && a.num == b.num;
+            case Rv.NUMBER:    return Rv.sameNumberStrict(Rv.numValue(a), Rv.numValue(b));
             case Rv.STRING:    return a.str.equals(b.str);
             default:           return a == b;
         }
@@ -1356,6 +1310,17 @@ final class StdLib {
             buf.append(s).append(fillBuf.toString());
         }
         return buf.toString();
+    }
+
+    static final Rv parseFloatImpl(Rv src) {
+        if (src == null) return Rv._NaN;
+        String s = src.toStr().str.trim();
+        if (s.length() == 0) return Rv._NaN;
+        try {
+            return new Rv(Double.parseDouble(s));
+        } catch (Exception ex) {
+            return Rv._NaN;
+        }
     }
 
     static final Rv parseIntImpl(Rv src, Rv radixRv) {
@@ -1514,12 +1479,8 @@ final class StdLib {
             while (pos[0] < s.length() && s.charAt(pos[0]) >= '0' && s.charAt(pos[0]) <= '9') pos[0]++;
         }
         String lit = s.substring(st, pos[0]);
-        int dot = lit.indexOf('.');
-        int e = lit.indexOf('e');
-        if (e < 0) e = lit.indexOf('E');
-        String intPart = dot >= 0 ? lit.substring(0, dot) : (e >= 0 ? lit.substring(0, e) : lit);
         try {
-            return new Rv(Integer.parseInt(intPart));
+            return new Rv(Double.parseDouble(lit));
         } catch (NumberFormatException ex) {
             return Rv._NaN;
         }
@@ -1535,7 +1496,7 @@ final class StdLib {
         int t = v.type;
         if (t == Rv.NUMBER || t == Rv.NUMBER_OBJECT) {
             if (v == Rv._NaN) { buf.append("null"); return true; }
-            buf.append(v.num);
+            buf.append(v.toStr().str);
             return true;
         }
         if (t == Rv.STRING || t == Rv.STRING_OBJECT) {
