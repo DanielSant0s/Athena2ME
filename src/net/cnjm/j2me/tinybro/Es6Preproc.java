@@ -1,5 +1,7 @@
 package net.cnjm.j2me.tinybro;
 
+import java.util.Vector;
+
 /**
  * Source-level desugaring for ES6 syntax that the tokenizer / parser can't
  * handle directly on a CLDC 1.1 budget.
@@ -20,6 +22,9 @@ package net.cnjm.j2me.tinybro;
  *       methods, static methods, getters/setters are NOT supported.</li>
  *   <li>{@code for (let x of arr) { ... }} → classic index-based for over
  *       arrays / strings (and Map/Set via {@code .entries()}/{@code .values()}).</li>
+ *   <li>{@code async function} with a <strong>linear</strong> body (semicolon-separated
+ *       statements, no {@code if}/{@code for}/{@code while}/{@code switch}/{@code try})
+ *       → desugaring with {@code __awaitStep} and {@code Promise.resolve} (see README).</li>
  * </ul>
  *
  * <p>This preprocessor runs once per script-source, so it is O(n) and does not
@@ -40,6 +45,7 @@ final class Es6Preproc {
         src = preprocessDestructuring(src);
         src = preprocessShorthandProps(src);
         src = preprocessSpread(src);
+        src = preprocessAsyncAwait(src);
         return src;
     }
 
@@ -1171,6 +1177,375 @@ final class Es6Preproc {
         if (!isIdentStart(s.charAt(0))) return false;
         for (int i = 1; i < n; i++) if (!isIdentPart(s.charAt(i))) return false;
         return true;
+    }
+
+    // ==================================================================
+    //  async / await (linear body only)
+    // ==================================================================
+
+    static String preprocessAsyncAwait(String src) {
+        if (src == null || src.indexOf("async") < 0) {
+            return src;
+        }
+        int n = src.length();
+        StringBuffer out = new StringBuffer(n + 64);
+        int i = 0;
+        while (i < n) {
+            char c = src.charAt(i);
+            if (c == '"' || c == '\'' || c == '`' || (c == '/' && i + 1 < n && (src.charAt(i + 1) == '/' || src.charAt(i + 1) == '*'))) {
+                int j = copyLiteral(src, i, out);
+                if (j > i) {
+                    i = j;
+                    continue;
+                }
+            }
+            if (matchKw(src, i, "async")) {
+                int j = i + 5;
+                while (j < n && isWs(src.charAt(j))) {
+                    j++;
+                }
+                if (j + 8 <= n && src.regionMatches(false, j, "function", 0, 8)
+                        && (j + 8 >= n || !isIdentPart(src.charAt(j + 8)))) {
+                    int afterFn = j + 8;
+                    int[] nameEnd = new int[1];
+                    int argOpen = skipFunctionNameAndFindParen(src, afterFn, nameEnd);
+                    if (argOpen > 0) {
+                        int argClose = findMatchingParen(src, argOpen);
+                        if (argClose > argOpen) {
+                            int bodyOpen = argClose + 1;
+                            while (bodyOpen < n && isWs(src.charAt(bodyOpen))) {
+                                bodyOpen++;
+                            }
+                            if (bodyOpen < n && src.charAt(bodyOpen) == '{') {
+                                int bodyClose = findMatchingBrace(src, bodyOpen);
+                                if (bodyClose > bodyOpen) {
+                                    String inner = src.substring(bodyOpen + 1, bodyClose);
+                                    String rewritten = rewriteLinearAsyncBody(inner);
+                                    if (rewritten != null) {
+                                        out.append(src.substring(j, bodyOpen + 1));
+                                        out.append(' ');
+                                        out.append(rewritten);
+                                        out.append(' ');
+                                        out.append('}');
+                                        i = bodyClose + 1;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            out.append(c);
+            i++;
+        }
+        return out.toString();
+    }
+
+    static int skipFunctionNameAndFindParen(String src, int start, int[] nameEndOut) {
+        int n = src.length();
+        int p = start;
+        while (p < n && isWs(src.charAt(p))) {
+            p++;
+        }
+        if (p < n && isIdentStart(src.charAt(p))) {
+            String id = readIdent(src, p);
+            if (id != null) {
+                p += id.length();
+            }
+        }
+        while (p < n && isWs(src.charAt(p))) {
+            p++;
+        }
+        nameEndOut[0] = p;
+        if (p < n && src.charAt(p) == '(') {
+            return p;
+        }
+        return -1;
+    }
+
+    static int findMatchingParen(String src, int openIdx) {
+        int n = src.length();
+        int depth = 0;
+        for (int i = openIdx; i < n; i++) {
+            char c = src.charAt(i);
+            if (c == '"' || c == '\'' || c == '`') {
+                StringBuffer tmp = new StringBuffer();
+                i = copyLiteral(src, i, tmp) - 1;
+                continue;
+            }
+            if (c == '/' && i + 1 < n && src.charAt(i + 1) == '/') {
+                while (i < n && src.charAt(i) != '\n') {
+                    i++;
+                }
+                continue;
+            }
+            if (c == '/' && i + 1 < n && src.charAt(i + 1) == '*') {
+                i += 2;
+                while (i + 1 < n && !(src.charAt(i) == '*' && src.charAt(i + 1) == '/')) {
+                    i++;
+                }
+                i++;
+                continue;
+            }
+            if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth--;
+                if (depth == 0) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    static int findMatchingBrace(String src, int openIdx) {
+        int n = src.length();
+        int depth = 0;
+        for (int i = openIdx; i < n; i++) {
+            char c = src.charAt(i);
+            if (c == '"' || c == '\'' || c == '`') {
+                StringBuffer tmp = new StringBuffer();
+                i = copyLiteral(src, i, tmp) - 1;
+                continue;
+            }
+            if (c == '/' && i + 1 < n && src.charAt(i + 1) == '/') {
+                while (i < n && src.charAt(i) != '\n') {
+                    i++;
+                }
+                continue;
+            }
+            if (c == '/' && i + 1 < n && src.charAt(i + 1) == '*') {
+                i += 2;
+                while (i + 1 < n && !(src.charAt(i) == '*' && src.charAt(i + 1) == '/')) {
+                    i++;
+                }
+                i++;
+                continue;
+            }
+            if (c == '{') {
+                depth++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    static Vector splitLinearStatements(String body) {
+        Vector v = new Vector();
+        int n = body.length();
+        int start = 0;
+        int dParen = 0, dBrack = 0, dBrace = 0;
+        int i = 0;
+        while (i < n) {
+            char c = body.charAt(i);
+            if (c == '"' || c == '\'' || c == '`') {
+                StringBuffer tmp = new StringBuffer();
+                i = copyLiteral(body, i, tmp);
+                continue;
+            }
+            if (c == '/' && i + 1 < n && body.charAt(i + 1) == '/') {
+                while (i < n && body.charAt(i) != '\n') {
+                    i++;
+                }
+                continue;
+            }
+            if (c == '/' && i + 1 < n && body.charAt(i + 1) == '*') {
+                i += 2;
+                while (i + 1 < n && !(body.charAt(i) == '*' && body.charAt(i + 1) == '/')) {
+                    i++;
+                }
+                i += 2;
+                continue;
+            }
+            if (c == '(') {
+                dParen++;
+            } else if (c == ')') {
+                dParen--;
+            } else if (c == '[') {
+                dBrack++;
+            } else if (c == ']') {
+                dBrack--;
+            } else if (c == '{') {
+                dBrace++;
+            } else if (c == '}') {
+                dBrace--;
+            } else if (c == ';' && dParen == 0 && dBrack == 0 && dBrace == 0) {
+                String stmt = body.substring(start, i).trim();
+                if (stmt.length() > 0) {
+                    v.addElement(stmt);
+                }
+                start = i + 1;
+            }
+            i++;
+        }
+        String tail = body.substring(start).trim();
+        if (tail.length() > 0) {
+            v.addElement(tail);
+        }
+        return v;
+    }
+
+    static boolean isUnsupportedAsyncStmt(String stmt) {
+        String t = stmt.trim();
+        if (t.length() == 0) {
+            return false;
+        }
+        int k = 0;
+        while (k < t.length() && isWs(t.charAt(k))) {
+            k++;
+        }
+        return matchKw(t, k, "if") || matchKw(t, k, "for") || matchKw(t, k, "while")
+                || matchKw(t, k, "switch") || matchKw(t, k, "try") || matchKw(t, k, "do");
+    }
+
+    static boolean stmtContainsAwait(String stmt) {
+        int n = stmt.length();
+        int i = 0;
+        while (i < n) {
+            char c = stmt.charAt(i);
+            if (c == '"' || c == '\'' || c == '`') {
+                StringBuffer tmp = new StringBuffer();
+                i = copyLiteral(stmt, i, tmp);
+                continue;
+            }
+            if (c == '/' && i + 1 < n && stmt.charAt(i + 1) == '/') {
+                while (i < n && stmt.charAt(i) != '\n') {
+                    i++;
+                }
+                continue;
+            }
+            if (matchKw(stmt, i, "await")) {
+                return true;
+            }
+            i++;
+        }
+        return false;
+    }
+
+    static String rewriteLinearAsyncBody(String inner) {
+        Vector stmts = splitLinearStatements(inner);
+        for (int s = 0; s < stmts.size(); s++) {
+            String st = (String) stmts.elementAt(s);
+            if (isUnsupportedAsyncStmt(st)) {
+                return null;
+            }
+            if (stmtContainsAwait(st) && st.indexOf('{') >= 0) {
+                return null;
+            }
+        }
+        return emitAsyncChain(stmts, 0);
+    }
+
+    static String emitAsyncChain(Vector stmts, int idx) {
+        if (idx >= stmts.size()) {
+            return "Promise.resolve(undefined)";
+        }
+        String s = ((String) stmts.elementAt(idx)).trim();
+        if (s.length() == 0) {
+            return emitAsyncChain(stmts, idx + 1);
+        }
+        String tret = tryEmitAsyncReturn(s);
+        if (tret != null) {
+            return tret;
+        }
+        String vawait = tryEmitVarAwaitChain(s, stmts, idx);
+        if (vawait != null) {
+            return vawait;
+        }
+        String t = s.trim();
+        if (matchKw(t, 0, "await")) {
+            int p = 5;
+            while (p < t.length() && isWs(t.charAt(p))) {
+                p++;
+            }
+            String expr = t.substring(p).trim();
+            if (expr.endsWith(";")) {
+                expr = expr.substring(0, expr.length() - 1).trim();
+            }
+            return "__awaitStep((" + expr + "),function(__aw){return " + emitAsyncChain(stmts, idx + 1) + ";})";
+        }
+        return "Promise.resolve(undefined).then(function(){" + s + ";return " + emitAsyncChain(stmts, idx + 1) + ";})";
+    }
+
+    static String tryEmitAsyncReturn(String t) {
+        String s = t.trim();
+        if (!matchKw(s, 0, "return")) {
+            return null;
+        }
+        int p = 6;
+        while (p < s.length() && isWs(s.charAt(p))) {
+            p++;
+        }
+        if (p >= s.length()) {
+            return "Promise.resolve(undefined)";
+        }
+        String rest = s.substring(p).trim();
+        if (matchKw(rest, 0, "await")) {
+            int q = 5;
+            while (q < rest.length() && isWs(rest.charAt(q))) {
+                q++;
+            }
+            String expr = rest.substring(q).trim();
+            if (expr.endsWith(";")) {
+                expr = expr.substring(0, expr.length() - 1).trim();
+            }
+            return "__awaitStep((" + expr + "),function(__r){return Promise.resolve(__r);})";
+        }
+        if (rest.endsWith(";")) {
+            rest = rest.substring(0, rest.length() - 1).trim();
+        }
+        return "Promise.resolve((" + rest + "))";
+    }
+
+    static String tryEmitVarAwaitChain(String s, Vector stmts, int idx) {
+        String t = s.trim();
+        int declLen = 0;
+        if (matchKw(t, 0, "var")) {
+            declLen = 3;
+        } else if (matchKw(t, 0, "let")) {
+            declLen = 3;
+        } else if (matchKw(t, 0, "const")) {
+            declLen = 5;
+        } else {
+            return null;
+        }
+        int p = declLen;
+        while (p < t.length() && isWs(t.charAt(p))) {
+            p++;
+        }
+        String name = readIdent(t, p);
+        if (name == null) {
+            return null;
+        }
+        p += name.length();
+        while (p < t.length() && isWs(t.charAt(p))) {
+            p++;
+        }
+        if (p >= t.length() || t.charAt(p) != '=') {
+            return null;
+        }
+        p++;
+        while (p < t.length() && isWs(t.charAt(p))) {
+            p++;
+        }
+        if (!matchKw(t, p, "await")) {
+            return null;
+        }
+        p += 5;
+        while (p < t.length() && isWs(t.charAt(p))) {
+            p++;
+        }
+        String expr = t.substring(p).trim();
+        if (expr.endsWith(";")) {
+            expr = expr.substring(0, expr.length() - 1).trim();
+        }
+        return "__awaitStep((" + expr + "),function(" + name + "){return " + emitAsyncChain(stmts, idx + 1) + ";})";
     }
 
     static String rewriteSuperCalls(String body, String parent) {

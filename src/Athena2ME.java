@@ -29,6 +29,28 @@ public class Athena2ME extends MIDlet implements CommandListener {
         return (int) Rv.numValue(n);
     }
 
+    /** Build a Uint8Array view backed by a fresh ArrayBuffer (same pattern as StdLib). */
+    private static Rv newUint8Array(RocksInterpreter ri, byte[] data) {
+        return PromiseRuntime.newUint8Array(ri, data);
+    }
+
+    private static byte[] bytesFromBufferArg(Rv arg) {
+        if (arg == null || arg == Rv._undefined) {
+            return new byte[0];
+        }
+        if (arg.type == Rv.UINT8_ARRAY && arg.opaque instanceof Rv.Uint8View) {
+            Rv.Uint8View uv = (Rv.Uint8View) arg.opaque;
+            byte[] out = new byte[uv.byteLength];
+            System.arraycopy(uv.data, uv.offset, out, 0, uv.byteLength);
+            return out;
+        }
+        try {
+            return arg.toStr().str.getBytes("UTF-8");
+        } catch (java.io.UnsupportedEncodingException e) {
+            return arg.toStr().str.getBytes();
+        }
+    }
+
     public Athena2ME() {
         canvas = new AthenaCanvas(false);
         canvas.addCommand(exitCmd);
@@ -135,7 +157,17 @@ public class Athena2ME extends MIDlet implements CommandListener {
             public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                 int ms = jsInt(Rv.argAt(args, start, num, 0));
                 if (ms < 0) ms = 0;
+                PromiseRuntime.drain(ri);
                 try { Thread.sleep(ms); } catch (InterruptedException e) {}
+                return Rv._undefined;
+            }
+        })));
+
+        ri.addToObject(_os, "flushPromises",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.flushPromises", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                PromiseRuntime.drain(ri);
                 return Rv._undefined;
             }
         })));
@@ -167,6 +199,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
                             long deadline = System.currentTimeMillis() + frameMs;
                             try {
                                 cv.padUpdate();
+                                PromiseRuntime.drain(interp);
                                 interp.call(false, fn, fn.co, thisRef, null, 0, 0);
                                 cv.screenUpdate();
                             } catch (Throwable t) {
@@ -505,6 +538,249 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
         ri.addToObject(callObj, "Keyboard", _Keyboard);
 
+        /* --- Request (HTTP/HTTPS), Socket, WebSocket (AthenaEnv-style) --- */
+        final Rv _Request = ri.newModule();
+        ri.addNativeFunction(new NativeFunctionListEntry("Request", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Rv ret = isNew ? _this : new Rv(Rv.OBJECT, _Request);
+                ret.opaque = new AthenaRequest();
+                ri.addToObject(ret, "keepalive", new Rv(0));
+                ri.addToObject(ret, "useragent", new Rv(""));
+                ri.addToObject(ret, "userpwd", new Rv(""));
+                ri.addToObject(ret, "headers", ri.newEmptyArray());
+                ri.addToObject(ret, "responseCode", new Rv(-1));
+                ri.addToObject(ret, "error", new Rv(""));
+                ri.addToObject(ret, "contentLength", new Rv(0));
+                return ret;
+            }
+        }));
+        _Request.nativeCtor("Request", callObj);
+
+        ri.addToObject(_Request.ctorOrProt, "get",
+            ri.addNativeFunction(new NativeFunctionListEntry("Request.get", new NativeFunctionFast() {
+                public final int length = 1;
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                    AthenaRequest ar = (AthenaRequest) _this.opaque;
+                    return ar.getPromise(ri, _this, Rv.argAt(args, start, num, 0).toStr().str);
+                }
+            })));
+
+        ri.addToObject(_Request.ctorOrProt, "post",
+            ri.addNativeFunction(new NativeFunctionListEntry("Request.post", new NativeFunction() {
+                public final int length = 2;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    AthenaRequest ar = (AthenaRequest) _this.opaque;
+                    return ar.postPromise(ri, _this, args.get("0").toStr().str, bytesFromBufferArg(args.get("1")));
+                }
+            })));
+
+        ri.addToObject(_Request.ctorOrProt, "download",
+            ri.addNativeFunction(new NativeFunctionListEntry("Request.download", new NativeFunction() {
+                public final int length = 2;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    AthenaRequest ar = (AthenaRequest) _this.opaque;
+                    return ar.downloadPromise(ri, _this, args.get("0").toStr().str, args.get("1").toStr().str);
+                }
+            })));
+
+        ri.addToObject(callObj, "Request", _Request);
+
+        final Rv _SocketMod = ri.newModule();
+        ri.addToObject(_SocketMod, "AF_INET", new Rv(AthenaSocket.AF_INET));
+        ri.addToObject(_SocketMod, "SOCK_STREAM", new Rv(AthenaSocket.SOCK_STREAM));
+        ri.addToObject(_SocketMod, "SOCK_DGRAM", new Rv(AthenaSocket.SOCK_DGRAM));
+        ri.addToObject(_SocketMod, "SOCK_RAW", new Rv(AthenaSocket.SOCK_RAW));
+
+        ri.addNativeFunction(new NativeFunctionListEntry("Socket", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Rv ret = isNew ? _this : new Rv(Rv.OBJECT, _SocketMod);
+                int dom = jsInt(args.get("0"));
+                int typ = jsInt(args.get("1"));
+                ret.opaque = new AthenaSocket(dom, typ);
+                return ret;
+            }
+        }));
+        _SocketMod.nativeCtor("Socket", callObj);
+
+        ri.addToObject(_SocketMod.ctorOrProt, "connect",
+            ri.addNativeFunction(new NativeFunctionListEntry("Socket.connect", new NativeFunction() {
+                public final int length = 2;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    AthenaSocket s = (AthenaSocket) _this.opaque;
+                    try {
+                        s.connect(args.get("0").toStr().str, jsInt(args.get("1")));
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                    return Rv._undefined;
+                }
+            })));
+
+        ri.addToObject(_SocketMod.ctorOrProt, "bind",
+            ri.addNativeFunction(new NativeFunctionListEntry("Socket.bind", new NativeFunction() {
+                public final int length = 2;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    AthenaSocket s = (AthenaSocket) _this.opaque;
+                    try {
+                        s.bind(args.get("0").toStr().str, jsInt(args.get("1")));
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                    return Rv._undefined;
+                }
+            })));
+
+        ri.addToObject(_SocketMod.ctorOrProt, "listen",
+            ri.addNativeFunction(new NativeFunctionListEntry("Socket.listen", new NativeFunction() {
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    AthenaSocket s = (AthenaSocket) _this.opaque;
+                    try {
+                        s.listen();
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                    return Rv._undefined;
+                }
+            })));
+
+        ri.addToObject(_SocketMod.ctorOrProt, "accept",
+            ri.addNativeFunction(new NativeFunctionListEntry("Socket.accept", new NativeFunction() {
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    AthenaSocket s = (AthenaSocket) _this.opaque;
+                    try {
+                        AthenaSocket ch = s.accept();
+                        Rv ret = new Rv(Rv.OBJECT, _SocketMod);
+                        ret.opaque = ch;
+                        return ret;
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return Rv._undefined;
+                    }
+                }
+            })));
+
+        ri.addToObject(_SocketMod.ctorOrProt, "send",
+            ri.addNativeFunction(new NativeFunctionListEntry("Socket.send", new NativeFunction() {
+                public final int length = 1;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    AthenaSocket s = (AthenaSocket) _this.opaque;
+                    byte[] data = bytesFromBufferArg(args.get("0"));
+                    try {
+                        return new Rv(s.send(data, 0, data.length));
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return new Rv(-1);
+                    }
+                }
+            })));
+
+        ri.addToObject(_SocketMod.ctorOrProt, "recv",
+            ri.addNativeFunction(new NativeFunctionListEntry("Socket.recv", new NativeFunction() {
+                public final int length = 1;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    AthenaSocket s = (AthenaSocket) _this.opaque;
+                    int size = jsInt(args.get("0"));
+                    if (size < 1) {
+                        size = 1024;
+                    }
+                    byte[] buf = new byte[size];
+                    try {
+                        int n = s.recv(buf, 0, size);
+                        if (n <= 0) {
+                            return newUint8Array(ri, new byte[0]);
+                        }
+                        if (n == size) {
+                            return newUint8Array(ri, buf);
+                        }
+                        byte[] t = new byte[n];
+                        System.arraycopy(buf, 0, t, 0, n);
+                        return newUint8Array(ri, t);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return newUint8Array(ri, new byte[0]);
+                    }
+                }
+            })));
+
+        ri.addToObject(_SocketMod.ctorOrProt, "close",
+            ri.addNativeFunction(new NativeFunctionListEntry("Socket.close", new NativeFunction() {
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    AthenaSocket s = (AthenaSocket) _this.opaque;
+                    if (s != null) {
+                        s.close();
+                    }
+                    _this.opaque = null;
+                    return Rv._undefined;
+                }
+            })));
+
+        ri.addToObject(callObj, "Socket", _SocketMod);
+
+        final Rv _WebSocket = ri.newModule();
+        ri.addNativeFunction(new NativeFunctionListEntry("WebSocket", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Rv ret = isNew ? _this : new Rv(Rv.OBJECT, _WebSocket);
+                String url = args.get("0").toStr().str;
+                try {
+                    ret.opaque = new AthenaWebSocket(url);
+                    ri.addToObject(ret, "error", new Rv(""));
+                } catch (Exception e) {
+                    ret.opaque = null;
+                    ri.addToObject(ret, "error", new Rv(e.getMessage() != null ? e.getMessage() : "websocket error"));
+                }
+                return ret;
+            }
+        }));
+        _WebSocket.nativeCtor("WebSocket", callObj);
+
+        ri.addToObject(_WebSocket.ctorOrProt, "send",
+            ri.addNativeFunction(new NativeFunctionListEntry("WebSocket.send", new NativeFunction() {
+                public final int length = 1;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    if (!(_this.opaque instanceof AthenaWebSocket)) {
+                        return Rv._undefined;
+                    }
+                    AthenaWebSocket ws = (AthenaWebSocket) _this.opaque;
+                    byte[] data = bytesFromBufferArg(args.get("0"));
+                    try {
+                        ws.sendBinary(data, 0, data.length);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                    return Rv._undefined;
+                }
+            })));
+
+        ri.addToObject(_WebSocket.ctorOrProt, "recv",
+            ri.addNativeFunction(new NativeFunctionListEntry("WebSocket.recv", new NativeFunction() {
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    if (!(_this.opaque instanceof AthenaWebSocket)) {
+                        return newUint8Array(ri, new byte[0]);
+                    }
+                    AthenaWebSocket ws = (AthenaWebSocket) _this.opaque;
+                    try {
+                        byte[] p = ws.recvFrame();
+                        return newUint8Array(ri, p != null ? p : new byte[0]);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return newUint8Array(ri, new byte[0]);
+                    }
+                }
+            })));
+
+        ri.addToObject(_WebSocket.ctorOrProt, "close",
+            ri.addNativeFunction(new NativeFunctionListEntry("WebSocket.close", new NativeFunction() {
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    if (_this.opaque instanceof AthenaWebSocket) {
+                        ((AthenaWebSocket) _this.opaque).close();
+                    }
+                    _this.opaque = null;
+                    return Rv._undefined;
+                }
+            })));
+
+        ri.addToObject(callObj, "WebSocket", _WebSocket);
+
         final Rv _Timer = ri.newModule();
 
         ri.addNativeFunction(new NativeFunctionListEntry("Timer", new NativeFunction() {
@@ -609,6 +885,18 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 } catch (Throwable t) {
                     t.printStackTrace();
                 } finally {
+                    long deadline = System.currentTimeMillis() + 30000L;
+                    while (System.currentTimeMillis() < deadline) {
+                        PromiseRuntime.drain(ri);
+                        if (!PromiseRuntime.hasPending() && AthenaRequest.getHttpInFlight() == 0) {
+                            break;
+                        }
+                        try {
+                            Thread.sleep(5L);
+                        } catch (InterruptedException e) {
+                            break;
+                        }
+                    }
                     jsRunning = false;
                 }
             }

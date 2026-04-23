@@ -328,6 +328,16 @@ final class StdLib {
 
         Rv._Symbol = ri.addNativeFunction(entryOf("Symbol"));
         go.putl("Symbol", Rv._Symbol);
+
+        // ---- Promise (then/catch, resolve/reject, executor ctor, thenable assimilation) ----
+        Rv._Promise = new Rv();
+        Rv promProto = Rv._Promise.nativeCtor("Promise", go).ctorOrProt;
+        promProto.putl("then", ri.addNativeFunction(entryOf("Promise.then")));
+        promProto.putl("catch", ri.addNativeFunction(entryOf("Promise.catch")));
+        Rv._Promise.putl("resolve", ri.addNativeFunction(entryOf("Promise.resolve")));
+        Rv._Promise.putl("reject", ri.addNativeFunction(entryOf("Promise.reject")));
+        go.putl("Promise", Rv._Promise);
+        go.putl("__awaitStep", ri.addNativeFunction(entryOf("__awaitStep")));
     }
 
     static NativeFunctionListEntry entryOf(String name) {
@@ -1609,6 +1619,55 @@ final class StdLib {
                 s.str = desc;
                 s.opaque = UNIQUE_SYMBOL;
                 return s;
+            }
+        }),
+
+        // ============================================================
+        //                        PROMISE
+        // ============================================================
+
+        new NativeFunctionListEntry("Promise", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                return PromiseRuntime.nativeCtor(isNew, thiz, args, start, num, ri);
+            }
+        }),
+
+        new NativeFunctionListEntry("__awaitStep", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv p = StdLib.arg(args, start, num, 0);
+                Rv cont = StdLib.arg(args, start, num, 1);
+                Rv pres = PromiseRuntime.promiseResolve(ri, p);
+                return PromiseRuntime.then(ri, pres, cont, Rv._undefined);
+            }
+        }),
+
+        new NativeFunctionListEntry("Promise.then", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                return PromiseRuntime.nativeThen(isNew, thiz, args, start, num, ri);
+            }
+        }),
+
+        new NativeFunctionListEntry("Promise.catch", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                return PromiseRuntime.nativeCatch(isNew, thiz, args, start, num, ri);
+            }
+        }),
+
+        new NativeFunctionListEntry("Promise.resolve", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                return PromiseRuntime.nativeResolve(isNew, thiz, args, start, num, ri);
+            }
+        }),
+
+        new NativeFunctionListEntry("Promise.reject", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                return PromiseRuntime.nativeReject(isNew, thiz, args, start, num, ri);
             }
         }),
 

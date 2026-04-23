@@ -382,6 +382,11 @@ mainswitch:
                 t = eat(RC.TOK_EOL);
             }
             if (pos >= endpos) break;
+            // `async function` — preprocessor normally removes `async`; accept it here too.
+            if (t == RC.TOK_ASYNC && pos + 1 < endpos && tti[pos + 1] == RC.TOK_FUNCTION) {
+                pos++;
+                t = RC.TOK_FUNCTION;
+            }
             int posmk = pos++;
             switch (t) {
 //            case RC.TOK_SEM: // blank statement
@@ -2168,6 +2173,15 @@ mainloop:
     public Rv newModule() {
         return new Rv(Rv.OBJECT, Rv._Object);
     }
+
+    /** Empty dense array (length 0), for native bindings outside this package. */
+    public Rv newEmptyArray() {
+        Rv a = new Rv(Rv.ARRAY, Rv._Array);
+        a.type = Rv.ARRAY;
+        a.ctorOrProt = Rv._Array;
+        a.num = 0;
+        return a;
+    }
     
 ////////////////////////////// Auxiliary Routines ///////////////////////////
     
@@ -2432,6 +2446,8 @@ mainloop:
         "try," + 
         "catch," + 
         "finally," + 
+        "async," + 
+        "await," + 
         "";
     
     static final Rhash htKeywords;
@@ -2453,7 +2469,7 @@ mainloop:
         ",44," +                        // ,
         ",1443,1445," +                 // POSTINC, POSTDEC
         ",443,445,147," +               // INC, DEC, delete
-        ",1043,1045,146,33,126," +      // POS, NEG, typeof, !, ~
+        ",1043,1045,146,154,33,126," +      // POS, NEG, typeof, await, !, ~
         ",63," +                        // ?
         ",58," +                        // COLON
         ",1058," +                      // jsoncol

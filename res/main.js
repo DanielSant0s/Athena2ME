@@ -1,3 +1,78 @@
+console.log("Athena2ME main.js — demo HTTP (Request + Promise)");
+
+(function httpDemo() {
+    var done = 0;
+    var r = new Request();
+    r.useragent = "Athena2ME-demo/1.0";
+    r.get("http://www.example.com/").then(function (res) {
+        console.log("HTTP responseCode=" + res.responseCode + " bytes=" + res.contentLength);
+
+        var u8 = res.body;
+        var txt = "";
+        var i;
+        var maxB = 6000;
+        var lim = u8.length < maxB ? u8.length : maxB;
+        for (i = 0; i < lim; i++) {
+            var c = u8[i];
+            if (c === 10 || c === 13) {
+                txt += " ";
+            } else if (c >= 32 && c < 127) {
+                txt += String.fromCharCode(c);
+            } else {
+                txt += ".";
+            }
+        }
+        if (u8.length > maxB) {
+            txt += " ... (" + u8.length + " B total)";
+        }
+
+        var w = Screen.width;
+        var h = Screen.height;
+        var bg = Color.new(8, 8, 24);
+        var f = new Font(Font.FACE_PROPORTIONAL, Font.STYLE_PLAIN, Font.SIZE_SMALL);
+        f.color = Color.new(220, 230, 255);
+
+        Screen.clear(bg);
+        f.print("HTTP " + res.responseCode + "  " + res.contentLength + " bytes", 4, 4);
+        var lineH = 12;
+        var lineW = 28;
+        if (w > 120) lineW = Math.floor((w - 8) / 6);
+        var y = 4 + lineH * 2;
+        var j = 0;
+        while (j < txt.length && y < h - lineH) {
+            var end = j + lineW;
+            if (end > txt.length) end = txt.length;
+            f.print(txt.substring(j, end), 4, y);
+            j = end;
+            y += lineH;
+        }
+        f.color = Color.new(140, 160, 200);
+        var errLine = res.error ? res.error : "ok";
+        f.print("(10s) " + errLine, 4, h - lineH - 2);
+        Screen.update();
+
+        os.sleep(10000);
+        done = 1;
+    }).catch(function (e) {
+        var msg = e && e.message ? e.message : String(e);
+        console.log("HTTP error: " + msg);
+        var w = Screen.width;
+        var h = Screen.height;
+        var bg = Color.new(32, 8, 8);
+        var f = new Font(Font.FACE_PROPORTIONAL, Font.STYLE_PLAIN, Font.SIZE_SMALL);
+        f.color = Color.new(255, 200, 200);
+        Screen.clear(bg);
+        f.print("HTTP failed", 4, 4);
+        f.print(msg, 4, 20);
+        Screen.update();
+        os.sleep(5000);
+        done = 1;
+    });
+    while (!done) {
+        os.sleep(30);
+    }
+})();
+
 // =============================================================================
 //  NEON SNAKE  —  Athena2ME ES6+ fork demo
 //

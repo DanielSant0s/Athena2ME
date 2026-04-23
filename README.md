@@ -49,6 +49,9 @@ Athena2ME is a project that seeks to facilitate and at the same time brings a co
 * Pad: Above being able to draw and everything else, A human interface is important.
 * Keyboard: Basic keypad support.
 * Timer: Control the time precisely in your code, it contains several timing functions.
+* Request: HTTP/HTTPS client returning **Promises** (`get` / `post` / `download`), modelled on AthenaEnv.
+* Socket: TCP/UDP sockets (`javax.microedition.io`), AthenaEnv-style.
+* WebSocket: Minimal `ws://` client (RFC 6455 framing over TCP).
 
 New types are always being added and this list can grow a lot over time, so stay tuned.
 
@@ -78,12 +81,14 @@ New types are always being added and this list can grow a lot over time, so stay
 - [ ] OS platform functions
 - [ ] Thread functions
 - [ ] 3D Render functions
-- [ ] Network (requests, sockets, websockets)
+- [x] HTTP/HTTPS, TCP/UDP sockets, WebSocket (`ws://`) — see [Request / Socket / WebSocket](#request-module) (limits: `wss://`, `SOCK_RAW`)
 - [ ] Archive (zip, 7zip, tar, rar) system
 - [x] Add float support
 - [x] Add ArrayBuffer support (`ArrayBuffer`, `Uint8Array`, `DataView` subset — see standard library list)
 - [ ] Block-scoped `let`/`const` (currently hoisted like `var`)
-- [ ] `async`/`await`, generators, regex literals
+- [x] **`Promise`** (`then` / `catch`, `Promise.resolve` / `Promise.reject`, `new Promise(executor)`, thenable assimilation); microtasks drain on `os.sleep`, `os.flushPromises`, `os.startFrameLoop`, and after the main script finishes
+- [x] **`async`/`await`** (linear `async function` bodies only — desugared before parse; see [Promise / async](#promise-minimal)); no `async`/`await` in the grammar itself
+- [ ] Generators, regex literals
 
 ### Built With
 
@@ -374,9 +379,58 @@ P.S.: *Italic* parameters refer to optional parameters
 ### os module
 * os.setExitHandler(func) - Set *func* to be called when the device run any action to exit Athena2ME.
 * os.platform - Return a string representing the platform: "j2me".
-* os.sleep(ms) - Yield the current thread for *ms* milliseconds. Use this if you stick to a manual `while` loop so the device has time to service the UI thread (prevents ANR on real hardware).
-* os.startFrameLoop(fn, fps) - Hand the main loop over to native code. Java will run a dedicated `Thread` that, every frame: calls `Pad.update()`, calls *fn*, calls `Screen.update()`, and `sleep`s until the next deadline. *fps* is clamped to `[1, 120]`. Recommended entry point for every new script.
+* os.sleep(ms) - Yield the current thread for *ms* milliseconds. Before sleeping, pending **Promise** microtasks are flushed on the JS thread (`PromiseRuntime.drain`). Use this in manual loops so I/O callbacks can run and the UI thread stays healthy.
+* os.flushPromises() - Run all queued Promise microtasks once (same drain used by `os.sleep` and the frame loop). Use if you neither `sleep` nor use `startFrameLoop`.
+* os.startFrameLoop(fn, fps) - Hand the main loop over to native code. Java will run a dedicated `Thread` that, every frame: calls `Pad.update()`, drains Promise microtasks, calls *fn*, calls `Screen.update()`, and `sleep`s until the next deadline. *fps* is clamped to `[1, 120]`. Recommended entry point for every new script.
 * os.stopFrameLoop() - Ask the native frame loop to terminate after the current frame. Typical usage is from an exit handler.
+
+### Request module
+
+HTTP/HTTPS via MIDP `HttpConnection`, modelled on [AthenaEnv Request](https://github.com/DanielSant0s/AthenaEnv). HTTPS depends on the device TLS stack and certificates.
+
+**Instance properties (defaults after `new Request()`):** `keepalive` (0/1), `useragent`, `userpwd` (`user:password` for Basic auth), `headers` (array of string pairs: `[name0, value0, name1, value1, …]`). After each completed request, the same instance fields are updated: `responseCode`, `error`, `contentLength`.
+
+**Promises:** `get(url)`, `post(url, data)` (`data` = string or `Uint8Array`), `download(url, fileUrl)` (`fileUrl` = `file://…` path your runtime accepts) each return a **`Promise`**. Use `.then` / `.catch` (there is no `async`/`await` in the language). Only one request may be in flight per `Request` instance; if you call `get`/`post`/`download` while busy, the returned Promise rejects with `Request busy`.
+
+**Fulfilled value for `get` / `post`:** plain object `{ responseCode, error, contentLength, body }` where `body` is a **`Uint8Array`**.
+
+**Fulfilled value for `download`:** `{ responseCode, error, contentLength, fileUrl }` (response body is written to disk, not returned).
+
+**Rejection:** the runtime rejects with an **`Error`**-style object (e.g. use `e.message` in `.catch`).
+
+Microtasks run when you call **`os.sleep`**, **`os.flushPromises`**, during **`os.startFrameLoop`**, and briefly after the main script returns so short demos can finish I/O.
+
+```js
+var r = new Request();
+r.get("http://example.com/").then(function (res) {
+  var u8 = res.body;
+  console.log(res.responseCode, res.contentLength);
+}).catch(function (e) {
+  console.log(e.message);
+});
+```
+
+### Promise (minimal)
+
+Global **`Promise`**: `then`, `catch`, `Promise.resolve`, `Promise.reject`, and **`new Promise(function (resolve, reject) { ... })`**. The resolve function passed to the executor applies the usual **resolution** algorithm: plain values fulfill immediately; native promises are chained; objects with a callable **`then`** are assimilated (thenables). Resolving a promise with itself yields a `TypeError`.
+
+**`async` / `await`:** There is no `async`/`await` in the parser. Before tokenization, **`async function`** declarations whose body is a **flat** list of statements (separated by `;` at the top level of the function, with **no** `if` / `for` / `while` / `switch` / `try` / `do` starting a statement) are rewritten to `function` + `Promise` chains using the runtime helper **`__awaitStep`**. Supported patterns per statement include: `var x = await expr;`, `let`/`const`, bare `await expr;`, `return await expr;`, and `return expr;`. Bodies with blocks or control flow are **not** rewritten—use `.then` or split into smaller async functions.
+
+At runtime, **`await`** is a reserved unary operator: if it still appears in source (unsupported body), you get a clear error—simplify the function body or use promises explicitly.
+
+### Socket module
+
+Constants: `Socket.AF_INET`, `Socket.SOCK_STREAM`, `Socket.SOCK_DGRAM`, `Socket.SOCK_RAW` (RAW is **unsupported** — throws on `connect`/`bind`).
+
+* `var s = new Socket(Socket.AF_INET, Socket.SOCK_STREAM)` — TCP client: `connect(host, port)`, `send(uint8)`, `recv(maxBytes)` → `Uint8Array`, `close()`.
+* TCP server: `bind(host, port)`, `listen()`, `accept()` → new `Socket` (J2ME extension for `accept`; needed after `listen`).
+* UDP: `new Socket(Socket.AF_INET, Socket.SOCK_DGRAM)`, `bind` or `connect`, `send` / `recv`. On server-style `datagram://:port`, the first `recv` records the peer; subsequent `send` uses that address until the next `recv`.
+
+### WebSocket module
+
+* `var ws = new WebSocket("ws://host:port/path")` — only **`ws://`** is implemented; **`wss://`** is not (TLS). On failure, `ws.error` is set and methods no-op.
+* `send(uint8)` — binary frame (opcode 2).
+* `recv()` — blocks until one text/binary data frame; returns `Uint8Array` (empty if closed/error). Ping/pong handled internally.
 
 ### Color module
 * var col = Color.new(r, g, b, *a*) - Returns a color object from the specified RGB(A) parameters.

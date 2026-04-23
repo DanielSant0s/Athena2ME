@@ -1036,6 +1036,8 @@ public class Rv {
             this.type = Rv.STRING;
             this.str = rv.evalVal(callObj).typeOf();
             break;
+        case RC.TOK_AWAIT:
+            return Rv.error("await: use async function with a simple sequential body (preprocessor), or use .then()");
         case RC.TOK_DELETE:
             rv = rv.evalRef(callObj);
             Rv arr = rv.co;
@@ -1298,6 +1300,8 @@ public class Rv {
     public static Rv _Uint8Array;
     /** DataView constructor (initialized lazily by StdLib). */
     public static Rv _DataView;
+    /** Promise constructor (initialized lazily by StdLib). */
+    public static Rv _Promise;
 
     /** Backing store for {@code ArrayBuffer} instances ({@code opaque}). */
     public static final class ArrayBufferBacking {
