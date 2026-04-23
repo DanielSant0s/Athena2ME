@@ -51,6 +51,35 @@ public class RocksInterpreter {
         }
         return this;
     }
+
+    /**
+     * Parse and run a standalone script fragment in {@code globalObj}'s scope, using the same
+     * synthetic top-level function shape as the MIDlet bootstrap. Saves and restores
+     * {@link #src}/{@link #tt}/{@link #pos}/{@link #endpos} so the host program keeps a consistent
+     * lexer state (unlike {@code eval}, which replaces {@link #src} without restoring).
+     */
+    public Rv runInGlobalScope(String fragment, Rv globalObj) {
+        if (fragment == null) {
+            fragment = "";
+        }
+        String savedSrc = this.src;
+        Pack savedTt = this.tt;
+        int savedPos = this.pos;
+        int savedEndpos = this.endpos;
+        try {
+            reset(fragment, null, 0, fragment.length());
+            Node func = astNode(null, RC.TOK_LBR, 0, 0);
+            astNode(func, RC.TOK_LBR, 0, endpos);
+            Rv rv = new Rv(false, func, 0);
+            rv.co = globalObj;
+            return call(false, rv, globalObj, null, null, 0, 0);
+        } finally {
+            this.src = savedSrc;
+            this.tt = savedTt;
+            this.pos = savedPos;
+            this.endpos = savedEndpos;
+        }
+    }
     
 ////////////////////////////// Lexer Method ///////////////////////////
 

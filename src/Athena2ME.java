@@ -1,4 +1,5 @@
 import java.io.*;
+import java.util.Hashtable;
 
 import javax.microedition.lcdui.*;
 import javax.microedition.midlet.*;
@@ -20,6 +21,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
     volatile boolean jsRunning = false;
     private Thread frameThread = null;
     volatile boolean frameRunning = false;
+
+    /** Cache for {@code require()}: canonical resource path → module {@code exports} object. */
+    private final Hashtable moduleCache = new Hashtable();
 
     /** Truncate a JS number toward zero for integer-only MIDP APIs. */
     private static int jsInt(Rv v) {
@@ -80,6 +84,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
     protected void startApp() throws MIDletStateChangeException {
         Display.getDisplay(this).setCurrent(canvas);
+        moduleCache.clear();
 
         InputStream is = "".getClass().getResourceAsStream("/main.js");
         String src = "";
@@ -1064,6 +1069,65 @@ public class Athena2ME extends MIDlet implements CommandListener {
         })));
         ri.addToObject(callObj, "Sound", _Sound);
 
+        final Rv globalObj = callObj;
+        final RocksInterpreter interp = ri;
+
+        ri.addToObject(callObj, "require",
+            ri.addNativeFunction(new NativeFunctionListEntry("require", new NativeFunction() {
+            public final int length = 1;
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Rv a0 = args.get("0");
+                if (a0 == null || a0 == Rv._undefined) {
+                    return Rv._undefined;
+                }
+                String canon = canonicalResourcePath(a0.toStr().str);
+                Rv hit = (Rv) moduleCache.get(canon);
+                if (hit != null) {
+                    return hit;
+                }
+                String userSrc = readResourceUtf8(canon);
+                if (userSrc == null) {
+                    return Rv._undefined;
+                }
+                Rv exports = interp.newModule();
+                Rv module = interp.newModule();
+                interp.addToObject(module, "exports", exports);
+                interp.addToObject(globalObj, "____rqE", exports);
+                interp.addToObject(globalObj, "____rqM", module);
+                String wrapper = "(function(exports,module,require){\n" + userSrc + "\n})(____rqE,____rqM,require);\n";
+                try {
+                    interp.runInGlobalScope(wrapper, globalObj);
+                } finally {
+                    interp.addToObject(globalObj, "____rqE", Rv._undefined);
+                    interp.addToObject(globalObj, "____rqM", Rv._undefined);
+                }
+                Rv ex = module.get("exports");
+                if (ex == null || ex == Rv._undefined) {
+                    ex = exports;
+                }
+                moduleCache.put(canon, ex);
+                return ex;
+            }
+        })));
+
+        ri.addToObject(callObj, "loadScript",
+            ri.addNativeFunction(new NativeFunctionListEntry("loadScript", new NativeFunction() {
+            public final int length = 1;
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Rv a0 = args.get("0");
+                if (a0 == null || a0 == Rv._undefined) {
+                    return Rv._undefined;
+                }
+                String canon = canonicalResourcePath(a0.toStr().str);
+                String userSrc = readResourceUtf8(canon);
+                if (userSrc == null) {
+                    return Rv._undefined;
+                }
+                interp.runInGlobalScope(userSrc, globalObj);
+                return Rv._undefined;
+            }
+        })));
+
         jsThis = callObj;
 
         final Rv _rv = rv;
@@ -1111,6 +1175,50 @@ public class Athena2ME extends MIDlet implements CommandListener {
         }
     }
     
+    private static String canonicalResourcePath(String path) {
+        if (path == null) {
+            return "/";
+        }
+        int n = path.length();
+        StringBuffer sb = new StringBuffer(n);
+        for (int i = 0; i < n; i++) {
+            char c = path.charAt(i);
+            if (c == '\\') {
+                c = '/';
+            }
+            sb.append(c);
+        }
+        String p = sb.toString().trim();
+        if (p.length() == 0) {
+            return "/";
+        }
+        if (p.charAt(0) != '/') {
+            p = "/" + p;
+        }
+        return p;
+    }
+
+    private static String readResourceUtf8(String absPath) {
+        InputStream is = null;
+        try {
+            is = "".getClass().getResourceAsStream(absPath);
+            if (is == null) {
+                return null;
+            }
+            return readUTF(readData(is));
+        } catch (Exception ex) {
+            ex.printStackTrace();
+            return null;
+        } finally {
+            if (is != null) {
+                try {
+                    is.close();
+                } catch (IOException e) {
+                }
+            }
+        }
+    }
+
     static final byte[] readData(InputStream is) throws Exception {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         byte[] bb = new byte[2000];

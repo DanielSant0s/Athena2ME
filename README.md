@@ -90,6 +90,7 @@ New types are always being added and this list can grow a lot over time, so stay
 - [ ] Block-scoped `let`/`const` (currently hoisted like `var`)
 - [x] **`Promise`** (`then` / `catch`, `Promise.resolve` / `Promise.reject`, `new Promise(executor)`, thenable assimilation); microtasks drain on `os.sleep`, `os.flushPromises`, `os.startFrameLoop`, and after the main script finishes
 - [x] **`async`/`await`** (linear `async function` bodies only — desugared before parse; see [Promise / async](#promise-minimal)); no `async`/`await` in the grammar itself
+- [x] Runtime JAR modules: **`require`** (CommonJS `exports`) and **`loadScript`** (global) — see [Global script loading](#global-script-loading-require-loadscript)
 - [ ] Generators, regex literals
 
 ### Built With
@@ -366,11 +367,11 @@ and are resolved with the fast-dispatch path described above.
   `delete`, `keys`/`values`/`entries`, iteration via `for...of`
 * **Date** — `now`, `getTime`, `setTime`
 * **Error** — `name`, `message`, `toString`
-* **Misc** — `console.log`, `isNaN`, `parseInt`, `eval`, `es - evalString`
+* **Misc** — `console.log`, `isNaN`, `parseInt`, `eval`, `es - evalString` (do **not** use `eval` to load whole scripts from the JAR; use **`require`** / **`loadScript`** below)
 
 **How to run it**
 
-Athena is basically a JavaScript loader, so it loads .js files inside .jar file (which is a zip file). It runs "main.js" by default. To run the regression suite, rename [`res/tests.js`](res/tests.js) to `main.js` (or paste its contents on top of your main).
+Athena is basically a JavaScript loader, so it loads .js files inside .jar file (which is a zip file). It runs `main.js` by default. Other scripts in the JAR can be pulled in at runtime with **`require`** (module `exports`) or **`loadScript`** (global execution). To run the regression suite, rename [`res/tests.js`](res/tests.js) to `main.js` (or paste its contents on top of your main).
 
 ## Functions, classes and consts
 
@@ -385,6 +386,29 @@ P.S.: *Italic* parameters refer to optional parameters
 * os.flushPromises() - Run all queued Promise microtasks once (same drain used by `os.sleep` and the frame loop). Use if you neither `sleep` nor use `startFrameLoop`.
 * os.startFrameLoop(fn, fps) - Hand the main loop over to native code. Java will run a dedicated `Thread` that, every frame: calls `Pad.update()`, drains Promise microtasks, calls *fn*, calls `Screen.update()`, and `sleep`s until the next deadline. *fps* is clamped to `[1, 120]`. Recommended entry point for every new script.
 * os.stopFrameLoop() - Ask the native frame loop to terminate after the current frame. Typical usage is from an exit handler.
+
+### Global script loading (`require`, `loadScript`)
+
+Ship extra `.js` files in the JAR (same layout as `main.js`) and load them while the MIDlet runs.
+
+**Paths:** Use absolute paths from the JAR root, e.g. `/lib/helpers.js`. If the string has no leading `/`, one is prepended; `\` is normalized to `/`.
+
+* **`require(path)`** — Loads the file **once**, CommonJS-style, and returns the module **`exports`** object. Inside the file, use **`exports.foo = …`** and/or **`module.exports = …`**. Execution is **synchronous**; only **classpath / JAR** resources are loaded (not HTTP). The same canonical path returns the **cached** exports object.
+
+* **`loadScript(path)`** — Reads the file and runs it in the **global** object (no `exports` / `module` wrapper). Use when the file only defines globals (`function`, `var` at top level, etc.).
+
+**Avoid `eval` for loading files:** the built-in `eval` re-tokenizes against a new source buffer without restoring the host program’s lexer state and can corrupt the running script. Prefer **`require`** or **`loadScript`**.
+
+**Limitations:** ES module syntax **`import` / `export`** is not supported; use **`require`**. Circular **`require`** graphs are not handled. Keep module top-level code mostly **synchronous**; deferred **Promise** work combined with lazy parsing edge cases in nested functions is untested.
+
+```js
+// /lib/math.js — add this path inside the built JAR next to main.js
+exports.add = function (a, b) { return a + b; };
+
+// main.js
+var m = require("/lib/math.js");
+console.log(m.add(1, 2));
+```
 
 ### Request module
 

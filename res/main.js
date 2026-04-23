@@ -1,5 +1,11 @@
 console.log("Athena2ME main.js — demo HTTP (Request + Promise)");
 
+// Exemplo require(): ficheiro /lib/demo_math.js no JAR (ver res/lib/demo_math.js)
+var demoMath = require("/lib/demo_math.js");
+console.log("require demo: add(2,3)=" + demoMath.add(2, 3) + " label=" + demoMath.label);
+var demoMath2 = require("/lib/demo_math.js");
+console.log("require cache: same object? " + (demoMath === demoMath2 ? "yes" : "no"));
+
 (function httpDemo() {
     var done = 0;
     var r = new Request();
