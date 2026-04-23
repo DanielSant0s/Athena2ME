@@ -422,6 +422,23 @@ public class Athena2ME extends MIDlet implements CommandListener {
             }
         })));
 
+        ri.addToObject(_os, "bluetoothGetCapabilities",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.bluetoothGetCapabilities", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter useRi) {
+                return AthenaBluetooth.getCapabilities(useRi);
+            }
+        })));
+
+        ri.addToObject(_os, "bluetoothInquiry",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.bluetoothInquiry", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter useRi) {
+                int ms = num > 0 ? jsInt(Rv.argAt(args, start, num, 0)) : 0;
+                return AthenaBluetooth.inquiryPromise(useRi, ms);
+            }
+        })));
+
         ri.addToObject(_os, "currentTimeMillis",
             ri.addNativeFunction(new NativeFunctionListEntry("os.currentTimeMillis", new NativeFunctionFast() {
             public final int length = 0;
@@ -1189,6 +1206,86 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
         ri.addToObject(callObj, "Socket", _SocketMod);
 
+        final Rv _BTSocketMod = ri.newModule();
+        ri.addNativeFunction(new NativeFunctionListEntry("BTSocket", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Rv ret = isNew ? _this : new Rv(Rv.OBJECT, _BTSocketMod);
+                ret.opaque = null;
+                return ret;
+            }
+        }));
+        _BTSocketMod.nativeCtor("BTSocket", callObj);
+
+        ri.addToObject(_BTSocketMod.ctorOrProt, "connect",
+            ri.addNativeFunction(new NativeFunctionListEntry("BTSocket.connect", new NativeFunction() {
+                public final int length = 1;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    return AthenaBTSocket.connectPromise(ri, _this, args.get("0").toStr().str);
+                }
+            })));
+
+        ri.addToObject(_BTSocketMod.ctorOrProt, "send",
+            ri.addNativeFunction(new NativeFunctionListEntry("BTSocket.send", new NativeFunction() {
+                public final int length = 1;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    if (!(_this.opaque instanceof AthenaBTSocket)) {
+                        return new Rv(-1);
+                    }
+                    AthenaBTSocket s = (AthenaBTSocket) _this.opaque;
+                    byte[] data = bytesFromBufferArg(args.get("0"));
+                    try {
+                        return new Rv(s.send(data, 0, data.length));
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return new Rv(-1);
+                    }
+                }
+            })));
+
+        ri.addToObject(_BTSocketMod.ctorOrProt, "recv",
+            ri.addNativeFunction(new NativeFunctionListEntry("BTSocket.recv", new NativeFunction() {
+                public final int length = 1;
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    if (!(_this.opaque instanceof AthenaBTSocket)) {
+                        return newUint8Array(ri, new byte[0]);
+                    }
+                    AthenaBTSocket s = (AthenaBTSocket) _this.opaque;
+                    int size = jsInt(args.get("0"));
+                    if (size < 1) {
+                        size = 1024;
+                    }
+                    byte[] buf = new byte[size];
+                    try {
+                        int n = s.recv(buf, 0, size);
+                        if (n <= 0) {
+                            return newUint8Array(ri, new byte[0]);
+                        }
+                        if (n == size) {
+                            return newUint8Array(ri, buf);
+                        }
+                        byte[] t = new byte[n];
+                        System.arraycopy(buf, 0, t, 0, n);
+                        return newUint8Array(ri, t);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        return newUint8Array(ri, new byte[0]);
+                    }
+                }
+            })));
+
+        ri.addToObject(_BTSocketMod.ctorOrProt, "close",
+            ri.addNativeFunction(new NativeFunctionListEntry("BTSocket.close", new NativeFunction() {
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    if (_this.opaque instanceof AthenaBTSocket) {
+                        ((AthenaBTSocket) _this.opaque).close();
+                    }
+                    _this.opaque = null;
+                    return Rv._undefined;
+                }
+            })));
+
+        ri.addToObject(callObj, "BTSocket", _BTSocketMod);
+
         final Rv _WebSocket = ri.newModule();
         ri.addNativeFunction(new NativeFunctionListEntry("WebSocket", new NativeFunction() {
             public Rv func(boolean isNew, Rv _this, Rv args) {
@@ -1621,7 +1718,8 @@ public class Athena2ME extends MIDlet implements CommandListener {
                         synchronized (bootJsLock) {
                             PromiseRuntime.drain(ri);
                         }
-                        if (!PromiseRuntime.hasPending() && AthenaRequest.getHttpInFlight() == 0) {
+                        if (!PromiseRuntime.hasPending() && AthenaRequest.getHttpInFlight() == 0
+                                && AthenaBluetooth.getBluetoothInFlight() == 0) {
                             break;
                         }
                         try {

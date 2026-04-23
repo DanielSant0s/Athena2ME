@@ -52,6 +52,7 @@ Athena2ME is a project that seeks to facilitate and at the same time brings a co
 * Request: HTTP/HTTPS client returning **Promises** (`get` / `post` / `download`).
 * Socket: TCP/UDP sockets (`javax.microedition.io`).
 * WebSocket: Minimal `ws://` client (RFC 6455 framing over TCP).
+* Bluetooth: JSR-82 inquiry, `btspp://` client (`BTSocket`), optional `/lib/bluetooth.js` helper — see [Bluetooth (JSR-82)](#bluetooth-jsr-82).
 * **Sound** — BGM `Sound.Stream` and short `Sound.Sfx` with a channel pool (MMAPI; see [Sound module](#sound-module)).
 * **Threads & sync** — `os.spawn`, `os.Thread.start`, `os.Mutex`, `os.Semaphore`, `os.AtomicInt` (single shared JS runtime; see [Threads and concurrency](#threads-and-concurrency)).
 
@@ -406,6 +407,8 @@ P.S.: *Italic* parameters refer to optional parameters
 * os.Mutex() — Returns a **non-reentrant** mutex with methods: `lock()`, `tryLock()` (returns `1` / `0`), `unlock()`. Blocking `lock()` from JavaScript ties up the interpreter thread; prefer `tryLock` or keep critical sections in native-backed flows. `unlock` without ownership is a no-op.
 * os.Semaphore(*initial*, *max*) — Counting semaphore with `acquire()`, `tryAcquire()` (`1` / `0`), `release()`, `availablePermits()`. `release` cannot raise the count above *max*.
 * os.AtomicInt(*initial*) — `get()`, `set(n)`, `addAndGet(delta)`.
+* os.bluetoothGetCapabilities() — Synchronous object `{ jsr82, available, powered, name, address, error }` (numeric flags use `0`/`1`; `error` is a string, empty when OK). Uses **JSR-82** (`javax.bluetooth`). Requires `jsr082.jar` (or equivalent) on the **compile** classpath; runtime still needs a device or emulator stack that exposes Bluetooth.
+* os.bluetoothInquiry(*timeoutMs*) — Returns a **`Promise`** that fulfills with a dense array of `{ address, friendlyName, majorDeviceClass }`. *timeoutMs* is clamped internally: values `≤ 0` use a **30s** default. Only **one** inquiry may run at a time; a second call rejects with `Bluetooth inquiry busy`. A timer cancels the inquiry when *timeoutMs* elapses.
 
 ### Threads and concurrency
 
@@ -485,6 +488,35 @@ Constants: `Socket.AF_INET`, `Socket.SOCK_STREAM`, `Socket.SOCK_DGRAM`, `Socket.
 * `var ws = new WebSocket("ws://host:port/path")` — only **`ws://`** is implemented; **`wss://`** is not (TLS). On failure, `ws.error` is set and methods no-op.
 * `send(uint8)` — binary frame (opcode 2).
 * `recv()` — blocks until one text/binary data frame; returns `Uint8Array` (empty if closed/error). Ping/pong handled internally.
+
+### Bluetooth (JSR-82)
+
+**Build:** add **`jsr082.jar`** (or your OEM JSR-82 API jar), e.g. from Java ME SDK / WTK `lib/jsr082.jar`, to the project compile classpath. The MIDlet JAR does not bundle this API; the handset or emulator must ship a working JSR-82 implementation.
+
+**Native globals:** `os.bluetoothGetCapabilities`, `os.bluetoothInquiry` (see **os module** above), and **`BTSocket`**.
+
+**`BTSocket`:** `new BTSocket()` starts with no connection. **`connect(url)`** returns a **`Promise`** that fulfills with the same instance once `btspp://…` is open (rejects on failure). Then: **`send(uint8)`** → bytes written or `-1`; **`recv(maxBytes)`** → `Uint8Array`; **`close()`**. Do not call `send`/`recv` until `connect` has settled. Only one `connect` per instance.
+
+**JS helper module** (ship as `/lib/bluetooth.js` in the JAR): `require("/lib/bluetooth.js")` exports **`getCapabilities()`** (wraps `os.bluetoothGetCapabilities` with a fallback if natives are missing), **`discoverDevices({ timeoutMs })`** → Promise (wraps `os.bluetoothInquiry`), and **`sppUrl(address, channel, params)`** to build `btspp://` URLs (hex address, colons stripped; default `authenticate=false;encrypt=false`).
+
+Pending Bluetooth work (inquiry + async `connect`) is tracked like HTTP; the host waits for **`AthenaBluetooth.getBluetoothInFlight()`** to reach zero before tearing down the JS runtime after `main.js` finishes.
+
+**Limitations:** no UUID **service search** in this release (you must know channel / URL). `authenticate` / `encrypt` depend on the peer and stack. Many emulators expose no real radio — expect `available: 0` or non-empty `error` from **`getCapabilities`**.
+
+```js
+var BT = require("/lib/bluetooth.js");
+console.log(BT.getCapabilities());
+BT.discoverDevices({ timeoutMs: 15000 }).then(function (devices) {
+  var i;
+  for (i = 0; i < devices.length; i++) {
+    console.log(devices[i].address, devices[i].friendlyName);
+  }
+});
+var sock = new BTSocket();
+sock.connect(BT.sppUrl("00112233445566", 1)).then(function (s) {
+  // s.send(u8); var u8 = s.recv(1024); s.close();
+}).catch(function (e) { console.log(e.message); });
+```
 
 ### Color module
 * var col = Color.new(r, g, b, *a*) - Returns a color object from the specified RGB(A) parameters.
