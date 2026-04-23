@@ -49,8 +49,8 @@ Athena2ME is a project that seeks to facilitate and at the same time brings a co
 * Pad: Above being able to draw and everything else, A human interface is important.
 * Keyboard: Basic keypad support.
 * Timer: Control the time precisely in your code, it contains several timing functions.
-* Request: HTTP/HTTPS client returning **Promises** (`get` / `post` / `download`), modelled on AthenaEnv.
-* Socket: TCP/UDP sockets (`javax.microedition.io`), AthenaEnv-style.
+* Request: HTTP/HTTPS client returning **Promises** (`get` / `post` / `download`).
+* Socket: TCP/UDP sockets (`javax.microedition.io`).
 * WebSocket: Minimal `ws://` client (RFC 6455 framing over TCP).
 
 New types are always being added and this list can grow a lot over time, so stay tuned.
@@ -386,7 +386,7 @@ P.S.: *Italic* parameters refer to optional parameters
 
 ### Request module
 
-HTTP/HTTPS via MIDP `HttpConnection`, modelled on [AthenaEnv Request](https://github.com/DanielSant0s/AthenaEnv). HTTPS depends on the device TLS stack and certificates.
+HTTP/HTTPS via MIDP `HttpConnection`. HTTPS depends on the device TLS stack and certificates.
 
 **Instance properties (defaults after `new Request()`):** `keepalive` (0/1), `useragent`, `userpwd` (`user:password` for Basic auth), `headers` (array of string pairs: `[name0, value0, name1, value1, …]`). After each completed request, the same instance fields are updated: `responseCode`, `error`, `contentLength`.
 
