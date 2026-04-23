@@ -52,6 +52,7 @@ Athena2ME is a project that seeks to facilitate and at the same time brings a co
 * Request: HTTP/HTTPS client returning **Promises** (`get` / `post` / `download`).
 * Socket: TCP/UDP sockets (`javax.microedition.io`).
 * WebSocket: Minimal `ws://` client (RFC 6455 framing over TCP).
+* **Sound** — BGM `Sound.Stream` and short `Sound.Sfx` with a channel pool (MMAPI; see [Sound module](#sound-module)).
 
 New types are always being added and this list can grow a lot over time, so stay tuned.
 
@@ -63,6 +64,7 @@ New types are always being added and this list can grow a lot over time, so stay
 - [x] Physical pad functions
 - [x] Keypad functions
 - [x] Timer functions
+- [x] Sound: `Stream` (BGM) + `Sfx` (channels) via MMAPI — see [Sound module](#sound-module)
 - [x] `let` / `const` (tokenizer + parser aliases of `var`)
 - [x] Arrow functions with lexical `this`
 - [x] Template literals (`` `hi ${x}` ``)
@@ -540,7 +542,30 @@ Methods:
   • resume()  
   • reset()  
   • playing()  
-  
+
+### Sound module
+
+**Stream** and **Sfx** split the work: one background `Player` per `Sound.Stream` instance vs short samples on a shared **channel** pool for `Sound.Sfx`. Audio uses `javax.microedition.media` (MMAPI) only; use **WAV (PCM)** and, for long BGM, **MIDI** where the device stack supports it.
+
+| | **Sound.Stream** (BGM) | **Sound.Sfx** (one-shots) |
+| --- | --- | --- |
+| **Files** | **WAV (PCM)**, or **MIDI** (`.mid` / `.midi`) | **WAV (PCM)** short clips only |
+| **Role** | Long track, one instance, `position` / `length` / `loop` | Clips, **8** simultaneous voices (`AthenaSound.MAX_CHANNELS`) |
+| **Path** | Resource path in the JAR (e.g. `res/bgm.wav`) | Same (e.g. `res/sfx.wav`) |
+
+**Formats:** a typical MIDP 2 build exposes **WAV** and, for streams, **MIDI (Stream only, `.mid` / `.midi`)** through MMAPI, without custom decoders. `position` / `rewind` on MIDI can be **best-effort** depending on the emulator or handset.
+
+* **Sound.setVolume(*volume*)** — Master output **0..100** (`VolumeControl` on new playback).
+* **Sound.findChannel()** — Returns the first free SFX **channel** index (0-based), or **undefined** if all eight are busy.
+* **const bgm = Sound.Stream(*path*)**  
+  **Methods:** `play()`, `pause()`, `free()`, `playing()` (0/1), `rewind()` (seek to 0; call `play()` again to hear from the start if needed).  
+  **Properties (number):** `position` (ms), `length` (ms, read from the `Player` after load), `loop` (non-zero = loop, **best-effort** `setLoopCount` / fallback).
+* **const hit = Sound.Sfx(*path*)**  
+  **Methods:** `play()` (no arg: pick a free channel, return **channel index**), `play(*channel*)` (fixed slot, return **undefined**), `free()`, `playing(*channel*)` (0/1).  
+  **Properties:** `volume` **0..100** (default 100; combined with master), `pan` and `pitch` **-100..100** — `pitch` is applied if `PitchControl` exists; **pan** is reserved (many MMAPI builds have no panned sample mix).
+
+SFX is loaded into memory **once** per `Sfx` object; each `play()` creates a new `Player` for that **channel** and releases the slot when the clip **ends** (`END_OF_MEDIA`). Stopping and closing all SFX/Stream `Player` instances runs when the MIDlet is destroyed (`destroyApp`).
+
 ## Contributing
 
 Contributions are what make the open source community such an amazing place to be learn, inspire, and create. Any contributions you make are **greatly appreciated**.

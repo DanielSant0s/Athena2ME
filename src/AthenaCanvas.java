@@ -16,10 +16,6 @@ import javax.microedition.lcdui.game.Sprite;
 import javax.microedition.lcdui.Font;
 import javax.microedition.lcdui.Graphics;
 import javax.microedition.lcdui.Image;
-import javax.microedition.media.Manager;
-import javax.microedition.media.MediaException;
-import javax.microedition.media.Player;
-import javax.microedition.media.control.ToneControl;
 import javax.microedition.rms.RecordStore;
 import javax.microedition.rms.RecordStoreException;
 

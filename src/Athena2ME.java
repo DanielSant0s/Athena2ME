@@ -68,6 +68,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
             jsThread.interrupt();
             jsThread = null;
         }
+        AthenaSound.shutdown();
         Display.getDisplay(this).setCurrent((Displayable)null);
 
     }
@@ -538,7 +539,6 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
         ri.addToObject(callObj, "Keyboard", _Keyboard);
 
-        /* --- Request (HTTP/HTTPS), Socket, WebSocket (AthenaEnv-style) --- */
         final Rv _Request = ri.newModule();
         ri.addNativeFunction(new NativeFunctionListEntry("Request", new NativeFunction() {
             public Rv func(boolean isNew, Rv _this, Rv args) {
@@ -871,6 +871,198 @@ public class Athena2ME extends MIDlet implements CommandListener {
         })));
 
         ri.addToObject(callObj, "Timer", _Timer);
+
+        // --- Sound (Stream + Sfx) — MMAPI ---
+        final Rv _StreamF = ri.addNativeFunction(new NativeFunctionListEntry("Stream", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                return Rv._undefined;
+            }
+        }));
+        _StreamF.nativeCtor("Stream", callObj);
+        final Rv _SfxF = ri.addNativeFunction(new NativeFunctionListEntry("Sfx", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                return Rv._undefined;
+            }
+        }));
+        _SfxF.nativeCtor("Sfx", callObj);
+
+        Rv _Sound = ri.newModule();
+        ri.addToObject(_Sound, "setVolume",
+            ri.addNativeFunction(new NativeFunctionListEntry("Sound.setVolume", new NativeFunctionFast() {
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    int v = jsInt(Rv.argAt(args, start, num, 0));
+                    AthenaSound.setMasterVolume(v);
+                    return Rv._undefined;
+                }
+        })));
+        ri.addToObject(_Sound, "findChannel",
+            ri.addNativeFunction(new NativeFunctionListEntry("Sound.findChannel", new NativeFunctionFast() {
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    int c = AthenaSound.findChannel();
+                    if (c < 0) {
+                        return Rv._undefined;
+                    }
+                    return new Rv(c);
+                }
+        })));
+        ri.addToObject(_Sound, "Stream",
+            ri.addNativeFunction(new NativeFunctionListEntry("Sound.Stream", new NativeFunction() {
+                public final int length = 1;
+                public Rv func(boolean isNew, Rv _th, Rv args) {
+                    Rv ret = new Rv(Rv.OBJECT, _StreamF);
+                    String path = args.get("0").toStr().str;
+                    AthenaSound.StreamHandle h = AthenaSound.createStream(path);
+                    ret.opaque = h;
+                    int len0 = 0;
+                    if (h.p != null) {
+                        len0 = AthenaSound.streamGetLengthMs(h.p);
+                    }
+                    ri.addToObject(ret, "position", new Rv(0));
+                    ri.addToObject(ret, "length", new Rv(len0));
+                    ri.addToObject(ret, "loop", new Rv(0));
+                    return ret;
+                }
+        })));
+        ri.addToObject(_Sound, "Sfx",
+            ri.addNativeFunction(new NativeFunctionListEntry("Sound.Sfx", new NativeFunction() {
+                public final int length = 1;
+                public Rv func(boolean isNew, Rv _th, Rv args) {
+                    Rv ret = new Rv(Rv.OBJECT, _SfxF);
+                    String path = args.get("0").toStr().str;
+                    AthenaSound.SfxData s = AthenaSound.loadSfxData(path);
+                    ret.opaque = s;
+                    ri.addToObject(ret, "volume", new Rv(100));
+                    ri.addToObject(ret, "pan", new Rv(0));
+                    ri.addToObject(ret, "pitch", new Rv(0));
+                    return ret;
+                }
+        })));
+        ri.addToObject(_StreamF.ctorOrProt, "play",
+            ri.addNativeFunction(new NativeFunctionListEntry("Sound.Stream.play", new NativeFunction() {
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    Object o = _this.opaque;
+                    if (!(o instanceof AthenaSound.StreamHandle)) {
+                        return Rv._undefined;
+                    }
+                    AthenaSound.StreamHandle h = (AthenaSound.StreamHandle) o;
+                    if (h.p == null) {
+                        return Rv._undefined;
+                    }
+                    int posMs = jsInt(_this.get("position"));
+                    AthenaSound.streamSetPositionMs(h.p, posMs);
+                    int loopB = jsInt(_this.get("loop"));
+                    AthenaSound.streamSetLoop(h.p, loopB != 0);
+                    AthenaSound.applyMasterVolumeToPlayer(h.p);
+                    AthenaSound.streamStart(h.p);
+                    ri.addToObject(_this, "position", new Rv(AthenaSound.streamGetPositionMs(h.p)));
+                    ri.addToObject(_this, "length", new Rv(AthenaSound.streamGetLengthMs(h.p)));
+                    return Rv._undefined;
+                }
+        })));
+        ri.addToObject(_StreamF.ctorOrProt, "pause",
+            ri.addNativeFunction(new NativeFunctionListEntry("Sound.Stream.pause", new NativeFunction() {
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    Object o = _this.opaque;
+                    if (!(o instanceof AthenaSound.StreamHandle)) {
+                        return Rv._undefined;
+                    }
+                    AthenaSound.StreamHandle h = (AthenaSound.StreamHandle) o;
+                    if (h.p == null) {
+                        return Rv._undefined;
+                    }
+                    AthenaSound.streamStop(h.p);
+                    ri.addToObject(_this, "position", new Rv(AthenaSound.streamGetPositionMs(h.p)));
+                    ri.addToObject(_this, "length", new Rv(AthenaSound.streamGetLengthMs(h.p)));
+                    return Rv._undefined;
+                }
+        })));
+        ri.addToObject(_StreamF.ctorOrProt, "playing",
+            ri.addNativeFunction(new NativeFunctionListEntry("Sound.Stream.playing", new NativeFunction() {
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    Object o = _this.opaque;
+                    if (!(o instanceof AthenaSound.StreamHandle)) {
+                        return new Rv(0);
+                    }
+                    AthenaSound.StreamHandle h = (AthenaSound.StreamHandle) o;
+                    if (h.p == null) {
+                        return new Rv(0);
+                    }
+                    ri.addToObject(_this, "position", new Rv(AthenaSound.streamGetPositionMs(h.p)));
+                    ri.addToObject(_this, "length", new Rv(AthenaSound.streamGetLengthMs(h.p)));
+                    return new Rv(AthenaSound.streamIsPlaying(h.p) ? 1 : 0);
+                }
+        })));
+        ri.addToObject(_StreamF.ctorOrProt, "rewind",
+            ri.addNativeFunction(new NativeFunctionListEntry("Sound.Stream.rewind", new NativeFunction() {
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    Object o = _this.opaque;
+                    if (!(o instanceof AthenaSound.StreamHandle)) {
+                        return Rv._undefined;
+                    }
+                    AthenaSound.StreamHandle h = (AthenaSound.StreamHandle) o;
+                    if (h.p == null) {
+                        return Rv._undefined;
+                    }
+                    AthenaSound.streamSetPositionMs(h.p, 0);
+                    ri.addToObject(_this, "position", new Rv(0));
+                    return Rv._undefined;
+                }
+        })));
+        ri.addToObject(_StreamF.ctorOrProt, "free",
+            ri.addNativeFunction(new NativeFunctionListEntry("Sound.Stream.free", new NativeFunction() {
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    Object o = _this.opaque;
+                    if (o instanceof AthenaSound.StreamHandle) {
+                        ((AthenaSound.StreamHandle) o).close();
+                    }
+                    _this.opaque = null;
+                    return Rv._undefined;
+                }
+        })));
+        ri.addToObject(_SfxF.ctorOrProt, "play",
+            ri.addNativeFunction(new NativeFunctionListEntry("Sound.Sfx.play", new NativeFunction() {
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    Object o = _this.opaque;
+                    if (!(o instanceof AthenaSound.SfxData)) {
+                        return Rv._undefined;
+                    }
+                    AthenaSound.SfxData s = (AthenaSound.SfxData) o;
+                    Rv a0 = args.get("0");
+                    boolean hasCh = a0 != null && a0 != Rv._undefined;
+                    int v = jsInt(_this.get("volume"));
+                    int pan = jsInt(_this.get("pan"));
+                    int pitc = jsInt(_this.get("pitch"));
+                    if (hasCh) {
+                        int chw = jsInt(a0);
+                        AthenaSound.playSfx(s, chw, v, pan, pitc);
+                        return Rv._undefined;
+                    }
+                    int r = AthenaSound.playSfx(s, -1, v, pan, pitc);
+                    if (r < 0) {
+                        return Rv._undefined;
+                    }
+                    return new Rv(r);
+                }
+        })));
+        ri.addToObject(_SfxF.ctorOrProt, "free",
+            ri.addNativeFunction(new NativeFunctionListEntry("Sound.Sfx.free", new NativeFunction() {
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    Object o = _this.opaque;
+                    if (o instanceof AthenaSound.SfxData) {
+                        AthenaSound.freeSfxData((AthenaSound.SfxData) o);
+                    }
+                    _this.opaque = null;
+                    return Rv._undefined;
+                }
+        })));
+        ri.addToObject(_SfxF.ctorOrProt, "playing",
+            ri.addNativeFunction(new NativeFunctionListEntry("Sound.Sfx.playing", new NativeFunction() {
+                public Rv func(boolean isNew, Rv _this, Rv args) {
+                    int ch = jsInt(args.get("0"));
+                    return new Rv(AthenaSound.isSfxChannelPlaying(ch) ? 1 : 0);
+                }
+        })));
+        ri.addToObject(callObj, "Sound", _Sound);
 
         jsThis = callObj;
 

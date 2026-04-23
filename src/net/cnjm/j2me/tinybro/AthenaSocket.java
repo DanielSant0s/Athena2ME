@@ -5,7 +5,7 @@ import java.io.*;
 import javax.microedition.io.*;
 
 /**
- * TCP/UDP sockets (AthenaEnv-style API). {@link #SOCK_RAW} is not supported on MIDP.
+ * TCP/UDP sockets. {@link #SOCK_RAW} is not supported on MIDP.
  */
 public final class AthenaSocket {
 
