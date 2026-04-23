@@ -1,6 +1,9 @@
 import java.io.*;
 import java.util.Hashtable;
 
+import javax.microedition.io.Connector;
+import javax.microedition.io.file.FileConnection;
+
 import javax.microedition.lcdui.*;
 import javax.microedition.midlet.*;
 import javax.microedition.lcdui.Command;
@@ -10,6 +13,9 @@ import javax.microedition.lcdui.Image;
 
 import net.cnjm.j2me.tinybro.*;
 import net.cnjm.j2me.util.*;
+import net.cnjm.j2me.sync.AtomicInt;
+import net.cnjm.j2me.sync.Mutex;
+import net.cnjm.j2me.sync.Semaphore;
 
 public class Athena2ME extends MIDlet implements CommandListener {
     RocksInterpreter ri;
@@ -24,6 +30,12 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
     /** Cache for {@code require()}: canonical resource path → module {@code exports} object. */
     private final Hashtable moduleCache = new Hashtable();
+
+    /**
+     * Serializes {@link RocksInterpreter#call}, {@link RocksInterpreter#runInGlobalScope},
+     * and {@link PromiseRuntime#drain} for this MIDlet's single interpreter.
+     */
+    private final Object jsRuntimeLock = new Object();
 
     /** Truncate a JS number toward zero for integer-only MIDP APIs. */
     private static int jsInt(Rv v) {
@@ -52,6 +64,18 @@ public class Athena2ME extends MIDlet implements CommandListener {
             return arg.toStr().str.getBytes("UTF-8");
         } catch (java.io.UnsupportedEncodingException e) {
             return arg.toStr().str.getBytes();
+        }
+    }
+
+    private static Rv j2mePropertyOrNull(String name) {
+        try {
+            String s = System.getProperty(name);
+            if (s == null) {
+                return Rv._null;
+            }
+            return new Rv(s);
+        } catch (Throwable t) {
+            return Rv._null;
         }
     }
 
@@ -111,6 +135,17 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
         Rv _os = ri.newModule();
         ri.addToObject(_os, "platform", new Rv("j2me"));
+        ri.addToObject(_os, "O_RDONLY", new Rv(AthenaFile.O_RDONLY));
+        ri.addToObject(_os, "O_WRONLY", new Rv(AthenaFile.O_WRONLY));
+        ri.addToObject(_os, "O_RDWR", new Rv(AthenaFile.O_RDWR));
+        ri.addToObject(_os, "O_NDELAY", new Rv(AthenaFile.O_NDELAY));
+        ri.addToObject(_os, "O_APPEND", new Rv(AthenaFile.O_APPEND));
+        ri.addToObject(_os, "O_CREAT", new Rv(AthenaFile.O_CREAT));
+        ri.addToObject(_os, "O_TRUNC", new Rv(AthenaFile.O_TRUNC));
+        ri.addToObject(_os, "O_EXCL", new Rv(AthenaFile.O_EXCL));
+        ri.addToObject(_os, "SEEK_SET", new Rv(AthenaFile.SEEK_SET));
+        ri.addToObject(_os, "SEEK_CUR", new Rv(AthenaFile.SEEK_CUR));
+        ri.addToObject(_os, "SEEK_END", new Rv(AthenaFile.SEEK_END));
 
         ri.addToObject(_os, "setExitHandler", 
             ri.addNativeFunction(new NativeFunctionListEntry("os.setExitHandler", new NativeFunction() {
@@ -157,13 +192,70 @@ public class Athena2ME extends MIDlet implements CommandListener {
             }
         })));
 
+        ri.addToObject(_os, "read",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.read", new NativeFunction() {
+            public final int length = 2;
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                int fd = jsInt(args.get("0"));
+                int size = jsInt(args.get("1"));
+                if (size < 1) {
+                    size = 1024;
+                }
+                if (size > 1048576) {
+                    size = 1048576;
+                }
+                byte[] buf = new byte[size];
+                int n = AthenaFile.read(fd, buf, size);
+                if (n <= 0) {
+                    return newUint8Array(ri, new byte[0]);
+                }
+                if (n == size) {
+                    return newUint8Array(ri, buf);
+                }
+                byte[] t = new byte[n];
+                System.arraycopy(buf, 0, t, 0, n);
+                return newUint8Array(ri, t);
+            }
+        })));
+
+        ri.addToObject(_os, "write",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.write", new NativeFunction() {
+            public final int length = 2;
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                int fd = jsInt(args.get("0"));
+                byte[] data = bytesFromBufferArg(args.get("1"));
+                int n = AthenaFile.write(fd, data, data.length);
+                return new Rv(n);
+            }
+        })));
+
+        ri.addToObject(_os, "fstat",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.fstat", new NativeFunction() {
+            public final int length = 1;
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                int fd = jsInt(args.get("0"));
+                long[] st = AthenaFile.stat(fd);
+                Rv o = ri.newModule();
+                if (st == null) {
+                    ri.addToObject(o, "error", new Rv("bad fd or stat failed"));
+                    return o;
+                }
+                ri.addToObject(o, "size", new Rv((double) st[0]));
+                ri.addToObject(o, "isDirectory", new Rv((double) st[1]));
+                ri.addToObject(o, "lastModified", new Rv((double) st[2]));
+                return o;
+            }
+        })));
+
         ri.addToObject(_os, "sleep",
             ri.addNativeFunction(new NativeFunctionListEntry("os.sleep", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                 int ms = jsInt(Rv.argAt(args, start, num, 0));
                 if (ms < 0) ms = 0;
-                PromiseRuntime.drain(ri);
+                synchronized (jsRuntimeLock) {
+                    PromiseRuntime.drain(ri);
+                }
                 try { Thread.sleep(ms); } catch (InterruptedException e) {}
                 return Rv._undefined;
             }
@@ -173,7 +265,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
             ri.addNativeFunction(new NativeFunctionListEntry("os.flushPromises", new NativeFunctionFast() {
             public final int length = 0;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
-                PromiseRuntime.drain(ri);
+                synchronized (jsRuntimeLock) {
+                    PromiseRuntime.drain(ri);
+                }
                 return Rv._undefined;
             }
         })));
@@ -199,14 +293,17 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 final Rv thisRef = _this;
                 self.frameRunning = true;
                 final AthenaCanvas cv = self.canvas;
+                final Object frameJsLock = self.jsRuntimeLock;
                 self.frameThread = new Thread(new Runnable() {
                     public void run() {
                         while (self.frameRunning) {
                             long deadline = System.currentTimeMillis() + frameMs;
                             try {
                                 cv.padUpdate();
-                                PromiseRuntime.drain(interp);
-                                interp.call(false, fn, fn.co, thisRef, null, 0, 0);
+                                synchronized (frameJsLock) {
+                                    PromiseRuntime.drain(interp);
+                                    interp.call(false, fn, fn.co, thisRef, null, 0, 0);
+                                }
                                 cv.screenUpdate();
                             } catch (Throwable t) {
                                 t.printStackTrace();
@@ -238,6 +335,377 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 return Rv._undefined;
             }
         })));
+
+        ri.addToObject(_os, "getSystemInfo",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.getSystemInfo", new NativeFunctionFast() {
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv o = ri.newModule();
+                ri.addToObject(o, "microedition.platform", j2mePropertyOrNull("microedition.platform"));
+                ri.addToObject(o, "microedition.configuration", j2mePropertyOrNull("microedition.configuration"));
+                ri.addToObject(o, "microedition.profiles", j2mePropertyOrNull("microedition.profiles"));
+                ri.addToObject(o, "microedition.locale", j2mePropertyOrNull("microedition.locale"));
+                ri.addToObject(o, "microedition.encoding", j2mePropertyOrNull("microedition.encoding"));
+                return o;
+            }
+        })));
+
+        ri.addToObject(_os, "getMemoryStats",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.getMemoryStats", new NativeFunctionFast() {
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                if (num > 0) {
+                    Rv a0 = Rv.argAt(args, start, num, 0);
+                    if (a0 != Rv._undefined && a0 != Rv._null && a0.asBool()) {
+                        Runtime.getRuntime().gc();
+                    }
+                }
+                long total = Runtime.getRuntime().totalMemory();
+                long free = Runtime.getRuntime().freeMemory();
+                long used = total - free;
+                Rv o = ri.newModule();
+                ri.addToObject(o, "heapTotal", new Rv((double) total));
+                ri.addToObject(o, "heapFree", new Rv((double) free));
+                ri.addToObject(o, "heapUsed", new Rv((double) used));
+                return o;
+            }
+        })));
+
+        ri.addToObject(_os, "getStorageStats",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.getStorageStats", new NativeFunctionFast() {
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv o = ri.newModule();
+                if (num < 1) {
+                    ri.addToObject(o, "error", new Rv("fileUrl required"));
+                    return o;
+                }
+                Rv a0 = Rv.argAt(args, start, num, 0);
+                if (a0 == Rv._undefined || a0 == Rv._null) {
+                    ri.addToObject(o, "error", new Rv("fileUrl required"));
+                    return o;
+                }
+                String fileUrl = a0.toStr().str;
+                if (fileUrl == null || fileUrl.length() == 0) {
+                    ri.addToObject(o, "error", new Rv("fileUrl required"));
+                    return o;
+                }
+                FileConnection fc = null;
+                try {
+                    fc = (FileConnection) Connector.open(fileUrl, Connector.READ);
+                    ri.addToObject(o, "total", new Rv((double) fc.totalSize()));
+                    ri.addToObject(o, "free", new Rv((double) fc.availableSize()));
+                } catch (Throwable t) {
+                    String msg = t.getMessage();
+                    ri.addToObject(o, "error", new Rv(msg != null && msg.length() > 0 ? msg : t.toString()));
+                } finally {
+                    if (fc != null) {
+                        try {
+                            fc.close();
+                        } catch (IOException e) {
+                        }
+                    }
+                }
+                return o;
+            }
+        })));
+
+        ri.addToObject(_os, "getProperty",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.getProperty", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter useRi) {
+                if (num < 1) {
+                    return Rv._null;
+                }
+                Rv a0 = Rv.argAt(args, start, num, 0);
+                if (a0 == Rv._undefined || a0 == Rv._null) {
+                    return Rv._null;
+                }
+                return j2mePropertyOrNull(a0.toStr().str);
+            }
+        })));
+
+        ri.addToObject(_os, "currentTimeMillis",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.currentTimeMillis", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter useRi) {
+                return new Rv((double) System.currentTimeMillis());
+            }
+        })));
+
+        ri.addToObject(_os, "uptimeMillis",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.uptimeMillis", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter useRi) {
+                return new Rv((double) (System.currentTimeMillis() - RocksInterpreter.bootTime));
+            }
+        })));
+
+        ri.addToObject(_os, "gc",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.gc", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter useRi) {
+                Runtime.getRuntime().gc();
+                return Rv._undefined;
+            }
+        })));
+
+        ri.addToObject(_os, "threadYield",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.threadYield", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter useRi) {
+                Thread.yield();
+                return Rv._undefined;
+            }
+        })));
+
+        ri.addToObject(_os, "spawn",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.spawn", new NativeFunction() {
+            public final int length = 1;
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Rv fn = args.get("0");
+                if (fn == null || !fn.isCallable()) {
+                    return PromiseRuntime.rejected(ri, Rv.error("spawn: function required"));
+                }
+                final Rv fnCap = fn;
+                final RocksInterpreter riCap = ri;
+                final Rv promise = PromiseRuntime.createPending(ri);
+                new Thread(new Runnable() {
+                    public void run() {
+                        PromiseRuntime.enqueue(new PromiseRuntime.Microtask() {
+                            public void run(RocksInterpreter ri2) {
+                                RocksInterpreter use = ri2 != null ? ri2 : riCap;
+                                try {
+                                    Pack ap = new Pack(-1, 0);
+                                    Rv out = use.invokeJS(fnCap, Rv._undefined, ap, 0, 0);
+                                    PromiseRuntime.resolveViaCapability(use, promise, out != null ? out : Rv._undefined);
+                                } catch (Throwable t) {
+                                    PromiseRuntime.reject(use, promise, Rv.error(t.getMessage() != null ? t.getMessage() : "spawn failed"));
+                                }
+                            }
+                        });
+                    }
+                }).start();
+                return promise;
+            }
+        })));
+
+        final Rv[] mutexCtorBox = new Rv[1];
+        mutexCtorBox[0] = ri.addNativeFunction(new NativeFunctionListEntry("os.Mutex.ctor", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Rv ret = new Rv(Rv.OBJECT, mutexCtorBox[0]);
+                ret.opaque = new Mutex();
+                return ret;
+            }
+        }));
+        mutexCtorBox[0].nativeCtor("Mutex", callObj);
+        final Rv mutexCtor = mutexCtorBox[0];
+        ri.addToObject(mutexCtor.ctorOrProt, "lock",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.Mutex.lock", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Object o = _this.opaque;
+                if (!(o instanceof Mutex)) {
+                    return Rv._undefined;
+                }
+                try {
+                    ((Mutex) o).lock();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(mutexCtor.ctorOrProt, "tryLock",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.Mutex.tryLock", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Object o = _this.opaque;
+                if (!(o instanceof Mutex)) {
+                    return new Rv(0);
+                }
+                return new Rv(((Mutex) o).tryLock() ? 1 : 0);
+            }
+        })));
+        ri.addToObject(mutexCtor.ctorOrProt, "unlock",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.Mutex.unlock", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Object o = _this.opaque;
+                if (o instanceof Mutex) {
+                    ((Mutex) o).unlock();
+                }
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_os, "Mutex",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.Mutex", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Rv ret = new Rv(Rv.OBJECT, mutexCtor);
+                ret.opaque = new Mutex();
+                return ret;
+            }
+        })));
+
+        final Rv[] semCtorBox = new Rv[1];
+        semCtorBox[0] = ri.addNativeFunction(new NativeFunctionListEntry("os.Semaphore.ctor", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                int initial = args != null && args.get("0") != null ? jsInt(args.get("0")) : 1;
+                int max = args != null && args.get("1") != null ? jsInt(args.get("1")) : initial;
+                if (initial < 0) {
+                    initial = 0;
+                }
+                if (max < 1) {
+                    max = initial > 0 ? initial : 1;
+                }
+                Rv ret = new Rv(Rv.OBJECT, semCtorBox[0]);
+                ret.opaque = new Semaphore(initial, max);
+                return ret;
+            }
+        }));
+        semCtorBox[0].nativeCtor("Semaphore", callObj);
+        final Rv semCtor = semCtorBox[0];
+        ri.addToObject(semCtor.ctorOrProt, "acquire",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.Semaphore.acquire", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Object o = _this.opaque;
+                if (!(o instanceof Semaphore)) {
+                    return Rv._undefined;
+                }
+                try {
+                    ((Semaphore) o).acquire();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(semCtor.ctorOrProt, "tryAcquire",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.Semaphore.tryAcquire", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Object o = _this.opaque;
+                if (!(o instanceof Semaphore)) {
+                    return new Rv(0);
+                }
+                return new Rv(((Semaphore) o).tryAcquire() ? 1 : 0);
+            }
+        })));
+        ri.addToObject(semCtor.ctorOrProt, "release",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.Semaphore.release", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Object o = _this.opaque;
+                if (o instanceof Semaphore) {
+                    ((Semaphore) o).release();
+                }
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(semCtor.ctorOrProt, "availablePermits",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.Semaphore.availablePermits", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Object o = _this.opaque;
+                if (!(o instanceof Semaphore)) {
+                    return new Rv(0);
+                }
+                return new Rv(((Semaphore) o).availablePermits());
+            }
+        })));
+        ri.addToObject(_os, "Semaphore",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.Semaphore", new NativeFunction() {
+            public final int length = 2;
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                int initial = args != null && args.get("0") != null ? jsInt(args.get("0")) : 1;
+                int max = args != null && args.get("1") != null ? jsInt(args.get("1")) : initial;
+                if (initial < 0) {
+                    initial = 0;
+                }
+                if (max < 1) {
+                    max = initial > 0 ? initial : 1;
+                }
+                Rv ret = new Rv(Rv.OBJECT, semCtor);
+                ret.opaque = new Semaphore(initial, max);
+                return ret;
+            }
+        })));
+
+        final Rv[] atomicCtorBox = new Rv[1];
+        atomicCtorBox[0] = ri.addNativeFunction(new NativeFunctionListEntry("os.AtomicInt.ctor", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                int v = args != null && args.get("0") != null ? jsInt(args.get("0")) : 0;
+                Rv ret = new Rv(Rv.OBJECT, atomicCtorBox[0]);
+                ret.opaque = new AtomicInt(v);
+                return ret;
+            }
+        }));
+        atomicCtorBox[0].nativeCtor("AtomicInt", callObj);
+        final Rv atomicCtor = atomicCtorBox[0];
+        ri.addToObject(atomicCtor.ctorOrProt, "get",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.AtomicInt.get", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Object o = _this.opaque;
+                if (!(o instanceof AtomicInt)) {
+                    return new Rv(0);
+                }
+                return new Rv(((AtomicInt) o).get());
+            }
+        })));
+        ri.addToObject(atomicCtor.ctorOrProt, "set",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.AtomicInt.set", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Object o = _this.opaque;
+                if (o instanceof AtomicInt && args != null) {
+                    ((AtomicInt) o).set(jsInt(args.get("0")));
+                }
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(atomicCtor.ctorOrProt, "addAndGet",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.AtomicInt.addAndGet", new NativeFunction() {
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Object o = _this.opaque;
+                if (!(o instanceof AtomicInt) || args == null) {
+                    return new Rv(0);
+                }
+                return new Rv(((AtomicInt) o).addAndGet(jsInt(args.get("0"))));
+            }
+        })));
+        ri.addToObject(_os, "AtomicInt",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.AtomicInt", new NativeFunction() {
+            public final int length = 1;
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                int v = args != null && args.get("0") != null ? jsInt(args.get("0")) : 0;
+                Rv ret = new Rv(Rv.OBJECT, atomicCtor);
+                ret.opaque = new AtomicInt(v);
+                return ret;
+            }
+        })));
+
+        Rv _ThreadMod = ri.newModule();
+        ri.addToObject(_ThreadMod, "start",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.Thread.start", new NativeFunction() {
+            public final int length = 1;
+            public Rv func(boolean isNew, Rv _this, Rv args) {
+                Rv fn = args.get("0");
+                if (fn == null || !fn.isCallable()) {
+                    return PromiseRuntime.rejected(ri, Rv.error("Thread.start: function required"));
+                }
+                final Rv fnCap = fn;
+                final RocksInterpreter riCap = ri;
+                final Rv promise = PromiseRuntime.createPending(ri);
+                new Thread(new Runnable() {
+                    public void run() {
+                        PromiseRuntime.enqueue(new PromiseRuntime.Microtask() {
+                            public void run(RocksInterpreter ri2) {
+                                RocksInterpreter use = ri2 != null ? ri2 : riCap;
+                                try {
+                                    Pack ap = new Pack(-1, 0);
+                                    Rv out = use.invokeJS(fnCap, Rv._undefined, ap, 0, 0);
+                                    PromiseRuntime.resolveViaCapability(use, promise, out != null ? out : Rv._undefined);
+                                } catch (Throwable t) {
+                                    PromiseRuntime.reject(use, promise, Rv.error(t.getMessage() != null ? t.getMessage() : "Thread.start failed"));
+                                }
+                            }
+                        });
+                    }
+                }).start();
+                return promise;
+            }
+        })));
+        ri.addToObject(_os, "Thread", _ThreadMod);
 
         ri.addToObject(callObj, "os", _os);
 
@@ -1081,32 +1549,34 @@ public class Athena2ME extends MIDlet implements CommandListener {
                     return Rv._undefined;
                 }
                 String canon = canonicalResourcePath(a0.toStr().str);
-                Rv hit = (Rv) moduleCache.get(canon);
-                if (hit != null) {
-                    return hit;
+                synchronized (jsRuntimeLock) {
+                    Rv hit = (Rv) moduleCache.get(canon);
+                    if (hit != null) {
+                        return hit;
+                    }
+                    String userSrc = readResourceUtf8(canon);
+                    if (userSrc == null) {
+                        return Rv._undefined;
+                    }
+                    Rv exports = interp.newModule();
+                    Rv module = interp.newModule();
+                    interp.addToObject(module, "exports", exports);
+                    interp.addToObject(globalObj, "____rqE", exports);
+                    interp.addToObject(globalObj, "____rqM", module);
+                    String wrapper = "(function(exports,module,require){\n" + userSrc + "\n})(____rqE,____rqM,require);\n";
+                    try {
+                        interp.runInGlobalScope(wrapper, globalObj);
+                    } finally {
+                        interp.addToObject(globalObj, "____rqE", Rv._undefined);
+                        interp.addToObject(globalObj, "____rqM", Rv._undefined);
+                    }
+                    Rv ex = module.get("exports");
+                    if (ex == null || ex == Rv._undefined) {
+                        ex = exports;
+                    }
+                    moduleCache.put(canon, ex);
+                    return ex;
                 }
-                String userSrc = readResourceUtf8(canon);
-                if (userSrc == null) {
-                    return Rv._undefined;
-                }
-                Rv exports = interp.newModule();
-                Rv module = interp.newModule();
-                interp.addToObject(module, "exports", exports);
-                interp.addToObject(globalObj, "____rqE", exports);
-                interp.addToObject(globalObj, "____rqM", module);
-                String wrapper = "(function(exports,module,require){\n" + userSrc + "\n})(____rqE,____rqM,require);\n";
-                try {
-                    interp.runInGlobalScope(wrapper, globalObj);
-                } finally {
-                    interp.addToObject(globalObj, "____rqE", Rv._undefined);
-                    interp.addToObject(globalObj, "____rqM", Rv._undefined);
-                }
-                Rv ex = module.get("exports");
-                if (ex == null || ex == Rv._undefined) {
-                    ex = exports;
-                }
-                moduleCache.put(canon, ex);
-                return ex;
             }
         })));
 
@@ -1123,7 +1593,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 if (userSrc == null) {
                     return Rv._undefined;
                 }
-                interp.runInGlobalScope(userSrc, globalObj);
+                synchronized (jsRuntimeLock) {
+                    interp.runInGlobalScope(userSrc, globalObj);
+                }
                 return Rv._undefined;
             }
         })));
@@ -1132,18 +1604,23 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
         final Rv _rv = rv;
         final Rv _callObj = callObj;
+        final Object bootJsLock = jsRuntimeLock;
 
         jsRunning = true;
         jsThread = new Thread(new Runnable() {
             public void run() {
                 try {
-                    ri.call(false, _rv, _callObj, null, null, 0, 0);
+                    synchronized (bootJsLock) {
+                        ri.call(false, _rv, _callObj, null, null, 0, 0);
+                    }
                 } catch (Throwable t) {
                     t.printStackTrace();
                 } finally {
                     long deadline = System.currentTimeMillis() + 30000L;
                     while (System.currentTimeMillis() < deadline) {
-                        PromiseRuntime.drain(ri);
+                        synchronized (bootJsLock) {
+                            PromiseRuntime.drain(ri);
+                        }
                         if (!PromiseRuntime.hasPending() && AthenaRequest.getHttpInFlight() == 0) {
                             break;
                         }
@@ -1164,7 +1641,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
         if (c == exitCmd) {
             if (jsExitHandler != null) {
                 try {
-                    ri.call(false, jsExitHandler, jsExitHandler.co, jsThis, null, 0, 0);
+                    synchronized (jsRuntimeLock) {
+                        ri.call(false, jsExitHandler, jsExitHandler.co, jsThis, null, 0, 0);
+                    }
                 } catch (Throwable t) {
                     t.printStackTrace();
                 }

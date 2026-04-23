@@ -53,6 +53,7 @@ Athena2ME is a project that seeks to facilitate and at the same time brings a co
 * Socket: TCP/UDP sockets (`javax.microedition.io`).
 * WebSocket: Minimal `ws://` client (RFC 6455 framing over TCP).
 * **Sound** — BGM `Sound.Stream` and short `Sound.Sfx` with a channel pool (MMAPI; see [Sound module](#sound-module)).
+* **Threads & sync** — `os.spawn`, `os.Thread.start`, `os.Mutex`, `os.Semaphore`, `os.AtomicInt` (single shared JS runtime; see [Threads and concurrency](#threads-and-concurrency)).
 
 New types are always being added and this list can grow a lot over time, so stay tuned.
 
@@ -81,7 +82,7 @@ New types are always being added and this list can grow a lot over time, so stay
 - [x] Extended Number / Math (parseInt, sqrt, pow, sin/cos/tan, …)
 - [ ] OS external file functions
 - [ ] OS platform functions
-- [ ] Thread functions
+- [x] Thread functions (`os.spawn`, `os.Thread.start`, `os.Mutex`, `os.Semaphore`, `os.AtomicInt`; serialized JS runtime — see [Threads and concurrency](#threads-and-concurrency))
 - [ ] 3D Render functions
 - [x] HTTP/HTTPS, TCP/UDP sockets, WebSocket (`ws://`) — see [Request / Socket / WebSocket](#request-module) (limits: `wss://`, `SOCK_RAW`)
 - [ ] Archive (zip, 7zip, tar, rar) system
@@ -382,10 +383,37 @@ P.S.: *Italic* parameters refer to optional parameters
 ### os module
 * os.setExitHandler(func) - Set *func* to be called when the device run any action to exit Athena2ME.
 * os.platform - Return a string representing the platform: "j2me".
+* **File descriptor flags (numbers)** — `os.O_RDONLY`, `os.O_WRONLY`, `os.O_RDWR`, `os.O_NDELAY`, `os.O_APPEND`, `os.O_CREAT`, `os.O_TRUNC`, `os.O_EXCL` (same values as `AthenaFile`); **`os.SEEK_SET`**, **`os.SEEK_CUR`**, **`os.SEEK_END`** for `os.seek`.
+* os.open(path, flags) / os.close(fd) / os.seek(fd, offset, whence) — Open a `file://…` path with bitmask *flags*, close a descriptor, or reposition; `seek` returns the new position or `-1` on error.
+* os.read(fd, maxBytes) — Read up to *maxBytes* bytes (clamped to `[1, 1048576]`; if *maxBytes* is below 1, defaults to 1024). Returns a **`Uint8Array`** (empty if EOF, error, or nothing read). Same underlying behaviour as `AthenaFile.read`.
+* os.write(fd, data) — Writes *data* as **`Uint8Array`** or UTF-8 string. Returns the number of bytes written, or `-1` on error.
+* os.fstat(fd) — On success, `{ size, isDirectory, lastModified }` (numbers; `isDirectory` is 0 or 1). On failure, `{ error }` only.
+* os.getProperty(key) — `System.getProperty(key)`; returns a string or `null` if missing / unsupported (same pattern as fields in `getSystemInfo`).
+* os.currentTimeMillis() — Wall-clock milliseconds (`System.currentTimeMillis()`).
+* os.uptimeMillis() — Milliseconds since the interpreter booted (`System.currentTimeMillis()` minus internal boot timestamp).
+* os.gc() — Calls `Runtime.getRuntime().gc()` (hint only; behaviour is JVM-dependent).
+* os.threadYield() — Calls `Thread.yield()`.
+* os.getSystemInfo() - Object with `microedition.platform`, `microedition.configuration`, `microedition.profiles`, `microedition.locale`, and `microedition.encoding` (each is a string or `null` if the property is not exposed). These are the standard J2ME `System.getProperty` keys; the runtime does not expose physical RAM, CPU name, or GPU. Screen size remains on `Screen.width` / `Screen.height`.
+* os.getMemoryStats(*optRunGc*) - Object with `heapTotal`, `heapFree`, and `heapUsed` in **bytes** (Java heap for this MIDlet, not total device RAM). If *optRunGc* is passed and truthy, `System.gc()` runs first (slower, changes meaning of a single sample). Values vary with the garbage collector.
+* os.getStorageStats(*fileUrl*) - **fileUrl** (string) is **required** — a `file://…` URL the implementation can open (often a file-system root, device-specific). On success, returns `total` and `free` in bytes. On failure, returns `error` (string) and no `total`/`free`. The emulator and real handsets may accept different paths.
 * os.sleep(ms) - Yield the current thread for *ms* milliseconds. Before sleeping, pending **Promise** microtasks are flushed on the JS thread (`PromiseRuntime.drain`). Use this in manual loops so I/O callbacks can run and the UI thread stays healthy.
 * os.flushPromises() - Run all queued Promise microtasks once (same drain used by `os.sleep` and the frame loop). Use if you neither `sleep` nor use `startFrameLoop`.
 * os.startFrameLoop(fn, fps) - Hand the main loop over to native code. Java will run a dedicated `Thread` that, every frame: calls `Pad.update()`, drains Promise microtasks, calls *fn*, calls `Screen.update()`, and `sleep`s until the next deadline. *fps* is clamped to `[1, 120]`. Recommended entry point for every new script.
 * os.stopFrameLoop() - Ask the native frame loop to terminate after the current frame. Typical usage is from an exit handler.
+* **Concurrency (Java threads + JS scheduling)** — There is **one** `RocksInterpreter` for the whole MIDlet. All JavaScript execution and `PromiseRuntime.drain` for that interpreter are serialized on a single lock so `jsThread`, the native frame loop thread, and microtasks never corrupt interpreter state. Background Java threads (HTTP, `os.spawn`, etc.) must **not** call into the interpreter directly; they enqueue microtasks instead (same pattern as `Request`).
+* os.spawn(*fn*) — Starts a short-lived Java `Thread` that immediately enqueues a microtask. When the microtask runs (on the next drain), *fn* is invoked with no arguments and the returned **Promise** settles with *fn*'s return value or rejection. *fn* runs on the same serialized JS runtime as everything else; `spawn` only defers work to the next microtask batch.
+* os.Thread.start(*fn*) — Same behaviour as `os.spawn` (alias for scripts that prefer a `Thread` namespace).
+* os.Mutex() — Returns a **non-reentrant** mutex with methods: `lock()`, `tryLock()` (returns `1` / `0`), `unlock()`. Blocking `lock()` from JavaScript ties up the interpreter thread; prefer `tryLock` or keep critical sections in native-backed flows. `unlock` without ownership is a no-op.
+* os.Semaphore(*initial*, *max*) — Counting semaphore with `acquire()`, `tryAcquire()` (`1` / `0`), `release()`, `availablePermits()`. `release` cannot raise the count above *max*.
+* os.AtomicInt(*initial*) — `get()`, `set(n)`, `addAndGet(delta)`.
+
+### Threads and concurrency
+
+Athena2ME is not a multi-runtime environment: you do **not** get parallel JavaScript heaps or Web Workers. You get **Java** `Thread` primitives (including the existing HTTP client and frame loop) plus **synchronization objects** that coordinate those threads with the single JS engine.
+
+**Safe pattern:** a background thread performs blocking or slow work in Java only, then calls `PromiseRuntime.enqueue` (used internally by `Request`, `os.spawn`, etc.) so callbacks and promise settlements run during `drain`, while the global interpreter lock is held.
+
+**Deadlock caution:** if JS code calls `mutex.lock()` and holds the mutex across an operation that needs another thread to run microtasks (for example, waiting for a promise only settled from a worker), the runtime can stall. Keep mutex-held sections tiny; avoid blocking the JS thread on conditions that only a concurrent JS turn could satisfy.
 
 ### Global script loading (`require`, `loadScript`)
 

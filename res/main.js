@@ -1,3 +1,19 @@
+(function () {
+    var i = os.getSystemInfo();
+    function S(x) { return x === null ? "null" : ("" + x); }
+    console.log("os.getSystemInfo platform=" + S(i["microedition.platform"]));
+    var m = os.getMemoryStats(false);
+    console.log("os.getMemoryStats heapTotal=" + m.heapTotal + " heapFree=" + m.heapFree + " heapUsed=" + m.heapUsed);
+    var s = os.getStorageStats("file:///C:/");
+    if (s.error) {
+        console.log("os.getStorageStats C: error=" + s.error);
+    } else {
+        console.log("os.getStorageStats C: total=" + s.total + " free=" + s.free);
+    }
+    var miss = os.getStorageStats();
+    console.log("os.getStorageStats() no arg: error=" + miss.error);
+})();
+
 console.log("Athena2ME main.js — demo HTTP (Request + Promise)");
 
 // Exemplo require(): ficheiro /lib/demo_math.js no JAR (ver res/lib/demo_math.js)
@@ -5,6 +21,71 @@ var demoMath = require("/lib/demo_math.js");
 console.log("require demo: add(2,3)=" + demoMath.add(2, 3) + " label=" + demoMath.label);
 var demoMath2 = require("/lib/demo_math.js");
 console.log("require cache: same object? " + (demoMath === demoMath2 ? "yes" : "no"));
+
+(function concurrencySelfTest() {
+    function drainUntil(pred, maxRounds) {
+        var i;
+        for (i = 0; i < maxRounds; i++) {
+            if (pred()) {
+                return true;
+            }
+            os.flushPromises();
+        }
+        return pred();
+    }
+
+    console.log("=== concurrency self-test (Mutex / Semaphore / AtomicInt / spawn) ===");
+
+    var ai = os.AtomicInt(10);
+    ai.set(5);
+    console.log("AtomicInt get after set(5)=" + ai.get());
+    console.log("AtomicInt addAndGet(3)=" + ai.addAndGet(3) + " get=" + ai.get());
+
+    var mx = os.Mutex();
+    console.log("Mutex tryLock (expect 1)=" + mx.tryLock());
+    console.log("Mutex tryLock again (expect 0)=" + mx.tryLock());
+    mx.unlock();
+    console.log("Mutex tryLock after unlock (expect 1)=" + mx.tryLock());
+    mx.unlock();
+
+    var sem = os.Semaphore(2, 4);
+    console.log("Semaphore availablePermits initial=" + sem.availablePermits());
+    console.log("Semaphore tryAcquire=" + sem.tryAcquire() + " avail=" + sem.availablePermits());
+    console.log("Semaphore tryAcquire=" + sem.tryAcquire() + " avail=" + sem.availablePermits());
+    console.log("Semaphore tryAcquire empty (expect 0)=" + sem.tryAcquire());
+    sem.release();
+    console.log("Semaphore after release avail=" + sem.availablePermits());
+
+    var spawnOk = false;
+    var spawnVal = null;
+    os.spawn(function () {
+        return "from-spawn";
+    }).then(function (v) {
+        spawnVal = v;
+        spawnOk = true;
+    });
+    if (!drainUntil(function () { return spawnOk; }, 32)) {
+        console.log("concurrency: spawn TIMEOUT");
+    } else {
+        console.log("spawn Promise ok value=" + spawnVal);
+    }
+
+    var thOk = false;
+    var thVal = null;
+    os.Thread.start(function () {
+        return 41;
+    }).then(function (v) {
+        thVal = v;
+        thOk = true;
+    });
+    if (!drainUntil(function () { return thOk; }, 32)) {
+        console.log("concurrency: Thread.start TIMEOUT");
+    } else {
+        console.log("Thread.start Promise ok value=" + thVal);
+    }
+
+    console.log("=== concurrency self-test done ===");
+})();
 
 (function httpDemo() {
     var done = 0;
