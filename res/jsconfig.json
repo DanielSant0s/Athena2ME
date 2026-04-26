@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "checkJs": false,
+    "noEmit": true
+  },
+  "include": [
+    ".athenastudio/athenastudio-j2me.d.ts",
+    "res/**/*.js"
+  ]
+}

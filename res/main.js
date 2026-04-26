@@ -13,9 +13,6 @@
 //  drawLayer per frame instead of hundreds of fillRects), cached HUD text,
 //  snake as Int32Array ring. Particles: two Int32Array slabs (double-buffer step),
 //  fixed-point subpixels (SUB); trig only at spawn, velocities via Math.round.
-//
-//  Input: Pad.addListener(…, Pad.JUST_PRESSED) — despacho após Pad.update, antes
-//  do corpo de cada frame. Callbacks anónimos/arrow preservam escopo capturado.
 // =============================================================================
 
 // ---- canvas / layout --------------------------------------------------------
@@ -619,8 +616,8 @@ function drawTitle(frame) {
     const hop = t < 12 ? t : 24 - t;
     const y = 38 + (hop >> 3);
 
-    glowText(font_big, "NEON",  centerXForText(font_big, "NEON"), y,      ACCENT_0, ACCENT_1);
-    glowText(font_big, "SNAKE", centerXForText(font_big, "SNAKE"), y + 2,  APPLE_0,  APPLE_1);
+    glowText(font_big, "NEON",  centerXForText(font_big, "NEON"), y - 10,      ACCENT_0, ACCENT_1);
+    glowText(font_big, "SNAKE", centerXForText(font_big, "SNAKE"), y + 5,  APPLE_0,  APPLE_1);
 
     const lineW = 96;
     const lineX = (W - lineW) / 2 | 0;

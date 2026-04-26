@@ -782,6 +782,16 @@ Methods:
 
 SFX is loaded into memory **once** per `Sfx` object; each `play()` creates a new `Player` for that **channel** and releases the slot when the clip **ends** (`END_OF_MEDIA`). Stopping and closing all SFX/Stream `Player` instances runs when the MIDlet is destroyed (`destroyApp`).
 
+## CI and AthenaStudio API manifest
+
+GitHub Actions workflow: [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+- Generates **`build/j2me-api.json`** from `src/Athena2ME.java` via **`node scripts/export-j2me-api.mjs`** (same schema as the AthenaStudio VS Code extension’s `targets/j2me-api.json`).
+- Uploads the file as a **workflow artifact** on every run.
+- On **tags `v*`** , attaches **`j2me-api.json`** to the **GitHub Release** so the AthenaStudio repo (or other tools) can pin a runtime version and download the manifest without cloning Java sources.
+
+Local run: `node scripts/export-j2me-api.mjs` (output under `build/`, gitignored).
+
 ## Contributing
 
 Contributions are what make the open source community such an amazing place to be learn, inspire, and create. Any contributions you make are **greatly appreciated**.
