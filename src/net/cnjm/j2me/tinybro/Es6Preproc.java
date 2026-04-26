@@ -1,5 +1,6 @@
 package net.cnjm.j2me.tinybro;
 
+import java.util.Hashtable;
 import java.util.Vector;
 
 /**
@@ -34,6 +35,12 @@ final class Es6Preproc {
 
     private Es6Preproc() {}
 
+    /**
+     * When false, the conservative literal-constant pass ({@link #preprocessConstantFold})
+     * is skipped. Set to true for smaller token streams and less RPN at runtime.
+     */
+    public static boolean ENABLE_LITERAL_FOLD = true;
+
     static String process(String src) {
         if (src == null || src.length() == 0) return src;
         // Order matters: classes may contain arrows, arrows may contain templates.
@@ -46,6 +53,9 @@ final class Es6Preproc {
         src = preprocessShorthandProps(src);
         src = preprocessSpread(src);
         src = preprocessAsyncAwait(src);
+        if (ENABLE_LITERAL_FOLD) {
+            src = preprocessConstantFold(src);
+        }
         return src;
     }
 
@@ -623,6 +633,11 @@ final class Es6Preproc {
     // ==================================================================
 
     static String preprocessClasses(String src) {
+        // Fast-skip: avoid matching "class" as substring of identifiers (e.g. "subclass")
+        if (src.indexOf("class ") < 0 && src.indexOf("class\n") < 0
+                && src.indexOf("class\t") < 0 && src.indexOf("class\r") < 0) {
+            return src;
+        }
         int idx = src.indexOf("class");
         if (idx < 0) return src;
         int n = src.length();
@@ -1590,6 +1605,1881 @@ final class Es6Preproc {
                             continue;
                         }
                     }
+                }
+            }
+            out.append(c);
+            i++;
+        }
+        return out.toString();
+    }
+
+    // ------------------------------------------------------------------
+    //  Constant folding (static analysis on source text, before tokenize)
+    // ------------------------------------------------------------------
+
+    private static final Object SCOPE_SHADOW = new Object();
+
+    private static void taint(Hashtable tainted, String name) {
+        if (name != null && name.length() > 0) {
+            tainted.put(name, SCOPE_SHADOW);
+        }
+    }
+
+    private static int skipWsIn(String s, int i, int n) {
+        while (i < n && isWs(s.charAt(i))) i++;
+        return i;
+    }
+
+    private static int readHexInt(String s, int i, int n, int[] outVal) {
+        int p = i;
+        long v = 0;
+        while (i < n) {
+            char c = s.charAt(i);
+            int d;
+            if (c >= '0' && c <= '9') d = c - '0';
+            else if (c >= 'a' && c <= 'f') d = 10 + (c - 'a');
+            else if (c >= 'A' && c <= 'F') d = 10 + (c - 'A');
+            else break;
+            v = (v * 16L) + d;
+            i++;
+        }
+        if (i == p) return -1;
+        outVal[0] = (int) (v & 0xffffffffL);
+        return i;
+    }
+
+    private static int readNumberLen(String s, int i, int n, double[] outVal) {
+        if (i >= n) return -1;
+        int p = i;
+        char c0 = s.charAt(i);
+        if (c0 == '0' && i + 1 < n) {
+            char c1 = s.charAt(i + 1);
+            if (c1 == 'x' || c1 == 'X') {
+                int[] iv = new int[1];
+                int j = readHexInt(s, i + 2, n, iv);
+                if (j < 0) return -1;
+                outVal[0] = (double) (iv[0] & 0xffffffffL);
+                return j - p;
+            }
+        }
+        if (c0 == '.') {
+            if (i + 1 >= n || s.charAt(i + 1) < '0' || s.charAt(i + 1) > '9') {
+                return -1;
+            }
+        } else if (c0 < '0' || c0 > '9') {
+            if (c0 != '.') return -1;
+        }
+        int j = i;
+        if (s.charAt(j) == '.') {
+            j++;
+            while (j < n && s.charAt(j) >= '0' && s.charAt(j) <= '9') j++;
+        } else {
+            while (j < n && s.charAt(j) >= '0' && s.charAt(j) <= '9') j++;
+            if (j < n && s.charAt(j) == '.') {
+                j++;
+                while (j < n && s.charAt(j) >= '0' && s.charAt(j) <= '9') j++;
+            }
+        }
+        if (j < n) {
+            char e = s.charAt(j);
+            if (e == 'e' || e == 'E') {
+                j++;
+                if (j < n && (s.charAt(j) == '+' || s.charAt(j) == '-')) j++;
+                while (j < n && s.charAt(j) >= '0' && s.charAt(j) <= '9') j++;
+            }
+        }
+        try {
+            outVal[0] = Double.parseDouble(s.substring(p, j));
+        } catch (Throwable t) {
+            return -1;
+        }
+        return j - p;
+    }
+
+    private static int toInt32(double n) {
+        if (n != n) return 0;
+        if (n == 0.0) return 0;
+        if (n == Double.POSITIVE_INFINITY) return 0;
+        if (n == Double.NEGATIVE_INFINITY) return 0;
+        double a = n % 4294967296.0;
+        if (a < 0) a += 4294967296.0;
+        if (a >= 2147483648.0) a -= 4294967296.0;
+        return (int) a;
+    }
+
+    private static double toUint32(double n) {
+        return (double) (toInt32(n) & 0xffffffffL);
+    }
+
+    private static double uintRsh(double l, int r) {
+        long x = toInt32(l) & 0xffffffffL;
+        r &= 31;
+        return (double) (x >>> r);
+    }
+
+    private static int jsRhsShift(double n) {
+        int t = toInt32(n) & 31;
+        return t;
+    }
+
+    private static void scanAssignmentLhsTaint(String s, int assignPos, Hashtable tainted) {
+        if (assignPos < 0) return;
+        int j = assignPos - 1;
+        while (j >= 0 && isWs(s.charAt(j))) j--;
+        if (j < 0) return;
+        if (!isIdentPart(s.charAt(j))) return;
+        int e = j;
+        while (j >= 0 && isIdentPart(s.charAt(j))) j--;
+        int st = j + 1;
+        char before = (j < 0) ? 0 : s.charAt(j);
+        if (before == '.') return;
+        String id = s.substring(st, e + 1);
+        taint(tainted, id);
+    }
+
+    private static int scanParensTaintParams(String s, int openParen, Hashtable tainted) {
+        int n = s.length();
+        int p = openParen;
+        if (p >= n || s.charAt(p) != '(') return openParen;
+        int depth = 0;
+        int p0 = p;
+        while (p < n) {
+            char c = s.charAt(p);
+            if (c == '"' || c == '\'' || c == '`' || (c == '/' && p + 1 < n && (s.charAt(p + 1) == '/' || s.charAt(p + 1) == '*'))) {
+                StringBuffer t = new StringBuffer();
+                int j = copyLiteral(s, p, t);
+                if (j > p) { p = j; continue; }
+            }
+            if (c == '(') {
+                if (depth == 0) p0 = p;
+                depth++;
+            } else if (c == ')') {
+                depth--;
+                if (depth == 0) {
+                    String inner = s.substring(openParen + 1, p);
+                    taintParamList(inner, tainted);
+                    return p;
+                }
+            }
+            p++;
+        }
+        return p0;
+    }
+
+    private static void taintParamList(String inner, Hashtable tainted) {
+        if (inner == null) return;
+        int n = inner.length();
+        int i = 0, brk = 0;
+        while (i < n) {
+            char c = inner.charAt(i);
+            if (c == '(' || c == '[' || c == '{') brk++;
+            else if (c == ')' || c == ']' || c == '}') brk--;
+            if (c == ',' && brk == 0) { i++; continue; }
+            if (c == '.' && i + 1 < n && inner.charAt(i + 1) == '.' && i + 2 < n && inner.charAt(i + 2) == '.') {
+                i += 3;
+                i = skipWsIn(inner, i, n);
+                String r = readIdent(inner, i);
+                if (r != null) taint(tainted, r);
+                while (i < n && (isIdentPart(inner.charAt(i)) || isWs(inner.charAt(i)) || inner.charAt(i) == ',')) {
+                    if (inner.charAt(i) == ',') break;
+                    i++;
+                }
+                continue;
+            }
+            if (brk == 0) {
+                String id = readIdent(inner, i);
+                if (id != null) {
+                    taint(tainted, id);
+                }
+            }
+            i++;
+        }
+    }
+
+    private static int scanTaintVarLetBody(String s, int start, Hashtable tainted) {
+        int n = s.length();
+        int p = start;
+        int dparen = 0, dbr = 0, dbrace = 0;
+        int lastEq = -1;
+        while (p < n) {
+            char c = s.charAt(p);
+            if (c == '"' || c == '\'' || c == '`' || (c == '/' && p + 1 < n && (s.charAt(p + 1) == '/' || s.charAt(p + 1) == '*'))) {
+                StringBuffer t = new StringBuffer();
+                int j = copyLiteral(s, p, t);
+                if (j > p) { p = j; continue; }
+            }
+            if (c == '(') dparen++;
+            else if (c == ')') dparen--;
+            else if (c == '{') dbrace++;
+            else if (c == '}') dbrace--;
+            if (c == '=' && dparen == 0 && dbr == 0) {
+                if (p + 1 < n) {
+                    char c2 = s.charAt(p + 1);
+                    if (c2 != '=' && c2 != '>') lastEq = p;
+                } else {
+                    lastEq = p;
+                }
+            }
+            if (c == ',' && dparen == 0 && dbr == 0 && dbrace == 0) {
+                p++;
+                if (dbrace < 0) return p;
+                int segStart = p;
+                while (p < n) {
+                    char cc = s.charAt(p);
+                    if (cc == '"' || cc == '\'' || cc == '`' || (cc == '/' && p + 1 < n)) {
+                        StringBuffer t = new StringBuffer();
+                        p = copyLiteral(s, p, t);
+                        continue;
+                    }
+                    if (cc == '{' || cc == '(' || cc == '[') dparen = dbr = 0; // reset inner
+                    if (cc == ';' && dparen == 0) break;
+                    if (cc == ')' && dparen == 0) break;
+                    p++;
+                }
+                continue;
+            }
+            if (c == ';' && dparen == 0 && dbr == 0 && dbrace == 0) {
+                if (lastEq > 0) {
+                    int i = lastEq - 1;
+                    while (i >= 0 && isWs(s.charAt(i))) i--;
+                    if (i >= 0 && isIdentPart(s.charAt(i))) {
+                        int e = i, st;
+                        while (e >= 0 && isIdentPart(s.charAt(e))) e--;
+                        st = e + 1;
+                        if (st <= i) {
+                            char b = (e < 0) ? 0 : s.charAt(e);
+                            if (b != '.') taint(tainted, s.substring(st, i + 1));
+                        }
+                    }
+                }
+                return p;
+            }
+            p++;
+        }
+        return p;
+    }
+
+    static Hashtable scanMutatedNames(String src) {
+        Hashtable tainted = new Hashtable();
+        if (src == null || src.length() == 0) return tainted;
+        int n = src.length();
+        int i = 0;
+        while (i < n) {
+            char c = src.charAt(i);
+            if (c == '"' || c == '\'' || c == '`' || (c == '/' && i + 1 < n && (src.charAt(i + 1) == '/' || src.charAt(i + 1) == '*'))) {
+                StringBuffer t = new StringBuffer();
+                int j = copyLiteral(src, i, t);
+                if (j > i) { i = j; continue; }
+            }
+            if (c == 'f' && i + 8 <= n && matchKw(src, i, "function") && (i + 8 >= n || !isIdentPart(src.charAt(i + 8)))) {
+                int j = i + 8;
+                j = skipWsIn(src, j, n);
+                if (j < n) {
+                    char cc = src.charAt(j);
+                    if (isIdentStart(cc) && (j + 1 >= n || src.charAt(j + 1) != '(')) {
+                        j = j + 1;
+                        while (j < n && isIdentPart(src.charAt(j))) j++;
+                    }
+                }
+                j = skipWsIn(src, j, n);
+                if (j < n && src.charAt(j) == '(') {
+                    j = scanParensTaintParams(src, j, tainted);
+                }
+                i = j + 1;
+                continue;
+            }
+            if (c == 'c' && i + 4 < n && matchKw(src, i, "catch") && (i + 4 >= n || !isIdentPart(src.charAt(i + 4)))) {
+                int j = i + 5;
+                j = skipWsIn(src, j, n);
+                if (j < n && src.charAt(j) == '(') {
+                    j++;
+                    j = skipWsIn(src, j, n);
+                    String e = readIdent(src, j);
+                    if (e != null) taint(tainted, e);
+                }
+                i = j;
+                continue;
+            }
+            if (i + 2 < n) {
+                if (src.charAt(i) == '+' && src.charAt(i + 1) == '+') {
+                    taintPpOrMm(src, i, i + 2, tainted, true);
+                    i += 2;
+                    continue;
+                }
+                if (src.charAt(i) == '-' && src.charAt(i + 1) == '-') {
+                    taintPpOrMm(src, i, i + 2, tainted, false);
+                    i += 2;
+                    continue;
+                }
+            }
+            if (i + 1 < n) {
+                char c0 = c;
+                char c1 = src.charAt(i + 1);
+                if (c0 == '<' && c1 == '<' && i + 2 < n && src.charAt(i + 2) == '=') {
+                    scanAssignmentLhsTaint(src, i, tainted);
+                    i += 3;
+                    continue;
+                }
+                if (c0 == '>' && c1 == '>' && i + 2 < n) {
+                    if (i + 3 < n && src.charAt(i + 2) == '>' && src.charAt(i + 3) == '=') {
+                        scanAssignmentLhsTaint(src, i, tainted);
+                        i += 4;
+                        continue;
+                    }
+                    if (i + 2 < n && src.charAt(i + 2) == '=') {
+                        scanAssignmentLhsTaint(src, i, tainted);
+                        i += 3;
+                        continue;
+                    }
+                }
+                if ((c0 == '&' && c1 == '&') || (c0 == '|' && c1 == '|') || c1 == '>' && (c0 == '>' && i + 2 < n)) {
+                } else if (c0 == '!' || c0 == '?' || c0 == '>' && c1 == '=') {
+                } else if (c1 == '=') {
+                    if (c0 == '=') {
+                    } else if (c0 == '!' && c1 == '=') {
+                    } else {
+                        if (c0 != '=') scanAssignmentLhsTaint(src, i, tainted);
+                        i += 2;
+                        continue;
+                    }
+                } else {
+                }
+            }
+            if (c == '=' && i + 1 < n) {
+                char c1 = src.charAt(i + 1);
+                if (c1 != '=' && c1 != '>') {
+                    if (i == 0 || src.charAt(i - 1) != '=') {
+                        scanAssignmentLhsTaint(src, i, tainted);
+                    }
+                }
+            }
+            if (c == 'v' && i + 2 < n && matchKw(src, i, "var") && (i + 2 >= n || !isIdentPart(src.charAt(i + 2)))) {
+                int j = i + 3;
+                j = skipWsIn(src, j, n);
+                if (j < n && (src.charAt(j) == '{' || src.charAt(j) == '[')) { i = j; continue; }
+                i = scanTaintVarLetBody(src, j, tainted);
+                continue;
+            }
+            if (c == 'l' && i + 2 < n && matchKw(src, i, "let") && (i + 2 >= n || !isIdentPart(src.charAt(i + 2)))) {
+                int j = i + 3;
+                j = skipWsIn(src, j, n);
+                if (j < n && (src.charAt(j) == '{' || src.charAt(j) == '[')) { i = j; continue; }
+                i = scanTaintVarLetBody(src, j, tainted);
+                continue;
+            }
+            i++;
+        }
+        return tainted;
+    }
+
+    private static void taintPpOrMm(String s, int opPos, int afterOp, Hashtable tainted, boolean isPp) {
+        int n = s.length();
+        if (isPp) {
+            int p = afterOp;
+            p = skipWsIn(s, p, n);
+            String id = readIdent(s, p);
+            if (id != null) taint(tainted, id);
+        } else {
+            int p = opPos - 1;
+            while (p >= 0 && isWs(s.charAt(p))) p--;
+            if (p < 0) return;
+            if (!isIdentPart(s.charAt(p))) return;
+            int e = p, st;
+            while (p >= 0 && isIdentPart(s.charAt(p))) p--;
+            st = p + 1;
+            if (e >= st) {
+                char b = p < 0 ? 0 : s.charAt(p);
+                if (b != '.') taint(tainted, s.substring(st, e + 1));
+            }
+        }
+    }
+
+    static final class FoldVal {
+        static final int T_NUM = 1;
+        static final int T_STR = 2;
+        static final int T_BOOL = 3;
+        static final int T_NULL = 4;
+        static final int T_UNDEF = 5;
+        int type;
+        double num;
+        String str;
+        boolean b;
+
+        static FoldVal numV(double d) {
+            FoldVal v = new FoldVal();
+            v.type = T_NUM;
+            v.num = d;
+            return v;
+        }
+
+        static FoldVal strV(String s) {
+            FoldVal v = new FoldVal();
+            v.type = T_STR;
+            v.str = s;
+            return v;
+        }
+
+        static FoldVal boolV(boolean x) {
+            FoldVal v = new FoldVal();
+            v.type = T_BOOL;
+            v.b = x;
+            return v;
+        }
+
+        String emit() {
+            switch (type) {
+            case T_NUM:
+                if (num != num) return "(0/0)";
+                if (num == Double.POSITIVE_INFINITY) return "(1/0)";
+                if (num == Double.NEGATIVE_INFINITY) return "(-1/0)";
+                if (num == 0) {
+                    if (1.0 / num < 0) return "(-0)";
+                }
+                if (num == (double) (long) num && num >= -2147483648.0 && num <= 2147483647.0) {
+                    return String.valueOf((long) num);
+                }
+                return String.valueOf(num);
+            case T_STR:
+                return stringLiteral(str);
+            case T_BOOL:
+                return b ? "true" : "false";
+            case T_NULL:
+                return "null";
+            case T_UNDEF:
+            default:
+                return "undefined";
+            }
+        }
+
+        static String stringLiteral(String s) {
+            if (s == null) s = "";
+            StringBuffer b = new StringBuffer(s.length() + 2);
+            b.append('"');
+            for (int i = 0; i < s.length(); i++) {
+                char c = s.charAt(i);
+                if (c == '"') b.append("\\\"");
+                else if (c == '\\') b.append("\\\\");
+                else if (c == '\n') b.append("\\n");
+                else if (c == '\r') b.append("\\r");
+                else if (c == '\t') b.append("\\t");
+                else b.append(c);
+            }
+            b.append('"');
+            return b.toString();
+        }
+    }
+
+    private static void scopePutName(Vector scopes, String name) {
+        Hashtable t = (Hashtable) scopes.lastElement();
+        t.put(name, SCOPE_SHADOW);
+    }
+
+    private static void scopePutVal(Vector scopes, String name, FoldVal v) {
+        Hashtable t = (Hashtable) scopes.lastElement();
+        t.put(name, v);
+    }
+
+    private static FoldVal scopeLookupName(Vector scopes, String name, Hashtable tainted) {
+        if (tainted != null && tainted.get(name) != null) {
+            return null;
+        }
+        for (int s = scopes.size() - 1; s >= 0; s--) {
+            Hashtable h = (Hashtable) scopes.elementAt(s);
+            if (!h.containsKey(name)) {
+                continue;
+            }
+            Object o = h.get(name);
+            if (o == SCOPE_SHADOW) {
+                return null;
+            }
+            if (o instanceof FoldVal) {
+                return (FoldVal) o;
+            }
+        }
+        return null;
+    }
+
+    private static int readStringLiteral(String s, int i, int n, StringBuffer out) {
+        if (i >= n) return -1;
+        char q = s.charAt(i);
+        if (q != '"' && q != '\'') {
+            return -1;
+        }
+        int p = i + 1;
+        StringBuffer b = new StringBuffer();
+        while (p < n) {
+            char c = s.charAt(p);
+            if (c == q) {
+                if (out != null) {
+                    out.append(b.toString());
+                }
+                return p + 1;
+            }
+            if (c == '\\' && p + 1 < n) {
+                char d = s.charAt(p + 1);
+                if (d == 'n') b.append('\n');
+                else if (d == 'r') b.append('\r');
+                else if (d == 't') b.append('\t');
+                else if (d == 'u' && p + 5 < n) {
+                } else b.append(d);
+                p += 2;
+            } else {
+                b.append(c);
+                p++;
+            }
+        }
+        return -1;
+    }
+
+    private static int findRhsEndInDecl(String s, int from, int n) {
+        int p = from;
+        int dparen = 0, dbr = 0, dbrace = 0;
+        while (p < n) {
+            char c = s.charAt(p);
+            if (c == '"' || c == '\'' || c == '`' || (c == '/' && p + 1 < n && (s.charAt(p + 1) == '/' || s.charAt(p + 1) == '*'))) {
+                StringBuffer t = new StringBuffer();
+                int j = copyLiteral(s, p, t);
+                if (j > p) { p = j; continue; }
+            }
+            if (c == '(') dparen++;
+            else if (c == ')') dparen--;
+            else if (c == '[') dbr++;
+            else if (c == ']') dbr--;
+            else if (c == '{') dbrace++;
+            else if (c == '}') dbrace--;
+            if (c == ',' && dparen == 0 && dbr == 0 && dbrace == 0) {
+                return p;
+            }
+            if (c == ';' && dparen == 0 && dbr == 0 && dbrace == 0) {
+                return p;
+            }
+            if (c == '\n' && dparen == 0 && dbr == 0 && dbrace == 0) {
+                return p;
+            }
+            p++;
+        }
+        return p;
+    }
+
+    private static int tryParseFoldExprAt(String s, int start, int n, Hashtable tainted, Vector scopes, FoldVal[] outVal) {
+        CFParser p = new CFParser();
+        p.init(s, start, n, tainted, scopes);
+        int save = start;
+        FoldVal v = p.parseTernary();
+        p.skipW();
+        if (p.fail || v == null || p.pos == save) {
+            return -1;
+        }
+        if (!p.isValidExprEnd()) {
+            return -1;
+        }
+        if (outVal != null) {
+            outVal[0] = v;
+        }
+        return p.pos;
+    }
+
+    static final class CFParser {
+        String src;
+        int n;
+        int pos;
+        Hashtable tainted;
+        Vector scopes;
+        boolean fail;
+
+        void init(String s, int p0, int limit, Hashtable t, Vector sc) {
+            src = s;
+            n = limit;
+            pos = p0;
+            tainted = t;
+            scopes = sc;
+            fail = false;
+        }
+
+        int skipW() {
+            while (pos < n && isWs(src.charAt(pos))) {
+                pos++;
+            }
+            return pos;
+        }
+
+        boolean isValidExprEnd() {
+            if (pos >= n) {
+                return true;
+            }
+            int p = pos;
+            while (p < n && isWs(src.charAt(p))) {
+                p++;
+            }
+            if (p >= n) {
+                return true;
+            }
+            char c = src.charAt(p);
+            return c == ')' || c == ']' || c == '}' || c == ',' || c == ';' || c == '\n' || c == ':';
+        }
+
+        FoldVal parseTernary() {
+            FoldVal c = parseLor();
+            if (fail) {
+                return null;
+            }
+            skipW();
+            if (pos < n && src.charAt(pos) == '?') {
+                pos++;
+                FoldVal t = parseLor();
+                skipW();
+                if (pos >= n || src.charAt(pos) != ':') {
+                    fail = true;
+                    return null;
+                }
+                pos++;
+                FoldVal f = parseTernary();
+                if (c == null || t == null || f == null) {
+                    return null;
+                }
+                return boolish(c) ? t : f;
+            }
+            return c;
+        }
+
+        private boolean boolish(FoldVal v) {
+            return cfpToBoolean(v);
+        }
+
+        FoldVal parseLor() {
+            FoldVal l = parseLand();
+            if (fail) {
+                return null;
+            }
+            for (;;) {
+                skipW();
+                if (pos + 1 < n && src.charAt(pos) == '|' && src.charAt(pos + 1) == '|') {
+                    pos += 2;
+                    FoldVal r = parseLand();
+                    if (l == null || r == null) {
+                        return null;
+                    }
+                    l = cfpToBoolean(l) ? l : r;
+                } else {
+                    return l;
+                }
+            }
+        }
+
+        FoldVal parseLand() {
+            FoldVal l = parseBor();
+            if (fail) {
+                return null;
+            }
+            for (;;) {
+                skipW();
+                if (pos + 1 < n && src.charAt(pos) == '&' && src.charAt(pos + 1) == '&') {
+                    pos += 2;
+                    FoldVal r = parseBor();
+                    if (l == null || r == null) {
+                        return null;
+                    }
+                    l = cfpToBoolean(l) ? r : l;
+                } else {
+                    return l;
+                }
+            }
+        }
+
+        FoldVal parseBor() {
+            FoldVal l = parseBxor();
+            if (fail) {
+                return null;
+            }
+            for (;;) {
+                skipW();
+                if (pos < n && src.charAt(pos) == '|' && (pos + 1 >= n || src.charAt(pos + 1) != '|')) {
+                    pos++;
+                    FoldVal r = parseBxor();
+                    if (l == null || r == null) {
+                        return null;
+                    }
+                    if (l.type != FoldVal.T_NUM || r.type != FoldVal.T_NUM) {
+                        return null;
+                    }
+                    l = FoldVal.numV((double) (toInt32(l.num) | toInt32(r.num)));
+                } else {
+                    return l;
+                }
+            }
+        }
+
+        FoldVal parseBxor() {
+            FoldVal l = parseBand();
+            if (fail) {
+                return null;
+            }
+            for (;;) {
+                skipW();
+                if (pos < n && src.charAt(pos) == '^') {
+                    pos++;
+                    FoldVal r = parseBand();
+                    if (l == null || r == null) {
+                        return null;
+                    }
+                    if (l.type != FoldVal.T_NUM || r.type != FoldVal.T_NUM) {
+                        return null;
+                    }
+                    l = FoldVal.numV((double) (toInt32(l.num) ^ toInt32(r.num)));
+                } else {
+                    return l;
+                }
+            }
+        }
+
+        FoldVal parseBand() {
+            FoldVal l = parseEq();
+            if (fail) {
+                return null;
+            }
+            for (;;) {
+                skipW();
+                if (pos < n && src.charAt(pos) == '&' && (pos + 1 >= n || src.charAt(pos + 1) != '&')) {
+                    pos++;
+                    FoldVal r = parseEq();
+                    if (l == null || r == null) {
+                        return null;
+                    }
+                    if (l.type != FoldVal.T_NUM || r.type != FoldVal.T_NUM) {
+                        return null;
+                    }
+                    l = FoldVal.numV((double) (toInt32(l.num) & toInt32(r.num)));
+                } else {
+                    return l;
+                }
+            }
+        }
+
+        FoldVal parseEq() {
+            FoldVal l = parseRel();
+            if (fail) {
+                return null;
+            }
+            for (;;) {
+                skipW();
+                boolean notEq = false;
+                boolean strict = false;
+                if (pos + 2 < n && src.charAt(pos) == '=' && src.charAt(pos + 1) == '=' && src.charAt(pos + 2) == '=') {
+                    pos += 3;
+                    strict = true;
+                } else if (pos + 1 < n && src.charAt(pos) == '=' && src.charAt(pos + 1) == '=') {
+                    pos += 2;
+                    strict = false;
+                } else if (pos + 2 < n && src.charAt(pos) == '!' && src.charAt(pos + 1) == '=' && src.charAt(pos + 2) == '=') {
+                    notEq = true;
+                    pos += 3;
+                    strict = true;
+                } else if (pos + 1 < n && src.charAt(pos) == '!' && src.charAt(pos + 1) == '=') {
+                    notEq = true;
+                    pos += 2;
+                    strict = false;
+                } else {
+                    return l;
+                }
+                FoldVal r = parseRel();
+                if (l == null || r == null) {
+                    return null;
+                }
+                boolean b = strict ? cfpStrictEqual(l, r) : cfpLooseEqual(l, r);
+                if (notEq) {
+                    b = !b;
+                }
+                l = FoldVal.boolV(b);
+            }
+        }
+
+        FoldVal parseRel() {
+            FoldVal l = parseShift();
+            if (fail) {
+                return null;
+            }
+            for (;;) {
+                skipW();
+                if (pos + 1 < n && src.charAt(pos) == '<' && src.charAt(pos + 1) == '=') {
+                    pos += 2;
+                    FoldVal r = parseShift();
+                    if (l == null || r == null) {
+                        return null;
+                    }
+                    if (l.type != FoldVal.T_NUM || r.type != FoldVal.T_NUM) {
+                        return null;
+                    }
+                    l = FoldVal.boolV(l.num <= r.num);
+                } else if (pos + 1 < n && src.charAt(pos) == '>' && src.charAt(pos + 1) == '=') {
+                    pos += 2;
+                    FoldVal r = parseShift();
+                    if (l == null || r == null) {
+                        return null;
+                    }
+                    if (l.type != FoldVal.T_NUM || r.type != FoldVal.T_NUM) {
+                        return null;
+                    }
+                    l = FoldVal.boolV(l.num >= r.num);
+                } else if (pos < n && src.charAt(pos) == '<') {
+                    pos++;
+                    FoldVal r = parseShift();
+                    if (l == null || r == null) {
+                        return null;
+                    }
+                    if (l.type != FoldVal.T_NUM || r.type != FoldVal.T_NUM) {
+                        return null;
+                    }
+                    l = FoldVal.boolV(l.num < r.num);
+                } else if (pos < n && src.charAt(pos) == '>') {
+                    pos++;
+                    FoldVal r = parseShift();
+                    if (l == null || r == null) {
+                        return null;
+                    }
+                    if (l.type != FoldVal.T_NUM || r.type != FoldVal.T_NUM) {
+                        return null;
+                    }
+                    l = FoldVal.boolV(l.num > r.num);
+                } else {
+                    return l;
+                }
+            }
+        }
+
+        FoldVal parseShift() {
+            FoldVal l = parseAdd();
+            if (fail) {
+                return null;
+            }
+            for (;;) {
+                skipW();
+                if (pos + 1 < n && src.charAt(pos) == '<' && src.charAt(pos + 1) == '<') {
+                    pos += 2;
+                    FoldVal r = parseAdd();
+                    if (l == null || r == null) {
+                        return null;
+                    }
+                    if (l.type != FoldVal.T_NUM || r.type != FoldVal.T_NUM) {
+                        return null;
+                    }
+                    l = FoldVal.numV((double) (toInt32(l.num) << jsRhsShift(r.num)));
+                } else if (pos + 2 < n && src.charAt(pos) == '>' && src.charAt(pos + 1) == '>' && src.charAt(pos + 2) == '>') {
+                    pos += 3;
+                    FoldVal r = parseAdd();
+                    if (l == null || r == null) {
+                        return null;
+                    }
+                    if (l.type != FoldVal.T_NUM || r.type != FoldVal.T_NUM) {
+                        return null;
+                    }
+                    l = FoldVal.numV(uintRsh(l.num, (int) (toInt32(r.num) & 31)));
+                } else if (pos + 1 < n && src.charAt(pos) == '>' && src.charAt(pos + 1) == '>') {
+                    pos += 2;
+                    FoldVal r = parseAdd();
+                    if (l == null || r == null) {
+                        return null;
+                    }
+                    if (l.type != FoldVal.T_NUM || r.type != FoldVal.T_NUM) {
+                        return null;
+                    }
+                    l = FoldVal.numV((double) (toInt32(l.num) >> jsRhsShift(r.num)));
+                } else {
+                    return l;
+                }
+            }
+        }
+
+        FoldVal parseAdd() {
+            FoldVal l = parseMul();
+            if (fail) {
+                return null;
+            }
+            for (;;) {
+                skipW();
+                if (pos < n && src.charAt(pos) == '+') {
+                    pos++;
+                    FoldVal r = parseMul();
+                    if (l == null || r == null) {
+                        return null;
+                    }
+                    l = cfpAdd(l, r);
+                } else if (pos < n && src.charAt(pos) == '-') {
+                    pos++;
+                    FoldVal r = parseMul();
+                    if (l == null || r == null) {
+                        return null;
+                    }
+                    if (l.type != FoldVal.T_NUM || r.type != FoldVal.T_NUM) {
+                        return null;
+                    }
+                    l = FoldVal.numV(l.num - r.num);
+                } else {
+                    return l;
+                }
+            }
+        }
+
+        FoldVal parseMul() {
+            FoldVal l = parsePow();
+            if (fail) {
+                return null;
+            }
+            for (;;) {
+                skipW();
+                if (pos < n && src.charAt(pos) == '*') {
+                    if (pos + 1 < n && src.charAt(pos + 1) == '*') {
+                        return l;
+                    }
+                    pos++;
+                    FoldVal r = parsePow();
+                    if (l == null || r == null) {
+                        return null;
+                    }
+                    if (l.type != FoldVal.T_NUM || r.type != FoldVal.T_NUM) {
+                        return null;
+                    }
+                    l = FoldVal.numV(l.num * r.num);
+                } else if (pos < n && src.charAt(pos) == '/') {
+                    pos++;
+                    FoldVal r = parsePow();
+                    if (l == null || r == null) {
+                        return null;
+                    }
+                    if (l.type != FoldVal.T_NUM || r.type != FoldVal.T_NUM) {
+                        return null;
+                    }
+                    l = FoldVal.numV(l.num / r.num);
+                } else if (pos < n && src.charAt(pos) == '%') {
+                    pos++;
+                    FoldVal r = parsePow();
+                    if (l == null || r == null) {
+                        return null;
+                    }
+                    if (l.type != FoldVal.T_NUM || r.type != FoldVal.T_NUM) {
+                        return null;
+                    }
+                    l = FoldVal.numV(l.num % r.num);
+                } else {
+                    return l;
+                }
+            }
+        }
+
+        FoldVal parsePow() {
+            FoldVal l = parseUnary();
+            if (fail) {
+                return null;
+            }
+            skipW();
+            if (pos + 1 < n && src.charAt(pos) == '*' && src.charAt(pos + 1) == '*') {
+                pos += 2;
+                FoldVal r = parsePow();
+                if (l == null || r == null) {
+                    return null;
+                }
+                if (l.type != FoldVal.T_NUM || r.type != FoldVal.T_NUM) {
+                    return null;
+                }
+                return FoldVal.numV(CldcMath.pow(l.num, r.num));
+            }
+            return l;
+        }
+
+        FoldVal parseUnary() {
+            skipW();
+            if (pos < n && src.charAt(pos) == '+') {
+                pos++;
+                return parseUnary();
+            }
+            if (pos < n && src.charAt(pos) == '-') {
+                pos++;
+                FoldVal u = parseUnary();
+                if (u == null) {
+                    return null;
+                }
+                if (u.type != FoldVal.T_NUM) {
+                    return null;
+                }
+                return FoldVal.numV(-u.num);
+            }
+            if (pos < n && src.charAt(pos) == '~') {
+                pos++;
+                FoldVal u = parseUnary();
+                if (u == null) {
+                    return null;
+                }
+                if (u.type != FoldVal.T_NUM) {
+                    return null;
+                }
+                return FoldVal.numV((double) (toInt32(u.num) ^ 0xffffffff));
+            }
+            if (pos < n && src.charAt(pos) == '!') {
+                pos++;
+                FoldVal u = parseUnary();
+                if (u == null) {
+                    return null;
+                }
+                return FoldVal.boolV(!cfpToBoolean(u));
+            }
+            if (n - pos >= 6 && (src.regionMatches(false, pos, "typeof", 0, 6)) && (pos + 6 >= n || !isIdentPart(src.charAt(pos + 6)))) {
+                pos += 6;
+                FoldVal u = parseUnary();
+                if (u == null) {
+                    return null;
+                }
+                return FoldVal.strV(cfpTypeofVal(u));
+            }
+            return parsePrimary();
+        }
+
+        String cfpTypeofVal(FoldVal u) {
+            if (u == null) {
+                return "object";
+            }
+            if (u.type == FoldVal.T_UNDEF) {
+                return "undefined";
+            }
+            if (u.type == FoldVal.T_NULL) {
+                return "object";
+            }
+            if (u.type == FoldVal.T_NUM) {
+                return "number";
+            }
+            if (u.type == FoldVal.T_STR) {
+                return "string";
+            }
+            if (u.type == FoldVal.T_BOOL) {
+                return "boolean";
+            }
+            return "object";
+        }
+
+        FoldVal parsePrimary() {
+            skipW();
+            if (pos >= n) {
+                return null;
+            }
+            if (pos < n && (src.charAt(pos) == '"' || src.charAt(pos) == '\'')) {
+                StringBuffer sb = new StringBuffer();
+                int e = readStringLiteral(src, pos, n, sb);
+                if (e < 0) {
+                    return null;
+                }
+                pos = e;
+                return FoldVal.strV(sb.toString());
+            }
+            if (pos < n && (src.charAt(pos) == '(')) {
+                pos++;
+                FoldVal v = parseTernary();
+                skipW();
+                if (pos >= n || src.charAt(pos) != ')') {
+                    return null;
+                }
+                pos++;
+                return v;
+            }
+            double[] nv = new double[1];
+            int nl = readNumberLen(src, pos, n, nv);
+            if (nl > 0) {
+                pos += nl;
+                return FoldVal.numV(nv[0]);
+            }
+            if (n - pos >= 4 && (src.regionMatches(false, pos, "true", 0, 4)) && (pos + 4 >= n || !isIdentPart(src.charAt(pos + 4)))) {
+                pos += 4;
+                return FoldVal.boolV(true);
+            }
+            if (n - pos >= 5 && (src.regionMatches(false, pos, "false", 0, 5)) && (pos + 5 >= n || !isIdentPart(src.charAt(pos + 5)))) {
+                pos += 5;
+                return FoldVal.boolV(false);
+            }
+            if (n - pos >= 4 && (src.regionMatches(false, pos, "null", 0, 4)) && (pos + 4 >= n || !isIdentPart(src.charAt(pos + 4)))) {
+                pos += 4;
+                FoldVal v = new FoldVal();
+                v.type = FoldVal.T_NULL;
+                return v;
+            }
+            if (n - pos >= 9 && (src.regionMatches(false, pos, "undefined", 0, 9)) && (pos + 9 >= n || !isIdentPart(src.charAt(pos + 9)))) {
+                pos += 9;
+                FoldVal v = new FoldVal();
+                v.type = FoldVal.T_UNDEF;
+                return v;
+            }
+            if (n - pos >= 3 && (src.regionMatches(false, pos, "NaN", 0, 3)) && (pos + 3 >= n || !isIdentPart(src.charAt(pos + 3)))) {
+                pos += 3;
+                return FoldVal.numV(Double.NaN);
+            }
+            if (n - pos >= 8 && (src.regionMatches(false, pos, "Infinity", 0, 8)) && (pos + 8 >= n || !isIdentPart(src.charAt(pos + 8)))) {
+                pos += 8;
+                return FoldVal.numV(Double.POSITIVE_INFINITY);
+            }
+            if (n - pos > 0) {
+                char z = src.charAt(pos);
+                if (z == '/' && pos + 1 < n) {
+                    char z2 = src.charAt(pos + 1);
+                    if (z2 == '/' || z2 == '*') {
+                        return null;
+                    }
+                }
+            }
+            String id = readIdent(src, pos);
+            if (id == null) {
+                return null;
+            }
+            int afterId = pos + id.length();
+            if ("Math".equals(id) && afterId < n && src.charAt(afterId) == '.') {
+                int p = afterId + 1;
+                String mem = readIdent(src, p);
+                if (mem == null) {
+                    return null;
+                }
+                p = p + mem.length();
+                if (p < n && src.charAt(p) == '(') {
+                    pos = p;
+                    return parseMathCall(mem);
+                }
+                FoldVal prop = mathStaticProperty(mem);
+                if (prop != null) {
+                    pos = p;
+                    return prop;
+                }
+                return null;
+            }
+            if ("Number".equals(id) && afterId < n && src.charAt(afterId) == '.') {
+                int p = afterId + 1;
+                String mem = readIdent(src, p);
+                if (mem == null) {
+                    return null;
+                }
+                p = p + mem.length();
+                if (p < n && src.charAt(p) == '(') {
+                    return null;
+                }
+                FoldVal st = numberStatic(mem);
+                if (st == null) {
+                    return null;
+                }
+                pos = p;
+                return st;
+            }
+            pos = afterId;
+            return scopeLookupName(scopes, id, tainted);
+        }
+
+        private FoldVal mathStaticProperty(String mem) {
+            if ("PI".equals(mem)) {
+                return FoldVal.numV(Math.PI);
+            }
+            if ("E".equals(mem)) {
+                return FoldVal.numV(Math.E);
+            }
+            if ("LN2".equals(mem)) {
+                return FoldVal.numV(CldcMath.LN2);
+            }
+            if ("LN10".equals(mem)) {
+                return FoldVal.numV(2.302585092994046);
+            }
+            if ("LOG2E".equals(mem)) {
+                return FoldVal.numV(1.4426950408889634);
+            }
+            if ("LOG10E".equals(mem)) {
+                return FoldVal.numV(0.4342944819032518);
+            }
+            if ("SQRT2".equals(mem)) {
+                return FoldVal.numV(1.4142135623730951);
+            }
+            if ("SQRT1_2".equals(mem)) {
+                return FoldVal.numV(0.7071067811865476);
+            }
+            return null;
+        }
+
+        private FoldVal numberStatic(String mem) {
+            if ("MAX_VALUE".equals(mem)) {
+                return FoldVal.numV(Double.MAX_VALUE);
+            }
+            if ("MIN_VALUE".equals(mem)) {
+                return FoldVal.numV(Double.MIN_VALUE);
+            }
+            if ("POSITIVE_INFINITY".equals(mem)) {
+                return FoldVal.numV(Double.POSITIVE_INFINITY);
+            }
+            if ("NEGATIVE_INFINITY".equals(mem)) {
+                return FoldVal.numV(Double.NEGATIVE_INFINITY);
+            }
+            if ("NaN".equals(mem)) {
+                return FoldVal.numV(Double.NaN);
+            }
+            if ("EPSILON".equals(mem)) {
+                return FoldVal.numV(2.220446049250313e-16);
+            }
+            return null;
+        }
+
+        private FoldVal parseMathCall(String mem) {
+            if (pos >= n || src.charAt(pos) != '(') {
+                return null;
+            }
+            pos++;
+            Vector args = new Vector();
+            skipW();
+            if (pos < n && src.charAt(pos) == ')') {
+                pos++;
+                if ("random".equals(mem)) {
+                    return null;
+                }
+                if ("max".equals(mem)) {
+                    return FoldVal.numV(Double.NEGATIVE_INFINITY);
+                }
+                if ("min".equals(mem)) {
+                    return FoldVal.numV(Double.POSITIVE_INFINITY);
+                }
+                return null;
+            }
+            for (;;) {
+                FoldVal a = parseTernary();
+                if (a == null) {
+                    return null;
+                }
+                args.addElement(a);
+                skipW();
+                if (pos < n && src.charAt(pos) == ',') {
+                    pos++;
+                    continue;
+                }
+                break;
+            }
+            if (pos >= n || src.charAt(pos) != ')') {
+                return null;
+            }
+            pos++;
+            if ("floor".equals(mem) && args.size() == 1) {
+                FoldVal a = (FoldVal) args.elementAt(0);
+                if (a.type != FoldVal.T_NUM) {
+                    return null;
+                }
+                return FoldVal.numV(Math.floor(a.num));
+            }
+            if ("ceil".equals(mem) && args.size() == 1) {
+                FoldVal a = (FoldVal) args.elementAt(0);
+                if (a.type != FoldVal.T_NUM) {
+                    return null;
+                }
+                return FoldVal.numV(Math.ceil(a.num));
+            }
+            if ("round".equals(mem) && args.size() == 1) {
+                FoldVal a = (FoldVal) args.elementAt(0);
+                if (a.type != FoldVal.T_NUM) {
+                    return null;
+                }
+                return FoldVal.numV((double) cfpMathRound(a.num));
+            }
+            if ("abs".equals(mem) && args.size() == 1) {
+                FoldVal a = (FoldVal) args.elementAt(0);
+                if (a.type != FoldVal.T_NUM) {
+                    return null;
+                }
+                return FoldVal.numV(Math.abs(a.num));
+            }
+            if ("sqrt".equals(mem) && args.size() == 1) {
+                FoldVal a = (FoldVal) args.elementAt(0);
+                if (a.type != FoldVal.T_NUM) {
+                    return null;
+                }
+                return FoldVal.numV(Math.sqrt(a.num));
+            }
+            if ("log".equals(mem) && args.size() == 1) {
+                FoldVal a = (FoldVal) args.elementAt(0);
+                if (a.type != FoldVal.T_NUM) {
+                    return null;
+                }
+                return FoldVal.numV(CldcMath.log(a.num));
+            }
+            if ("exp".equals(mem) && args.size() == 1) {
+                FoldVal a = (FoldVal) args.elementAt(0);
+                if (a.type != FoldVal.T_NUM) {
+                    return null;
+                }
+                return FoldVal.numV(CldcMath.exp(a.num));
+            }
+            if ("sin".equals(mem) && args.size() == 1) {
+                FoldVal a = (FoldVal) args.elementAt(0);
+                if (a.type != FoldVal.T_NUM) {
+                    return null;
+                }
+                return FoldVal.numV(Math.sin(a.num));
+            }
+            if ("cos".equals(mem) && args.size() == 1) {
+                FoldVal a = (FoldVal) args.elementAt(0);
+                if (a.type != FoldVal.T_NUM) {
+                    return null;
+                }
+                return FoldVal.numV(Math.cos(a.num));
+            }
+            if ("tan".equals(mem) && args.size() == 1) {
+                FoldVal a = (FoldVal) args.elementAt(0);
+                if (a.type != FoldVal.T_NUM) {
+                    return null;
+                }
+                return FoldVal.numV(Math.tan(a.num));
+            }
+            if ("pow".equals(mem) && args.size() == 2) {
+                FoldVal a0 = (FoldVal) args.elementAt(0);
+                FoldVal a1 = (FoldVal) args.elementAt(1);
+                if (a0.type != FoldVal.T_NUM || a1.type != FoldVal.T_NUM) {
+                    return null;
+                }
+                return FoldVal.numV(CldcMath.pow(a0.num, a1.num));
+            }
+            if ("min".equals(mem)) {
+                if (args.size() == 0) {
+                    return null;
+                }
+                double m = toNumberT((FoldVal) args.elementAt(0));
+                for (int k = 1; k < args.size(); k++) {
+                    m = Math.min(m, toNumberT((FoldVal) args.elementAt(k)));
+                }
+                return FoldVal.numV(m);
+            }
+            if ("max".equals(mem)) {
+                if (args.size() == 0) {
+                    return null;
+                }
+                double m = toNumberT((FoldVal) args.elementAt(0));
+                for (int k = 1; k < args.size(); k++) {
+                    m = Math.max(m, toNumberT((FoldVal) args.elementAt(k)));
+                }
+                return FoldVal.numV(m);
+            }
+            return null;
+        }
+
+        double toNumberT(FoldVal v) {
+            return cfpToNumberVal(v);
+        }
+    }
+
+    private static int cfpMathRound(double x) {
+        if (x != x) {
+            return 0;
+        }
+        if (x < 0) {
+            return -((int) Math.floor(-x + 0.5));
+        }
+        return (int) Math.floor(x + 0.5);
+    }
+
+    private static double cfpToNumberVal(FoldVal v) {
+        if (v == null) {
+            return Double.NaN;
+        }
+        if (v.type == FoldVal.T_NUM) {
+            return v.num;
+        }
+        if (v.type == FoldVal.T_STR) {
+            if (v.str == null) {
+                return 0.0;
+            }
+            if (v.str.length() == 0) {
+                return 0.0;
+            }
+            try {
+                return Double.parseDouble(v.str);
+            } catch (Throwable t) {
+                return Double.NaN;
+            }
+        }
+        if (v.type == FoldVal.T_BOOL) {
+            return v.b ? 1.0 : 0.0;
+        }
+        if (v.type == FoldVal.T_NULL) {
+            return 0.0;
+        }
+        if (v.type == FoldVal.T_UNDEF) {
+            return Double.NaN;
+        }
+        return Double.NaN;
+    }
+
+    private static FoldVal cfpAdd(FoldVal l, FoldVal r) {
+        if (l.type == FoldVal.T_STR || r.type == FoldVal.T_STR) {
+            return FoldVal.strV(cfpToStringHelp(l) + cfpToStringHelp(r));
+        }
+        if (l.type == FoldVal.T_NUM && r.type == FoldVal.T_NUM) {
+            return FoldVal.numV(l.num + r.num);
+        }
+        return null;
+    }
+
+    private static String cfpToStringHelp(FoldVal v) {
+        if (v == null) {
+            return "null";
+        }
+        if (v.type == FoldVal.T_STR) {
+            return v.str == null ? "null" : v.str;
+        }
+        if (v.type == FoldVal.T_NUM) {
+            if (v.num != v.num) {
+                return "NaN";
+            }
+            if (v.num == 0) {
+                return "0";
+            }
+            if (v.num == (double) (long) v.num && v.num >= -2147483648.0 && v.num <= 2147483647.0) {
+                return String.valueOf((long) v.num);
+            }
+            return String.valueOf(v.num);
+        }
+        if (v.type == FoldVal.T_BOOL) {
+            return v.b ? "true" : "false";
+        }
+        if (v.type == FoldVal.T_NULL) {
+            return "null";
+        }
+        if (v.type == FoldVal.T_UNDEF) {
+            return "undefined";
+        }
+        return "";
+    }
+
+    private static boolean cfpToBoolean(FoldVal v) {
+        if (v == null) {
+            return false;
+        }
+        if (v.type == FoldVal.T_NUM) {
+            if (v.num != v.num) {
+                return false;
+            }
+            if (v.num == 0.0) {
+                return 1.0 / v.num > 0;
+            } else {
+                return true;
+            }
+        }
+        if (v.type == FoldVal.T_STR) {
+            return v.str != null && v.str.length() > 0;
+        }
+        if (v.type == FoldVal.T_BOOL) {
+            return v.b;
+        }
+        if (v.type == FoldVal.T_NULL) {
+            return false;
+        }
+        if (v.type == FoldVal.T_UNDEF) {
+            return false;
+        }
+        return false;
+    }
+
+    private static boolean cfpStrictEqual(FoldVal a, FoldVal b) {
+        if (a == null || b == null) {
+            return false;
+        }
+        if (a.type != b.type) {
+            if ((a.type == FoldVal.T_NULL && b.type == FoldVal.T_UNDEF) || (a.type == FoldVal.T_UNDEF && b.type == FoldVal.T_NULL)) {
+                return false;
+            }
+            return false;
+        }
+        if (a.type == FoldVal.T_NUM) {
+            if (a.num != a.num && b.num != b.num) {
+                return true;
+            }
+            return a.num == b.num;
+        }
+        if (a.type == FoldVal.T_STR) {
+            if (a.str == b.str) {
+                return true;
+            }
+            if (a.str == null || b.str == null) {
+                return false;
+            }
+            return a.str.equals(b.str);
+        }
+        if (a.type == FoldVal.T_BOOL) {
+            return a.b == b.b;
+        }
+        if (a.type == FoldVal.T_NULL) {
+            return true;
+        }
+        if (a.type == FoldVal.T_UNDEF) {
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean cfpLooseEqual(FoldVal a, FoldVal b) {
+        if (a == null || b == null) {
+            return a == b;
+        }
+        if (a.type == b.type) {
+            return cfpStrictEqual(a, b);
+        }
+        if (a.type == FoldVal.T_NULL && b.type == FoldVal.T_UNDEF) {
+            return true;
+        }
+        if (a.type == FoldVal.T_UNDEF && b.type == FoldVal.T_NULL) {
+            return true;
+        }
+        if (a.type == FoldVal.T_NUM) {
+            if (b.type == FoldVal.T_STR) {
+                return a.num == cfpToNumberVal(b);
+            }
+        }
+        if (a.type == FoldVal.T_STR) {
+            if (b.type == FoldVal.T_NUM) {
+                return cfpToNumberVal(a) == b.num;
+            }
+        }
+        if (a.type == FoldVal.T_BOOL) {
+            return cfpLooseEqual(FoldVal.numV(a.b ? 1.0 : 0.0), b);
+        }
+        if (b.type == FoldVal.T_BOOL) {
+            return cfpLooseEqual(a, FoldVal.numV(b.b ? 1.0 : 0.0));
+        }
+        return cfpToNumberVal(a) == cfpToNumberVal(b);
+    }
+
+    private static int copyFunctionPreambleToCloseParen(String s, int i, int n, StringBuffer out, StringBuffer paramInner) {
+        if (i + 8 > n || !matchKw(s, i, "function") || (i + 8 < n && isIdentPart(s.charAt(i + 8)))) {
+            return -1;
+        }
+        int j = i;
+        for (int k = 0; k < 8; k++) {
+            out.append(s.charAt(j++));
+        }
+        while (j < n && isWs(s.charAt(j))) {
+            out.append(s.charAt(j++));
+        }
+        if (j < n) {
+            char c = s.charAt(j);
+            if (isIdentStart(c)) {
+                if (j + 1 < n) {
+                    int lp2 = s.indexOf('(', j);
+                    if (lp2 > j) {
+                        while (j < n && isIdentPart(s.charAt(j))) {
+                            out.append(s.charAt(j));
+                            j++;
+                        }
+                    }
+                }
+            }
+        }
+        while (j < n && isWs(s.charAt(j))) {
+            out.append(s.charAt(j++));
+        }
+        if (j >= n || s.charAt(j) != '(') {
+            return -1;
+        }
+        out.append('(');
+        int p0 = j + 1;
+        int depth = 1;
+        j++;
+        StringBuffer tbuf = new StringBuffer();
+        int j2;
+        while (j < n && depth > 0) {
+            char c = s.charAt(j);
+            if (c == '"' || c == '\'' || c == '`' || (c == '/' && j + 1 < n && (s.charAt(j + 1) == '/' || s.charAt(j + 1) == '*'))) {
+                tbuf.setLength(0);
+                j2 = copyLiteral(s, j, tbuf);
+                if (j2 > j) {
+                    out.append(tbuf.toString());
+                    j = j2;
+                    continue;
+                }
+            }
+            if (c == '(') {
+                depth++;
+                out.append(c);
+                j++;
+            } else if (c == ')') {
+                depth--;
+                if (depth == 0) {
+                    if (paramInner != null) {
+                        paramInner.setLength(0);
+                        paramInner.append(s.substring(p0, j));
+                    }
+                    out.append(')');
+                    j++;
+                    return j;
+                }
+                out.append(c);
+                j++;
+            } else {
+                out.append(c);
+                j++;
+            }
+        }
+        return -1;
+    }
+
+    private static int skipDeclKeyword(String s, int i, int n) {
+        if (i + 5 <= n && matchKw(s, i, "const")) {
+            return i + 5;
+        }
+        if (i + 3 <= n && matchKw(s, i, "var")) {
+            return i + 3;
+        }
+        if (i + 3 <= n && matchKw(s, i, "let")) {
+            return i + 3;
+        }
+        return -1;
+    }
+
+    private static char lastNonWsIn(StringBuffer out) {
+        int b = out.length() - 1;
+        while (b >= 0 && isWs(out.charAt(b))) {
+            b--;
+        }
+        if (b < 0) {
+            return 0;
+        }
+        return out.charAt(b);
+    }
+
+    private static boolean isExprStartCharAt(StringBuffer out) {
+        int b = out.length() - 1;
+        while (b >= 0 && isWs(out.charAt(b))) {
+            b--;
+        }
+        if (b < 0) {
+            return true;
+        }
+        char c = out.charAt(b);
+        if (c == '=' || c == '(' || c == '[' || c == ','
+                || c == ';' || c == ':' || c == '?' || c == '!'
+                || c == '+' || c == '-' || c == '*' || c == '%' || c == '&' || c == '|' || c == '^' || c == '<' || c == '>' || c == '~' || c == '\n') {
+            return true;
+        }
+        if (b >= 5) {
+            if (b - 5 >= 0) {
+                String tail = sbSubstr(out, b - 5, b + 1);
+                if (tail != null && "return".equals(tail)
+                        && (b < 5 || b - 6 < 0 || !isIdentPart(out.charAt(b - 6)))) {
+                    return true;
+                }
+            }
+        }
+        if (b >= 4) {
+            if (b - 4 >= 0) {
+                String t2 = sbSubstr(out, b - 4, b + 1);
+                if (t2 != null && "case".equals(t2) && (b - 4 == 0 || b - 5 < 0 || !isIdentPart(out.charAt(b - 5)))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static void putParamNamesAsShadows(String paramInner, Hashtable h) {
+        if (paramInner == null || h == null) {
+            return;
+        }
+        String p2 = paramInner.trim();
+        if (p2.length() == 0) {
+            return;
+        }
+        int a = 0, m = p2.length();
+        int brk = 0;
+        int segStart = 0;
+        for (a = 0; a < m; a++) {
+            char c = p2.charAt(a);
+            if (c == '(' || c == '[' || c == '{') {
+                brk++;
+            } else if (c == ')' || c == ']' || c == '}') {
+                brk--;
+            } else if (c == ',' && brk == 0) {
+                String seg = p2.substring(segStart, a).trim();
+                putOneParamShadowIn(seg, h);
+                segStart = a + 1;
+            }
+        }
+        putOneParamShadowIn(p2.substring(segStart, m).trim(), h);
+    }
+
+    private static void putOneParamShadowIn(String seg, Hashtable h) {
+        if (seg == null || seg.length() == 0) {
+            return;
+        }
+        if (seg.charAt(0) == '{' || seg.charAt(0) == '[') {
+            return;
+        }
+        int t = 0;
+        if (seg.length() > 3 && seg.charAt(0) == '.' && seg.charAt(1) == '.' && seg.charAt(2) == '.') {
+            t = 3;
+        }
+        while (t < seg.length() && isWs(seg.charAt(t))) {
+            t++;
+        }
+        String name = readIdent(seg, t);
+        if (name != null) {
+            h.put(name, SCOPE_SHADOW);
+        }
+    }
+
+    private static int tryHandleSimpleDecl(String s, int i, int n, StringBuffer out, Vector scopes, Hashtable tainted) {
+        int klen = skipDeclKeyword(s, i, n);
+        if (klen < 0) {
+            return -1;
+        }
+        boolean isConst = (klen - i) == 5;
+        int j = klen;
+        j = skipWsIn(s, j, n);
+        if (j < n) {
+            char c = s.charAt(j);
+            if (c == '{' || c == '[') {
+                return -1;
+            }
+        }
+        String name = readIdent(s, j);
+        if (name == null) {
+            return -1;
+        }
+        j += name.length();
+        j = skipWsIn(s, j, n);
+        if (j >= n || s.charAt(j) != '=') {
+            return -1;
+        }
+        j++;
+        int rhs0 = j;
+        int q = findRhsEndInDecl(s, rhs0, n);
+        if (q < n && s.charAt(q) == ',') {
+            return -1;
+        }
+        FoldVal[] outFv = new FoldVal[1];
+        int nend = tryParseFoldExprAt(s, rhs0, q, tainted, scopes, outFv);
+        out.append("var").append(" ").append(name).append("=");
+        if (nend > 0 && outFv[0] != null) {
+            out.append(outFv[0].emit());
+        } else {
+            for (int z = rhs0; z < q; z++) {
+                out.append(s.charAt(z));
+            }
+        }
+        if (nend > 0 && isConst && tainted.get(name) == null) {
+            scopePutVal(scopes, name, outFv[0]);
+        }
+        if (!isConst) {
+            scopePutName(scopes, name);
+        }
+        if (q < n) {
+            out.append(s.charAt(q));
+        }
+        return q + 1;
+    }
+
+    private static int tryProcessCatchPreamble(String s, int i, int n, StringBuffer out, String[] nameOut) {
+        if (i + 4 > n || !matchKw(s, i, "catch") || (i + 4 < n && isIdentPart(s.charAt(i + 4)))) {
+            return -1;
+        }
+        for (int c = 0; c < 5; c++) {
+            out.append(s.charAt(i + c));
+        }
+        int j = i + 5;
+        j = skipWsIn(s, j, n);
+        if (j >= n || s.charAt(j) != '(') {
+            return -1;
+        }
+        out.append('(');
+        j++;
+        j = skipWsIn(s, j, n);
+        String e = readIdent(s, j);
+        if (e == null) {
+            return -1;
+        }
+        for (int k = 0; k < e.length(); k++) {
+            out.append(s.charAt(j + k));
+        }
+        if (nameOut != null && nameOut.length > 0) {
+            nameOut[0] = e;
+        }
+        j += e.length();
+        j = skipWsIn(s, j, n);
+        if (j >= n || s.charAt(j) != ')') {
+            return -1;
+        }
+        out.append(')');
+        return j + 1;
+    }
+
+    static String preprocessConstantFold(String src) {
+        if (src == null || src.length() == 0) {
+            return src;
+        }
+        Hashtable tainted = scanMutatedNames(src);
+        int n = src.length();
+        StringBuffer out = new StringBuffer(n + 32);
+        Vector scopes = new Vector();
+        scopes.addElement(new Hashtable());
+        int i = 0;
+        String innerParams = null;
+        String catchName = null;
+        while (i < n) {
+            int lj = copyLiteral(src, i, out);
+            if (lj > i) {
+                i = lj;
+                continue;
+            }
+            char c = src.charAt(i);
+            if (c == '{') {
+                Hashtable h2 = new Hashtable();
+                if (innerParams != null) {
+                    putParamNamesAsShadows(innerParams, h2);
+                    innerParams = null;
+                }
+                if (catchName != null) {
+                    h2.put(catchName, SCOPE_SHADOW);
+                    catchName = null;
+                }
+                scopes.addElement(h2);
+                out.append(c);
+                i++;
+                continue;
+            }
+            if (c == '}') {
+                if (scopes.size() > 1) {
+                    scopes.removeElementAt(scopes.size() - 1);
+                }
+                out.append(c);
+                i++;
+                continue;
+            }
+            if (i + 8 <= n && matchKw(src, i, "function") && (i + 8 >= n || !isIdentPart(src.charAt(i + 8)))) {
+                StringBuffer pbuf = new StringBuffer();
+                int fj = copyFunctionPreambleToCloseParen(src, i, n, out, pbuf);
+                if (fj > i) {
+                    innerParams = pbuf.toString();
+                    i = fj;
+                    continue;
+                }
+            }
+            if (i + 5 <= n && matchKw(src, i, "catch") && (i + 5 >= n || !isIdentPart(src.charAt(i + 5)))) {
+                String[] cname = new String[1];
+                int cj = tryProcessCatchPreamble(src, i, n, out, cname);
+                if (cj > 0) {
+                    catchName = cname[0];
+                    i = cj;
+                    continue;
+                }
+            }
+            int dkw2 = tryHandleSimpleDecl(src, i, n, out, scopes, tainted);
+            if (dkw2 > i) {
+                i = dkw2;
+                continue;
+            }
+            if (lastNonWsIn(out) != '.'
+                    && isExprStartCharAt(out)
+                    && skipDeclKeyword(src, i, n) < 0
+                    && !(i + 8 <= n && matchKw(src, i, "function") && (i + 8 >= n || !isIdentPart(src.charAt(i + 8))))) {
+                FoldVal[] fv = new FoldVal[1];
+                int en = tryParseFoldExprAt(src, i, n, tainted, scopes, fv);
+                if (en > i) {
+                    int wsEnd = skipWsIn(src, i, n);
+                    for (int z = i; z < wsEnd; z++) {
+                        out.append(src.charAt(z));
+                    }
+                    out.append(fv[0].emit());
+                    i = en;
+                    continue;
                 }
             }
             out.append(c);

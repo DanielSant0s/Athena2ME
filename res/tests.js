@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //  Athena2ME / forked RockScript — ES6+ smoke tests
 //
-//  These tests exercise the features added in the modernization plan. They are
+//  These tests exercise the ES6+ feature set added in this fork. They are
 //  intentionally shallow and do not require any host bindings beyond
 //  console.log. To run them, either:
 //
@@ -31,7 +31,7 @@ var tests = (function () {
 
     function truthy(v, label) { eq(!!v, true, label); }
 
-    // -- Fase A --------------------------------------------------------------
+    // -- Built-ins: array, object, string, JSON, number -----------------------
 
     function testArray() {
         var a = [1, 2, 3, 4];
@@ -104,7 +104,7 @@ var tests = (function () {
         eq(1.9 | 0, 1, "bitwise | ToInt32");
     }
 
-    // -- Fase B --------------------------------------------------------------
+    // -- let/const, arrow, template, shorthand, defaults ----------------------
 
     function testLetConst() {
         let x = 1;
@@ -142,7 +142,7 @@ line`, "multi\nline", "template newline");
         eq(greet("Dan"), "hi Dan", "default param overridden");
     }
 
-    // -- Fase C --------------------------------------------------------------
+    // -- spread, rest, destructuring, for...of --------------------------------
 
     function testSpread() {
         function sum(a, b, c) { return a + b + c; }
@@ -174,7 +174,7 @@ line`, "multi\nline", "template newline");
         eq(joined, "abc", "for...of string");
     }
 
-    // -- Fase D --------------------------------------------------------------
+    // -- class, Map, Set, Symbol ---------------------------------------------
 
     function testClass() {
         class Animal {
@@ -255,6 +255,99 @@ line`, "multi\nline", "template newline");
         truthy(sum >= 200, "indexed sum over Uint8Array");
     }
 
+    function testInt32Array() {
+        var a = new Int32Array(4);
+        eq(a.length, 4, "Int32Array.length");
+        eq(a.byteLength, 16, "Int32Array.byteLength");
+        eq(Int32Array.BYTES_PER_ELEMENT, 4, "BYTES_PER_ELEMENT");
+        eq(a instanceof Int32Array, true, "instanceof Int32Array");
+        a[0] = -1;
+        a[3] = 0x7eedbeef;
+        eq(a[0], -1, "Int32Array negative");
+        eq(a[3], 0x7eedbeef, "Int32Array large positive");
+
+        var ab = new ArrayBuffer(16);
+        var b = new Int32Array(ab, 4, 2);
+        eq(b.length, 2, "Int32Array buffer view length");
+        b[0] = 42;
+        var dv = new DataView(ab);
+        eq(dv.getInt32(4, true), 42, "Int32Array little-endian matches DataView");
+
+        var c = a.subarray(1, 3);
+        a[1] = 100;
+        eq(c[0], 100, "Int32Array.subarray shares memory");
+    }
+
+    // ------------------------------------------------------------------------
+
+    function testConstantFolding() {
+        eq((255 * 4), 1020, "const fold literal mul");
+        const A = 255 * 4;
+        eq(A, 1020, "const const propagation");
+        const B = (1 << 8) | 0xF;
+        eq(B, 271, "const fold bitwise");
+        const C = "v" + "1" + "." + "0";
+        eq(C, "v1.0", "const fold string concat");
+        const D = Math.PI;
+        truthy(D > 3.14, "const fold Math.PI");
+        const E = Number.MAX_VALUE;
+        truthy(E > 1e300, "const fold Number.MAX_VALUE");
+        eq(0 && 1, 0, "const fold && (both foldable)");
+        var X = 1;
+        X = 2;
+        eq(X, 2, "taint: reassigned not folded as const");
+        const T = 1;
+        function fShadow(x) {
+            return T + 0;
+        }
+        eq(fShadow(0), 1, "outer const visible in function (no shadow name clash)");
+    }
+
+    function testOsPool() {
+        function Box(v) {
+            this.v = v;
+        }
+        var pool = os.pool(Box, 2);
+        eq(pool.capacity(), 2, "os.pool capacity");
+        eq(pool.free(), 2, "os.pool free initial");
+        eq(pool.inUse(), 0, "os.pool inUse initial");
+        var a = pool.acquire(10);
+        truthy(a instanceof Box, "pooled instanceof constructor");
+        eq(a.v, 10, "os.pool acquire passes args");
+        eq(pool.free(), 1, "os.pool free after acquire");
+        eq(pool.inUse(), 1, "os.pool inUse after acquire");
+        var b = pool.acquire(20);
+        eq(b.v, 20, "os.pool second acquire");
+        eq(pool.acquire(99), null, "os.pool exhausted returns null");
+        pool.release(a);
+        eq(pool.free(), 1, "os.pool free after release");
+        var a2 = pool.acquire(30);
+        eq(a2 === a, true, "os.pool reuses same object");
+        eq(a2.v, 30, "os.pool reinit after reuse");
+        pool.release(a2);
+        pool.release(b);
+        eq(pool.free(), 2, "os.pool all slots free");
+        eq(pool.inUse(), 0, "os.pool none in use");
+    }
+
+    function testScreenBatchAndLayer() {
+        var L = Screen.createLayer(8, 8);
+        truthy(L !== null && typeof L.width === "number", "Screen.createLayer returns object");
+        eq(L.width, 8, "layer.width");
+        eq(L.height, 8, "layer.height");
+        Screen.setLayer(L);
+        Draw.rect(0, 0, 4, 4, 0xff0000);
+        Screen.setLayer(null);
+        Screen.clear(0x000000);
+        Screen.drawLayer(L, 0, 0);
+        Screen.beginBatch();
+        Screen.flushBatch();
+        Screen.endBatch();
+        Screen.clearLayer(L, 0x00ff00);
+        Screen.freeLayer(L);
+        truthy(true, "Screen batch/layer smoke");
+    }
+
     // ------------------------------------------------------------------------
 
     function runAll() {
@@ -277,6 +370,10 @@ line`, "multi\nline", "template newline");
         try { testMapSet(); }        catch (e) { failed++; console.log("FAIL mapset: " + e.message); }
         try { testSymbol(); }        catch (e) { failed++; console.log("FAIL symbol: " + e.message); }
         try { testArrayBuffer(); }   catch (e) { failed++; console.log("FAIL arraybuffer: " + e.message); }
+        try { testInt32Array(); }    catch (e) { failed++; console.log("FAIL int32array: " + e.message); }
+        try { testConstantFolding(); } catch (e) { failed++; console.log("FAIL constfold: " + e.message); }
+        try { testOsPool(); }         catch (e) { failed++; console.log("FAIL ospool: " + e.message); }
+        try { testScreenBatchAndLayer(); } catch (e) { failed++; console.log("FAIL screen render: " + e.message); }
 
         console.log("----------");
         console.log("Tests run: " + total + ", failed: " + failed);

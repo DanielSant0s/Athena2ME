@@ -167,7 +167,7 @@ public final class PromiseRuntime {
             return false;
         }
         int t = x.type;
-        return t == Rv.OBJECT || t == Rv.ARRAY || t == Rv.UINT8_ARRAY || t == Rv.ERROR
+        return t == Rv.OBJECT || t == Rv.ARRAY || t == Rv.UINT8_ARRAY || t == Rv.INT32_ARRAY || t == Rv.ERROR
                 || t == Rv.FUNCTION || t == Rv.NUMBER_OBJECT || t == Rv.STRING_OBJECT;
     }
 

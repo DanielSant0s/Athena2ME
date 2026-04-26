@@ -83,8 +83,8 @@ final class StdLib {
         arr.putl(arr.num, v);
     }
 
-    /** Caps single ArrayBuffer allocation size for J2ME heap safety. */
-    static final int MAX_ARRAY_BUFFER_BYTES = 16 * 1024 * 1024;
+    /** Caps single ArrayBuffer allocation size for J2ME heap safety (1 MiB). */
+    static final int MAX_ARRAY_BUFFER_BYTES = 1 * 1024 * 1024;
 
     static final int clampArrayBufferLength(double d) {
         if (Double.isNaN(d) || d <= 0) return 0;
@@ -181,6 +181,20 @@ final class StdLib {
                 ? (Rv.Uint8View) r.opaque : null;
     }
 
+    static final Rv.Int32View int32ViewOf(Rv r) {
+        return r != null && r.type == Rv.INT32_ARRAY && r.opaque instanceof Rv.Int32View
+                ? (Rv.Int32View) r.opaque : null;
+    }
+
+    /** Element count for {@code new Int32Array(n)}; caps total bytes via {@link #clampArrayBufferLength}. */
+    static final int clampInt32ArrayElementCount(double d) {
+        if (Double.isNaN(d) || d <= 0) {
+            return 0;
+        }
+        int byteCap = clampArrayBufferLength(d * 4.0);
+        return byteCap >> 2;
+    }
+
     static final Rv.DataViewState dataViewOf(Rv r) {
         return r != null && r.opaque instanceof Rv.DataViewState
                 ? (Rv.DataViewState) r.opaque : null;
@@ -262,6 +276,7 @@ final class StdLib {
         // ---- Math extras ----
         Rv math = (Rv) go.get("Math");
         if (math != null) {
+            math.putl("random", ri.addNativeFunction(entryOf("Math.random")));
             math.putl("abs",    ri.addNativeFunction(entryOf("Math.abs")));
             math.putl("floor",  ri.addNativeFunction(entryOf("Math.floor")));
             math.putl("ceil",   ri.addNativeFunction(entryOf("Math.ceil")));
@@ -281,7 +296,7 @@ final class StdLib {
             math.putl("E",      new Rv(Math.E));
         }
 
-        // ---- ArrayBuffer / Uint8Array / DataView ----
+        // ---- ArrayBuffer / Uint8Array / Int32Array / DataView ----
         Rv._ArrayBuffer = new Rv();
         Rv._ArrayBuffer.nativeCtor("ArrayBuffer", go).ctorOrProt
                 .putl("slice", ri.addNativeFunction(entryOf("ArrayBuffer.slice")));
@@ -291,6 +306,12 @@ final class StdLib {
         Rv._Uint8Array.nativeCtor("Uint8Array", go).ctorOrProt
                 .putl("subarray", ri.addNativeFunction(entryOf("Uint8Array.subarray")));
         go.putl("Uint8Array", Rv._Uint8Array);
+
+        Rv._Int32Array = new Rv();
+        Rv._Int32Array.nativeCtor("Int32Array", go).ctorOrProt
+                .putl("subarray", ri.addNativeFunction(entryOf("Int32Array.subarray")));
+        go.putl("Int32Array", Rv._Int32Array);
+        Rv._Int32Array.putl("BYTES_PER_ELEMENT", new Rv(4));
 
         Rv._DataView = new Rv();
         Rv._DataView.nativeCtor("DataView", go).ctorOrProt
@@ -302,7 +323,7 @@ final class StdLib {
                 .putl("setInt32", ri.addNativeFunction(entryOf("DataView.setInt32")));
         go.putl("DataView", Rv._DataView);
 
-        // ---- Map / Set / Symbol (Fase D) ----
+        // ---- Map / Set / Symbol ----
         Rv._Map = new Rv();
         Rv._Map.nativeCtor("Map", go).ctorOrProt
                 .putl("get",      ri.addNativeFunction(entryOf("Map.get")))
@@ -1055,6 +1076,36 @@ final class StdLib {
         //                          MATH
         // ============================================================
 
+        new NativeFunctionListEntry("Math.random", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                if (num < 1) {
+                    return new Rv(RocksInterpreter.random.nextDouble());
+                }
+                Rv a0 = arg(args, start, num, 0);
+                if (a0 == null || a0 == Rv._undefined) {
+                    return new Rv(RocksInterpreter.random.nextDouble());
+                }
+                if (a0.toNum() == Rv._NaN) {
+                    return Rv._undefined;
+                }
+                int low = (int) Rv.numValue(a0.toNum());
+                Rv a1 = arg(args, start, num, 1);
+                int high = a1 != null && a1 != Rv._undefined && a1.toNum() != Rv._NaN
+                        ? (int) Rv.numValue(a1.toNum()) : low - 1;
+                if (high <= low) {
+                    high = low;
+                    low = 0;
+                }
+                int span = high - low;
+                if (span <= 0) {
+                    return Rv.smallInt(low);
+                }
+                int rand = (RocksInterpreter.random.nextInt() & 0x7fffffff) % span;
+                return Rv.smallInt(low + rand);
+            }
+        }),
+
         new NativeFunctionListEntry("Math.abs", new NativeFunctionFast() {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
@@ -1180,7 +1231,7 @@ final class StdLib {
         }),
 
         // ============================================================
-        //           ArrayBuffer / Uint8Array / DataView
+        //           ArrayBuffer / Uint8Array / Int32Array / DataView
         // ============================================================
 
         new NativeFunctionListEntry("ArrayBuffer", new NativeFunctionFast() {
@@ -1288,6 +1339,97 @@ final class StdLib {
                 out.putl("buffer", uv.bufferRv);
                 out.putl("byteOffset", new Rv(uv.offset + b));
                 out.putl("byteLength", new Rv(n));
+                return out;
+            }
+        }),
+
+        new NativeFunctionListEntry("Int32Array", new NativeFunctionFast() {
+            public final int length = 3;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv inst = isNew ? thiz : new Rv(Rv.INT32_ARRAY, Rv._Int32Array);
+                inst.type = Rv.INT32_ARRAY;
+                inst.ctorOrProt = Rv._Int32Array;
+                Rv a0 = arg(args, start, num, 0);
+                if (a0 == null || a0 == Rv._undefined) {
+                    Rv bufRv = newArrayBufferRv(0);
+                    Rv.ArrayBufferBacking bb = arrayBufferOf(bufRv);
+                    inst.opaque = new Rv.Int32View(bb.data, 0, 0, bufRv);
+                    inst.num = 0;
+                    inst.putl("buffer", bufRv);
+                    inst.putl("byteOffset", new Rv(0));
+                    inst.putl("byteLength", new Rv(0));
+                    return inst;
+                }
+                Rv.ArrayBufferBacking bb0 = arrayBufferOf(a0);
+                if (bb0 != null) {
+                    int bufLen = bb0.data.length;
+                    int bo = toInt(arg(args, start, num, 1), 0);
+                    if (bo < 0) {
+                        bo = 0;
+                    }
+                    bo = bo - (bo & 3);
+                    if (bo > bufLen) {
+                        bo = bufLen;
+                    }
+                    int maxB = bufLen - bo;
+                    maxB = maxB - (maxB & 3);
+                    int elen;
+                    if (num >= 3 && arg(args, start, num, 2) != Rv._undefined) {
+                        elen = toInt(arg(args, start, num, 2), maxB >> 2);
+                    } else {
+                        elen = maxB >> 2;
+                    }
+                    if (elen < 0) {
+                        elen = 0;
+                    }
+                    int maxEl = maxB >> 2;
+                    if (elen > maxEl) {
+                        elen = maxEl;
+                    }
+                    int byteLen = elen << 2;
+                    inst.opaque = new Rv.Int32View(bb0.data, bo, byteLen, a0);
+                    inst.num = elen;
+                    inst.putl("buffer", a0);
+                    inst.putl("byteOffset", new Rv(bo));
+                    inst.putl("byteLength", new Rv(byteLen));
+                    return inst;
+                }
+                int el = clampInt32ArrayElementCount(toDouble(a0, 0));
+                int bytes = el << 2;
+                Rv bufRv = newArrayBufferRv(bytes);
+                Rv.ArrayBufferBacking bb = arrayBufferOf(bufRv);
+                inst.opaque = new Rv.Int32View(bb.data, 0, bytes, bufRv);
+                inst.num = el;
+                inst.putl("buffer", bufRv);
+                inst.putl("byteOffset", new Rv(0));
+                inst.putl("byteLength", new Rv(bytes));
+                return inst;
+            }
+        }),
+
+        new NativeFunctionListEntry("Int32Array.subarray", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv.Int32View iv = int32ViewOf(thiz);
+                if (iv == null) {
+                    return Rv._undefined;
+                }
+                int elemLen = iv.byteLength >> 2;
+                int b = sliceIndex(toDouble(arg(args, start, num, 0), 0), elemLen);
+                int e = num > 1
+                        ? sliceEndIndex(toDouble(arg(args, start, num, 1), elemLen), elemLen, b)
+                        : elemLen;
+                int n = e - b;
+                int byteOff = iv.offset + (b << 2);
+                int byteLen = n << 2;
+                Rv out = new Rv(Rv.INT32_ARRAY, Rv._Int32Array);
+                out.type = Rv.INT32_ARRAY;
+                out.ctorOrProt = Rv._Int32Array;
+                out.opaque = new Rv.Int32View(iv.data, byteOff, byteLen, iv.bufferRv);
+                out.num = n;
+                out.putl("buffer", iv.bufferRv);
+                out.putl("byteOffset", new Rv(byteOff));
+                out.putl("byteLength", new Rv(byteLen));
                 return out;
             }
         }),
@@ -1404,7 +1546,7 @@ final class StdLib {
         }),
 
         // ============================================================
-        //                  MAP / SET / SYMBOL (Fase D)
+        //                  MAP / SET / SYMBOL
         // ============================================================
 
         new NativeFunctionListEntry("Map", new NativeFunctionFast() {

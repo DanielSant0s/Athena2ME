@@ -18,6 +18,8 @@ public class Rv {
     static final int ERROR =            OBJECT + 0x0C;
     /** Uint8Array: uses {@link #opaque} {@link Uint8View}; {@code num} is element count. */
     public static final int UINT8_ARRAY = OBJECT + 0x0E;
+    /** Int32Array: uses {@link #opaque} {@link Int32View}; {@code num} is element count (not bytes). */
+    public static final int INT32_ARRAY = OBJECT + 0x0F;
     
     static final int FUNCTION =         0x2C;
     static final int NATIVE =           0x2D; // native function
@@ -30,27 +32,62 @@ public class Rv {
     public int hash;
 
     /** Structural generation counter. Bumped every time a property is added or
-     *  replaced via {@link #putl}. Used by the monomorphic inline cache in
+     *  replaced via {@link #putl}. Used by the polymorphic inline cache in
      *  LVALUE nodes to validate whether a previously memoised lookup result is
      *  still fresh. */
     public int gen;
 
-    /** Inline cache slots, only meaningful when {@code type == LVALUE}. Store the
-     *  last resolved value, the holder it was fetched from, the property key we
-     *  looked up, the Rhash we found it in, and the Rhash's {@link Rhash#gen} at
-     *  resolution time. Treated as a best-effort hint: a miss just falls through
-     *  to the normal chain-walking lookup.
+    /** Monomorphic inline cache for {@link #getByKey(Rv)} (scope chain symbol lookup). */
+    private Rv symPicKey;
+    private Rv symPicVal;
+    private int symPicGen;
+    /** Scope object that owns the binding; {@link #gen} is validated with {@link #symPicHostGen}. */
+    private Rv symPicHost;
+    private int symPicHostGen;
+
+    /**
+     * Polymorphic (PIC) LVALUE read cache, allocated on first use of {@link #get()}.
+     * See {@link LvalueInlineCache}. Null keeps bytecode pool {@link Rv} nodes small
+     * until a member-read site is actually warm.
+     */
+    LvalueInlineCache icPic;
+
+    /**
+     * 2–4 slot polymorphic inline cache for a single LVALUE member-read site.
+     *  Each entry mirrors the monomorphic case: holder, resolved value, key,
+     *  the holder’s backing {@link Rhash}, and that map’s {@code gen} at
+     *  resolution. Miss → full {@link Rv#get(String)}; install uses round-robin
+     *  to evict (see {@link #write}).
      *
-     *  <p>Both {@code icRhash} identity and {@code icStamp} are required: holders
-     *  like arrays may wholesale-replace their backing {@link Rhash} (e.g.
-     *  {@code Array.unshift}/{@code sort}/{@code reverse}) and the replacement
-     *  Rhash starts its own {@code gen} counter from 0 — so the stamp check
-     *  alone can spuriously match on a structurally unrelated map. */
-    public Rv icHolder;
-    public Rv icValue;
-    public String icKey;
-    public Rhash icRhash;
-    public int icStamp;
+     *  <p>Identity of {@code rhash} plus {@code stamp} is required: array holders
+     *  may replace {@code prop} (e.g. {@code unshift/sort/reverse}) and a new
+     *  map can carry the same {@code gen} as an unrelated one.
+     *
+     *  <p>A future shape-keyed entry (e.g. cache by the map that supplied the
+     *  value, not the receiver) could help many distinct instances sharing one
+     *  prototype; this PIC is keyed by {@code holder} identity only.
+     */
+    static final class LvalueInlineCache {
+        /** 6 entries: more slots reduce PIC thrash on warm polymorphic read sites. */
+        static final int SLOTS = 6;
+        final Rv[] holder;
+        final Rv[] value;
+        final String[] key;
+        final Rhash[] rhash;
+        final int[] stamp;
+        final int[] layout;
+        /** Next {@link #SLOTS} index to write on a cache miss. */
+        int write;
+
+        LvalueInlineCache() {
+            holder = new Rv[SLOTS];
+            value = new Rv[SLOTS];
+            key = new String[SLOTS];
+            rhash = new Rhash[SLOTS];
+            stamp = new int[SLOTS];
+            layout = new int[SLOTS];
+        }
+    }
     
     // ------- NUM STR SYM LVA OBJ NOB SOB ARR ARG FUN NAT cob CTR
     // num      o           x       o       o   o   o   o         
@@ -85,6 +122,61 @@ public class Rv {
     public Rv prev;
 
     public Rv() {
+    }
+
+    /** Fixed slab for {@link Rhash} entry nodes. These Rv cells are never JS values. */
+    private static final int RHASH_ENTRY_SLAB_CAP = 1024;
+    private static final Rv[] RHASH_ENTRY_SLAB = new Rv[RHASH_ENTRY_SLAB_CAP];
+    private static int rhashEntryTop;
+
+    static final Rv acquireRhashEntry() {
+        synchronized (RHASH_ENTRY_SLAB) {
+            if (rhashEntryTop > 0) {
+                return RHASH_ENTRY_SLAB[--rhashEntryTop];
+            }
+        }
+        return new Rv();
+    }
+
+    static final void releaseRhashEntry(Rv entry) {
+        if (entry == null) {
+            return;
+        }
+        entry.clearRhashEntry();
+        synchronized (RHASH_ENTRY_SLAB) {
+            if (rhashEntryTop < RHASH_ENTRY_SLAB_CAP) {
+                RHASH_ENTRY_SLAB[rhashEntryTop++] = entry;
+            }
+        }
+    }
+
+    private final void clearRhashEntry() {
+        type = Rv.UNDEFINED;
+        hash = 0;
+        gen = 0;
+        icPic = null;
+        opaque = null;
+        num = 0;
+        f = false;
+        d = 0.0;
+        str = null;
+        obj = null;
+        prop = null;
+        co = null;
+        ctorOrProt = null;
+        prev = null;
+    }
+
+    final Rv resetTempLvalue(String s, Rv referenced) {
+        clearRhashEntry();
+        type = Rv.LVALUE;
+        str = s;
+        co = referenced;
+        return this;
+    }
+
+    final void clearEvalTemp() {
+        clearRhashEntry();
     }
     
     /**
@@ -189,13 +281,36 @@ public class Rv {
     }
     
     /**
+     * Canonical Java {@link String} instances for compile-time identifiers and
+     * string literals. Distinct dynamic strings must never be inserted here.
+     */
+    private static final java.util.Hashtable _atomPool = new java.util.Hashtable();
+
+    public static final String atom(String s) {
+        String c = (String) _atomPool.get(s);
+        if (c == null) {
+            _atomPool.put(s, s);
+            return s;
+        }
+        return c;
+    }
+
+    /**
      * Canonical SYMBOL pool. Ensures that a given identifier string always maps
      * to the same Rv, so comparisons can short-circuit to pointer equality and
      * the hashCode is computed once per symbol name.
      */
     private static final java.util.Hashtable _symbolPool = new java.util.Hashtable();
 
+    /**
+     * Literals longer than this skip {@link #_atomPool} so huge or one-off
+     * embedded strings do not grow the intern table unbounded (J2ME heap).
+     * {@link Rhash} still resolves keys with {@code equals} when references differ.
+     */
+    static final int ATOM_INTERN_MAX_STRLEN = 512;
+
     public static final Rv symbol(String s) {
+        s = atom(s);
         Rv ret = (Rv) _symbolPool.get(s);
         if (ret == null) {
             ret = new Rv(s);
@@ -203,6 +318,23 @@ public class Rv {
             ret.hash = s.hashCode();
             _symbolPool.put(s, ret);
         }
+        return ret;
+    }
+
+    /**
+     * String primitive from a JS source literal; short literals use {@link #atom}
+     * (shared with {@link #symbol}) so Rhash can often match with reference
+     * equality. Long literals skip the atom pool to limit heap on constrained VMs.
+     */
+    public static final Rv stringLiteral(String s) {
+        if (s != null && s.length() > ATOM_INTERN_MAX_STRLEN) {
+            Rv ret = new Rv(s);
+            ret.hash = s.hashCode();
+            return ret;
+        }
+        s = atom(s);
+        Rv ret = new Rv(s);
+        ret.hash = s.hashCode();
         return ret;
     }
     
@@ -302,29 +434,43 @@ public class Rv {
             newco.d = co.d;
             this.co = newco;
         }
-        // ---- monomorphic inline cache ----
-        // Identical holder + same backing Rhash + unchanged gen + same key
-        // => return cached value. We compare Rhash identity (not just the gen
-        // stamp) because mutating natives like Array.unshift/sort/reverse
-        // replace the holder's Rhash entirely, and the replacement can happen
-        // to carry the same `gen` value as the map that was cached against.
+        // ---- polymorphic inline cache (PIC) for LVALUE reads ----
+        // Per-slot: same receiver identity + same backing Rhash + unchanged gen
+        // + same key => return cached value. Rhash identity (not just gen) is
+        // required because Array.unshift/sort/reverse can replace the holder’s map.
         Rv holder = this.co;
         String key = this.str;
         Rhash hp;
-        if (this.icHolder == holder
-                && this.icValue != null
-                && (hp = holder.prop) != null
-                && this.icRhash == hp
-                && this.icStamp == hp.gen
-                && (this.icKey == key || (this.icKey != null && this.icKey.equals(key)))) {
-            return this.icValue;
+        LvalueInlineCache pic = this.icPic;
+        if (pic != null) {
+            for (int i = 0, n = LvalueInlineCache.SLOTS; i < n; i++) {
+                Rv h0 = pic.holder[i];
+                if (h0 == null) {
+                    continue;
+                }
+                if (h0 == holder
+                        && (hp = holder.prop) != null
+                        && pic.rhash[i] == hp
+                        && pic.stamp[i] == hp.gen
+                        && pic.layout[i] == hp.layoutFp
+                        && (pic.key[i] == key
+                                || (pic.key[i] != null && pic.key[i].equals(key)))) {
+                    return pic.value[i];
+                }
+            }
         }
         Rv v = holder.get(key);
-        this.icHolder = holder;
-        this.icRhash = (hp = holder.prop);
-        this.icStamp = hp != null ? hp.gen : 0;
-        this.icKey = key;
-        this.icValue = v;
+        if (pic == null) {
+            this.icPic = pic = new LvalueInlineCache();
+        }
+        int w = pic.write;
+        pic.holder[w] = holder;
+        pic.rhash[w] = (hp = holder.prop);
+        pic.stamp[w] = hp != null ? hp.gen : 0;
+        pic.layout[w] = hp != null ? hp.layoutFp : 0;
+        pic.key[w] = key;
+        pic.value[w] = v;
+        pic.write = (w + 1) % LvalueInlineCache.SLOTS;
         return v;
     }
     
@@ -337,16 +483,10 @@ public class Rv {
             return this.ctorOrProt != null;
         } else if (type >= Rv.ARRAY && "length".equals(p)) { // array/arguments/function/native
             return true;
-        } else if (type == Rv.UINT8_ARRAY) {
-            int pl = p.length();
-            if (pl > 0) {
-                char c0 = p.charAt(0);
-                if (c0 >= '0' && c0 <= '9') {
-                    try {
-                        int idx = Integer.parseInt(p);
-                        return idx >= 0 && idx < this.num;
-                    } catch (NumberFormatException ex) { /* fall through */ }
-                }
+        } else if (type == Rv.UINT8_ARRAY || type == Rv.INT32_ARRAY) {
+            int idx = arrayIndexKey(p);
+            if (idx >= 0) {
+                return idx < this.num;
             }
         }
         int ph = p.hashCode();
@@ -413,7 +553,7 @@ public class Rv {
             // by method installs on `Player.prototype.*`).
             Rv proto = this.prop != null ? this.prop.get(p) : null;
             if (proto != null) {
-                this.prop.remove(p.hashCode(), p);
+                this.prop.removeAndRelease(p.hashCode(), p);
             } else {
                 proto = new Rv(Rv.OBJECT, Rv._Object);
             }
@@ -427,18 +567,20 @@ public class Rv {
         } else if ("length".equals(p)) { // array/arguments/function/native
             int num = type >= Rv.ARRAY ? this.num : -1;
             if (num >= 0) return new Rv(num);
-        } else if (type == Rv.UINT8_ARRAY) {
-            int pl = p.length();
-            if (pl > 0) {
-                char c0 = p.charAt(0);
-                if (c0 >= '0' && c0 <= '9') {
-                    try {
-                        int idx = Integer.parseInt(p);
-                        Uint8View uv = (Uint8View) this.opaque;
-                        if (idx >= 0 && idx < uv.byteLength) {
-                            return new Rv(uv.data[uv.offset + idx] & 0xff);
-                        }
-                    } catch (NumberFormatException ex) { /* fall through */ }
+        } else if (type == Rv.UINT8_ARRAY || type == Rv.INT32_ARRAY) {
+            int idx = arrayIndexKey(p);
+            if (idx >= 0) {
+                if (type == Rv.UINT8_ARRAY) {
+                    Uint8View uv = (Uint8View) this.opaque;
+                    if (idx < uv.byteLength) {
+                        return new Rv(uv.data[uv.offset + idx] & 0xff);
+                    }
+                } else {
+                    Int32View iv = (Int32View) this.opaque;
+                    int nel = iv.byteLength >> 2;
+                    if (idx < nel) {
+                        return new Rv(int32LoadLE(iv.data, iv.offset + (idx << 2)));
+                    }
                 }
             }
         }
@@ -513,7 +655,7 @@ public class Rv {
                 }
                 if (newNum < o.num) { // trim array
                     Rhash prop = o.prop;
-                    for (int i = o.num; --i >= newNum; prop.remove(0, intStr(i)));
+                    for (int i = o.num; --i >= newNum; prop.removeAndRelease(0, intStr(i)));
                     ++o.gen;
                 }
                 o.num = newNum;
@@ -527,22 +669,37 @@ public class Rv {
                     return this;
                 } catch (Exception ex) { }
             } else if (obj.type == Rv.UINT8_ARRAY) {
-                try {
-                    int idx = Integer.parseInt(p);
+                int idx = arrayIndexKey(p);
+                if (idx >= 0) {
                     Uint8View uv = (Uint8View) obj.opaque;
-                    if (idx >= 0 && idx < uv.byteLength) {
+                    if (idx < uv.byteLength) {
                         Rv n = val.toNum();
                         int b = toInt32(numValue(n));
                         uv.data[uv.offset + idx] = (byte) (b & 0xff);
                     }
-                    return this;
-                } catch (Exception ex) { }
+                }
+                return this;
+            } else if (obj.type == Rv.INT32_ARRAY) {
+                int idx = arrayIndexKey(p);
+                if (idx >= 0) {
+                    Int32View iv = (Int32View) obj.opaque;
+                    int nel = iv.byteLength >> 2;
+                    if (idx < nel) {
+                        Rv n = val.toNum();
+                        int32StoreLE(iv.data, iv.offset + (idx << 2), toInt32(numValue(n)));
+                    }
+                }
+                return this;
             }
             Rv ret;
             for (; (ret = obj.prop.get(p)) == null && (prev = obj.prev) != null; obj = prev);
             Rv target = ret == null ? o : obj;
             target.prop.put(p, val);
             ++target.gen;
+            Object op;
+            if ((op = target.opaque) instanceof OpaquePropertySink) {
+                ((OpaquePropertySink) op).onPropertyPut(p, val);
+            }
         }
         return this;
     }
@@ -556,6 +713,10 @@ public class Rv {
     final Rv putl(String p, Rv val) {
         this.prop.put(p, val);
         ++this.gen;
+        Object op;
+        if ((op = this.opaque) instanceof OpaquePropertySink) {
+            ((OpaquePropertySink) op).onPropertyPut(p, val);
+        }
         return this;
     }
 
@@ -577,7 +738,7 @@ public class Rv {
         }
         // Always bump gen: pop() (idx == num-1) walks zero iterations of the
         // loop above and would otherwise leave the Rhash generation unchanged.
-        // The monomorphic IC on `array.length` validates via Rhash gen, so a
+        // The LVALUE PIC on `array.length` validates via Rhash gen, so a
         // no-bump pop stale-caches length -> tight `while (arr.length > n)
         // arr.pop()` loops spin forever.
         ++prop.gen;
@@ -697,6 +858,10 @@ public class Rv {
     public final Rv getByKey(Rv key) {
         int type;
         String p = key.str;
+        if (symPicKey == key && symPicGen == this.gen
+                && symPicHost != null && symPicHost.gen == symPicHostGen) {
+            return symPicVal;
+        }
         if ((type = this.type) < Rv.OBJECT) {
             return Rv._undefined;
         }
@@ -708,18 +873,33 @@ public class Rv {
                     : type == Rv.STRING || type == Rv.STRING_OBJECT ? this.str.length()
                     : -1;
             if (num >= 0) return new Rv(num);
-        } else if (type == Rv.UINT8_ARRAY) {
-            int pl = p.length();
-            if (pl > 0) {
-                char c0 = p.charAt(0);
-                if (c0 >= '0' && c0 <= '9') {
-                    try {
-                        int idx = Integer.parseInt(p);
-                        Uint8View uv = (Uint8View) this.opaque;
-                        if (idx >= 0 && idx < uv.byteLength) {
-                            return new Rv(uv.data[uv.offset + idx] & 0xff);
-                        }
-                    } catch (NumberFormatException ex) { /* fall through */ }
+        } else if (type == Rv.UINT8_ARRAY || type == Rv.INT32_ARRAY) {
+            int idx = arrayIndexKey(p);
+            if (idx >= 0) {
+                Rv tarr;
+                if (type == Rv.UINT8_ARRAY) {
+                    Uint8View uv = (Uint8View) this.opaque;
+                    if (idx < uv.byteLength) {
+                        tarr = new Rv(uv.data[uv.offset + idx] & 0xff);
+                        symPicKey = key;
+                        symPicVal = tarr;
+                        symPicGen = this.gen;
+                        symPicHost = this;
+                        symPicHostGen = this.gen;
+                        return tarr;
+                    }
+                } else {
+                    Int32View iv = (Int32View) this.opaque;
+                    int nel = iv.byteLength >> 2;
+                    if (idx < nel) {
+                        tarr = new Rv(int32LoadLE(iv.data, iv.offset + (idx << 2)));
+                        symPicKey = key;
+                        symPicVal = tarr;
+                        symPicGen = this.gen;
+                        symPicHost = this;
+                        symPicHostGen = this.gen;
+                        return tarr;
+                    }
                 }
             }
         }
@@ -735,14 +915,25 @@ public class Rv {
                     && (prev = obj.prev) != null; obj = prev)
                 ;
         }
-        return ret != null ? ret : Rv._undefined;
+        Rv out = ret != null ? ret : Rv._undefined;
+        symPicKey = key;
+        symPicVal = out;
+        symPicGen = this.gen;
+        // Host where lookup concluded (owning object or last env record searched for missing binding).
+        symPicHost = obj;
+        symPicHostGen = obj.gen;
+        return out;
     }
     
     public final Rv evalRef(Rv callObj) {
+        return evalRef(callObj, null);
+    }
+
+    public final Rv evalRef(Rv callObj, Rv scratch) {
         Rv ret = this;
         int t;
         if ((t = ret.type) == Rv.SYMBOL) {
-            ret = new Rv(ret.str, callObj);
+            ret = scratch != null ? scratch.resetTempLvalue(ret.str, callObj) : new Rv(ret.str, callObj);
         } else if (t != Rv.LVALUE) { // error
             ret = Rv._undefined;
         } // else if (t == Rv.LVALUE) do nothing
@@ -973,6 +1164,10 @@ public class Rv {
      * @return
      */
     public final Rv unary(Rv callObj, int op, Rv rv) {
+        return unary(callObj, op, rv, null);
+    }
+
+    public final Rv unary(Rv callObj, int op, Rv rv, Rv refScratch) {
         switch (op) {
         case RC.TOK_NEG:
         case RC.TOK_POS:
@@ -990,7 +1185,7 @@ public class Rv {
         case RC.TOK_DEC:
         case RC.TOK_POSTINC:
         case RC.TOK_POSTDEC:
-            rv = rv.evalRef(callObj);
+            rv = rv.evalRef(callObj, refScratch);
             if (rv == Rv._undefined) return Rv._NaN;
             Rv prop;
             if ((prop = rv.get()) == Rv._undefined || (prop = prop.toNum()) == Rv._NaN) return Rv._NaN;
@@ -1039,10 +1234,10 @@ public class Rv {
         case RC.TOK_AWAIT:
             return Rv.error("await: use async function with a simple sequential body (preprocessor), or use .then()");
         case RC.TOK_DELETE:
-            rv = rv.evalRef(callObj);
+            rv = rv.evalRef(callObj, refScratch);
             Rv arr = rv.co;
             if (rv != Rv._undefined) {
-                arr.prop.remove(0, rv.str);
+                arr.prop.removeAndRelease(0, rv.str);
                 ++arr.gen;
             }
             if (arr.type == Rv.ARRAY) {
@@ -1243,6 +1438,21 @@ public class Rv {
         }
     }
     
+    static int int32LoadLE(byte[] b, int pos) {
+        int b0 = b[pos] & 0xff;
+        int b1 = b[pos + 1] & 0xff;
+        int b2 = b[pos + 2] & 0xff;
+        int b3 = b[pos + 3] & 0xff;
+        return (b3 << 24) | (b2 << 16) | (b1 << 8) | b0;
+    }
+
+    static void int32StoreLE(byte[] b, int pos, int v) {
+        b[pos] = (byte) (v & 0xff);
+        b[pos + 1] = (byte) ((v >> 8) & 0xff);
+        b[pos + 2] = (byte) ((v >> 16) & 0xff);
+        b[pos + 3] = (byte) ((v >> 24) & 0xff);
+    }
+
     /**
      * Cached Integer.toString for small indices used as array/arguments keys.
      * Avoids allocating a new String on every array push/shift/get in hot loops.
@@ -1257,6 +1467,40 @@ public class Rv {
 
     public static final String intStr(int i) {
         return (i >= 0 && i < INT_STR_CACHE_SIZE) ? INT_STR[i] : Integer.toString(i);
+    }
+
+    /**
+     * Fast non-negative int parse for array/typed-array index keys (avoids
+     * {@code Integer.parseInt} exception path on hot {@code arr[i]} sites).
+     */
+    static int arrayIndexKey(String p) {
+        if (p == null) {
+            return -1;
+        }
+        int pl = p.length();
+        if (pl == 0) {
+            return -1;
+        }
+        int v = 0;
+        for (int i = 0; i < pl; i++) {
+            char c = p.charAt(i);
+            if (c < '0' || c > '9') {
+                return -1;
+            }
+            v = v * 10 + (c - '0');
+            if (v < 0) {
+                return -1;
+            }
+        }
+        return v;
+    }
+
+    /** Small non-negative integers & common negatives: use {@link #_SmallInt} when in range. */
+    public static final Rv smallInt(int v) {
+        if (v >= 0 && v < 256) {
+            return _SmallInt[v];
+        }
+        return new Rv(v);
     }
 
     public final boolean isCallable() {
@@ -1279,6 +1523,8 @@ public class Rv {
     public static final Rv _NaN;
     public static final Rv _true;
     public static final Rv _false;
+    /** Canonical {@code Rv(NUMBER)} for 0..255 (inclusive); reduces per-frame allocation in hot native returns. */
+    public static final Rv[] _SmallInt;
     public static final Rv _empty;
     public static final Rv _Object;
     public static final Rv _Function;
@@ -1298,6 +1544,8 @@ public class Rv {
     public static Rv _ArrayBuffer;
     /** Uint8Array constructor (initialized lazily by StdLib). */
     public static Rv _Uint8Array;
+    /** Int32Array constructor (initialized lazily by StdLib). */
+    public static Rv _Int32Array;
     /** DataView constructor (initialized lazily by StdLib). */
     public static Rv _DataView;
     /** Promise constructor (initialized lazily by StdLib). */
@@ -1325,6 +1573,23 @@ public class Rv {
         }
     }
 
+    /**
+     * View for {@code Int32Array} ({@code opaque} when {@link #type} is {@link #INT32_ARRAY}).
+     * {@code byteLength} is always a multiple of 4; elements are little-endian.
+     */
+    public static final class Int32View {
+        public final byte[] data;
+        public final int offset;
+        public final int byteLength;
+        public final Rv bufferRv;
+        public Int32View(byte[] data, int offset, int byteLength, Rv bufferRv) {
+            this.data = data;
+            this.offset = offset;
+            this.byteLength = byteLength;
+            this.bufferRv = bufferRv;
+        }
+    }
+
     /** Byte range for {@code DataView} instances ({@code opaque}). */
     public static final class DataViewState {
         public final byte[] data;
@@ -1340,11 +1605,19 @@ public class Rv {
     }
     
     static {
+        for (int i = 0; i < RHASH_ENTRY_SLAB_CAP; i++) {
+            RHASH_ENTRY_SLAB[i] = new Rv();
+        }
+        rhashEntryTop = RHASH_ENTRY_SLAB_CAP;
         (_null = new Rv(0)).type = Rv.UNDEFINED;
         (_undefined = new Rv(0)).type = Rv.UNDEFINED;
         _NaN = new Rv(0);
         _true = new Rv(1);
         _false = new Rv(0);
+        _SmallInt = new Rv[256];
+        for (int i = 0; i < 256; i++) {
+            _SmallInt[i] = new Rv(i);
+        }
         _empty = new Rv("");
         _Object = new Rv();
         _Function = new Rv();

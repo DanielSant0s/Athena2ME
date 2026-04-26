@@ -15,9 +15,10 @@
   <summary>Table of Contents</summary>
   <ol>
     <li>
-      <a href="#about-athenaenv">About Athena2ME</a>
+      <a href="#about-athena2me">About Athena2ME</a>
       <ul>
-        <li><a href="#function-types">Function types</a></li>
+        <li><a href="#modules">Modules</a></li>
+        <li><a href="#progress">Progress</a></li>
         <li><a href="#built-with">Built With</a></li>
       </ul>
     </li>
@@ -25,6 +26,7 @@
       <a href="#coding">Coding</a>
       <ul>
         <li><a href="#prerequisites">Prerequisites</a></li>
+        <li><a href="#boot-splash-bootini">Boot splash (<code>boot.ini</code>)</a></li>
         <li><a href="#features">Features</a></li>
         <li><a href="#functions-classes-and-consts">Functions and classes</a></li>
       </ul>
@@ -38,15 +40,15 @@
 
 ## About Athena2ME
 
-Athena2ME is a project that seeks to facilitate and at the same time brings a complete kit for users to create homebrew software for Java ME mobile divices using the JavaScript language. It has dozens of built-in functions, both for creating games and apps. The main advantage over using Athena2ME project instead of Sun Wireless Toolkit or Nokia S40 SDK is above all the practicality, you will use one of the simplest possible languages to create what you have in mind, besides not having to compile, just script and test, fast and simple.
+Athena2ME is a project that seeks to facilitate and at the same time brings a complete kit for users to create homebrew software for Java ME mobile devices using the JavaScript language. It has dozens of built-in functions, both for creating games and apps. The main advantage over using Athena2ME project instead of Sun Wireless Toolkit or Nokia S40 SDK is above all the practicality, you will use one of the simplest possible languages to create what you have in mind, besides not having to compile, just script and test, fast and simple.
 
 ### Modules
-* os: OS dependant functions in general.
+* os: OS- and device-related helpers, including `file://` I/O (`os.open` / `read` / `write` / …), time, process-style hooks (`os.sleep`, `os.startFrameLoop`), pools, and JS-visible sync primitives (`os.Mutex`, and so on).
 * Image: Image drawing.
 * Draw: Shape drawing, rectangles, triangles etc.
 * Screen: The entire screen of your project, enable or disable parameters.
 * Font: Functions that control the texts that appear on the screen, loading texts, drawing and unloading from memory.
-* Pad: Above being able to draw and everything else, A human interface is important.
+* Pad: Game-key input (`getKeyStates` / soft buttons), **polling** (`pressed` / `justPressed`) and **event listeners** (`addListener` / `clearListener` with `JUST_PRESSED` and `NON_PRESSED` kinds) — see [Pad module](#pad-module).
 * Keyboard: Basic keypad support.
 * Timer: Control the time precisely in your code, it contains several timing functions.
 * Request: HTTP/HTTPS client returning **Promises** (`get` / `post` / `download`).
@@ -63,7 +65,8 @@ New types are always being added and this list can grow a lot over time, so stay
 - [x] Image basic functions
 - [x] Screen basic functions
 - [x] OS Font functions
-- [x] Physical pad functions
+- [x] Physical pad functions (`pressed` / `justPressed`, bitmask masks)
+- [x] Pad event listeners (`addListener` / `clearListener`; `PRESSED` / `JUST_PRESSED` / `NON_PRESSED`)
 - [x] Keypad functions
 - [x] Timer functions
 - [x] Sound: `Stream` (BGM) + `Sfx` (channels) via MMAPI — see [Sound module](#sound-module)
@@ -81,24 +84,27 @@ New types are always being added and this list can grow a lot over time, so stay
 - [x] String: trim/includes/startsWith/repeat/padStart/replaceAll/…
 - [x] JSON.parse / JSON.stringify
 - [x] Extended Number / Math (parseInt, sqrt, pow, sin/cos/tan, …)
-- [ ] OS external file functions
-- [ ] OS platform functions
+- [x] OS file I/O — `os.open` / `os.close` / `os.read` / `os.write` / `os.seek` / `os.fstat` for `file://` paths (see [os module](#os-module))
+- [x] OS / device info — `os.platform`, `os.getSystemInfo`, `os.getProperty`, `os.getStorageStats` (not a full native “platform SDK”; screen size remains `Screen.width` / `Screen.height`)
 - [x] Thread functions (`os.spawn`, `os.Thread.start`, `os.Mutex`, `os.Semaphore`, `os.AtomicInt`; serialized JS runtime — see [Threads and concurrency](#threads-and-concurrency))
 - [ ] 3D Render functions
 - [x] HTTP/HTTPS, TCP/UDP sockets, WebSocket (`ws://`) — see [Request / Socket / WebSocket](#request-module) (limits: `wss://`, `SOCK_RAW`)
 - [ ] Archive (zip, 7zip, tar, rar) system
 - [x] Add float support
-- [x] Add ArrayBuffer support (`ArrayBuffer`, `Uint8Array`, `DataView` subset — see standard library list)
+- [x] Add ArrayBuffer support (`ArrayBuffer`, `Uint8Array`, `Int32Array`, `DataView` subset — see standard library list)
 - [ ] Block-scoped `let`/`const` (currently hoisted like `var`)
 - [x] **`Promise`** (`then` / `catch`, `Promise.resolve` / `Promise.reject`, `new Promise(executor)`, thenable assimilation); microtasks drain on `os.sleep`, `os.flushPromises`, `os.startFrameLoop`, and after the main script finishes
+- [x] Constant folding in the ES6 pre-processor (literal/const-folding in `Es6Preproc` before tokenize, incl. `Math`/`Number` constants; partial `const` propagation)
 - [x] **`async`/`await`** (linear `async function` bodies only — desugared before parse; see [Promise / async](#promise-minimal)); no `async`/`await` in the grammar itself
 - [x] Runtime JAR modules: **`require`** (CommonJS `exports`) and **`loadScript`** (global) — see [Global script loading](#global-script-loading-require-loadscript)
 - [ ] Generators, regex literals
 
 ### Built With
 
-* [WTK](https://www.oracle.com/java/technologies/sun-java-wireless-toolkit.html)
+* [WTK](https://www.oracle.com/java/technologies/sun-java-wireless-toolkit.html) (or your Java ME 3 / MSA SDK toolchain, depending on how you import this project)
 * [RockScript](https://code.google.com/archive/p/javascript4me/)
+
+`project.properties` in this tree targets **MSA** with optional **JSR-239** and **SATSA-JCRMI** flags; adjust the platform line for your WTK or SDK profile.
 
 ## Coding
 
@@ -113,6 +119,52 @@ Using Athena2ME you only need one way to code and one way to test your code, tha
 * Android: [QuickEdit](https://play.google.com/store/apps/details?id=com.rhmsoft.edit&hl=pt_BR&gl=US) and some J2ME emulator or a real device.
 
 Oh, and I also have to mention that an essential prerequisite for using Athena2ME is knowing how to code in JavaScript.
+
+### Boot splash (`boot.ini`)
+
+On cold start, the MIDlet shows a **boot splash** canvas while a background thread loads `main.js` and prepares the JS runtime. Layout and timing are driven by **`/boot.ini`** in the JAR (UTF-8, optional BOM; lines starting with `#` are comments). If the file is missing or cannot be parsed, the loader uses a **minimal config** (no slides) so startup still works.
+
+**Sections (INI keys are case-insensitive when parsed):**
+
+| Section | Keys | Role |
+| --- | --- | --- |
+| `[tick]` | `ms` | Period in **milliseconds** between splash canvas repaints (default **50**). Drives a `java.util.Timer`; must be &gt; 0 to override the default. |
+| `[boot]` | `slides` | **Optional.** Non-negative integer: how many slides to allocate. If set, it defines slide count; otherwise the count is derived from the highest `[splash.N]` index + 1. |
+| `[boot]` | `handoff` | When the game canvas replaces the splash after the interpreter is ready: **`immediate`** — hand off as soon as cold start finishes (may cut the current slide), or **`after_slide`** (default) — wait until the **current** slide’s `holdMs` has elapsed, then hand off. |
+| `[boot]` | `es6` | **Optional.** If **`true`** (default), the **ES6 preprocessor** runs on the script pipeline (faster *after* the first run thanks to the RMS cache of preprocessed `main.js`, but a cold cache pays preprocessing cost). If **`false`**, preprocessing is **disabled for the whole session** (faster cold start when the cache is empty; use **legacy/ES5-style** scripts only, since features desugared by the preprocessor are unavailable). Recognized falsy tokens: `false`, `0`, `no`, `off`, `legacy` (case-insensitive). |
+| `[splash.N]` | see below | One slide per index `N` (0, 1, …). |
+
+**`[boot] es6` in practice:** With **`es6=false`**, the ES6 preprocessor is skipped for the **entire** session (any full script the runtime loads, not only `main.js`), which speeds up cold start when the cache is still cold. The RMS cache for the startup script stores whether the saved text was produced with or without preprocessing, so you can switch this option without the cache serving the wrong mode.
+
+**`[splash.N]` per slide**
+
+* **`background`** — `#RRGGBB` (optional `#`); 6- or 8-digit hex; if 8 digits, alpha is ignored and RGB is used.
+* **`holdMs`** — How long the slide stays visible in **milliseconds** (default **800**; clamped with `Math.max(0, …)` in code).
+
+**Text — simple mode (one line) or indexed mode (many lines):**
+
+* **Simple mode** — use legacy keys: `text`, `textX`, `textY`, `textSize`, `textColor`, `textAlign`, and optionally one `image` with `imageX`, `imageY` (see the sample in [`res/boot.ini`](res/boot.ini)).
+* **Indexed mode** — if **any** key exists among `text.M`, `textX.M`, `textY.M`, `textSize.M`, or `textColor.M` for `M ≥ 0`, that slide is built from indexed entries. Use `text.0`, `text.1`, … with per-line `textX.N`, `textY.N`, `textSize.N`, `textColor.N`, **`textAlign.N`**. If `text.0` is omitted, the plain `text` key is used as a fallback for index 0. The same pattern applies to **`image.N`** vs legacy `image`, with `imageX.N` / `imageY.N`.
+
+**`textSize` / `textSize.N`** — One of: **`SMALL`**, **`MEDIUM`**, or **`LARGE`** (case-insensitive). These map to the same `javax.microedition.lcdui.Font` size constants the runtime uses for splash text.
+
+**`textAlign` / `textAlign.N` — horizontal alignment only (splash):**  
+Values (case-insensitive): **`left`**, **`center`** / **`centre`** / **`middle`**, or **`right`**. The point **`(textX, textY)`** is the anchor: **left** = string starts at that X; **center** = horizontal center at X; **right** = string ends at X. *(Splash text always uses a vertical anchor consistent with `Graphics` top baseline behaviour; this is *not* the full per-axis `Font.ALIGN_*` set used in scripts — see [Font module](#font-module).)*
+
+**Screen macros (expanded at draw time; `W` / `H` = canvas size in pixels):**
+
+* `%W%` — full width  
+* `%H%` — full height  
+* `%W2%` — `width / 2` (integer)  
+* `%H2%` — `height / 2`  
+
+Longer tokens are substituted first so `%W2%` is not broken by a `%W%` pass. **Coordinates** (`textX`, `textY`, `imageX`, `imageY`, including indexed `*.N`) may use macros and then **add/subtract** integer terms, e.g. `textX.0=%W2%+20`, `textY.0=%H%-8` (the parser accepts chains like `a+b-c` after whitespace is stripped for evaluation).
+
+**`text` and `text.N` strings** also run through the same macro expansion, so you can embed `%W%` / `%H%` in the visible string if needed.
+
+**Images:** `image` or `image.N` is a JAR path (e.g. `/logo.png`). Empty path skips the image. Images are drawn with **`Graphics.TOP | Graphics.LEFT`** at the resolved (`imageX`, `imageY`).
+
+A full commented example lives at [`res/boot.ini`](res/boot.ini) (ship it in the built JAR as `/boot.ini` next to `main.js`).
 
 ## Quick start with Athena
 
@@ -129,7 +181,7 @@ const c = new Counter();
 
 os.setExitHandler(() => os.stopFrameLoop());
 
-// Native frame loop: Pad.update() and Screen.update() are called for you.
+// Native frame loop: key sampling, Pad listener dispatch, then your callback, then Screen.update().
 os.startFrameLoop(() => {
     Screen.clear();
     c.tick();
@@ -150,6 +202,8 @@ of the upstream ES3/ES5 core it adds a large subset of ES6/ES7 syntax
 for…of) implemented as a source-level preprocessor, plus a modern standard
 library (Array/Object/String/JSON/Number/Math, Map/Set/Symbol) exposed through
 a fast native-binding path.
+
+On devices with **RMS** available, the MIDlet may **cache the ES6-preprocessed** source of `main.js` (keyed by a hash of the original file) so a cold start can skip the preprocessor on the next run when the hash matches. This is internal to `Athena2ME` and does not change script behaviour.
 
 ### Changes from upstream RockScript / javascript4me
 
@@ -185,8 +239,8 @@ This fork diverges substantially from the original [RockScript](https://code.goo
   (trim, includes, startsWith, repeat, padStart/End, replace, replaceAll, …),
   `JSON.parse` / `JSON.stringify` (with optional indent), `Number.isInteger/
   isFinite/isNaN/parseInt/parseFloat`, extended `Math` (sqrt, pow, sin/cos/tan,
-  atan/atan2, exp, log, PI, E — **radians**, implemented with `java.lang.Math`
-  on doubles), and the `Map`/`Set`/`Symbol` constructors backed
+  atan/atan2, exp, log, `trunc`, PI, E — **radians**; runtime via `CldcMath` on
+  CLDC), and the `Map`/`Set`/`Symbol` constructors backed
   by `Rhash` + `Pack`. Every binding is a `NativeFunctionFast` so it
   participates in the zero-allocation dispatch path. `installStdLib(Rv go)` is
   called from `initGlobalObject()`; the MIDlet only has to register its own
@@ -196,6 +250,7 @@ This fork diverges substantially from the original [RockScript](https://code.goo
 
 * **Dense operator tables.** The per-token `Rhash` tables `htOptrIndex` and `htOptrType` were replaced by `static final int[2048]` arrays indexed directly by token id. The hottest read in the interpreter — the operator dispatch inside `eval()` — is now a single array load instead of `hashCode() % len` + bucket walk + `String.equals`. Same change applies to `Rv.binary` and `expression()`.
 * **Operand `Pack` pool.** `eval()` used to `new Pack(-1, 10)` for the RPN operand stack on every evaluated expression. The fork now keeps a per-interpreter pool `Pack[] opndPool` indexed by a re-entrancy counter `evalDepth`; each frame of recursion borrows a `Pack`, resets `oSize = 0`, and returns it in `try/finally`. Steady-state expression evaluation is zero-allocation for the operand stack.
+* **Frame-local `Rv` temp pool.** `eval()` also keeps a per-depth pool of scratch `Rv` cells for non-escaping intermediates, currently the short-lived `LVALUE` refs produced when symbols are resolved for assignments, deletes, increments and function calls. If such a scratch would be the final expression result, it is materialised with `evalVal()` before the frame clears the pool, so JavaScript never observes a recycled cell as object identity.
 * **Fast native dispatch.** `call()` checks `function.obj instanceof NativeFunctionFast` and, when true, short-circuits the entire `new Rv(ARGUMENTS) / putl("callee") / putl("this") / Integer.toString(i)` prologue (upstream lines ~811–839) and invokes `callFast()` directly against the operand `Pack`.
 * **Direct native reference.** `addNativeFunction` now stores the concrete `NativeFunction` instance in the resulting `Rv.obj`. `callNative` uses that direct reference instead of performing `function_list.get(function.str)` on every invocation — one `Hashtable<String, NativeFunction>` lookup per native call removed.
 * **Graceful destroy.** The interpreter no longer relies on the JS side to exit cleanly; see the `os.startFrameLoop` / `os.stopFrameLoop` bindings added at the MIDlet layer.
@@ -213,6 +268,8 @@ This fork diverges substantially from the original [RockScript](https://code.goo
   entry point used by every native binding that calls back into JS
   (`Array.forEach`, `Array.map`, `os.startFrameLoop`, …). Centralises
   `funCo`/`callObj` save-restore and error propagation.
+* **Call-site inline cache (lazy).** RPN `TOK_INVOKE` / `new` use an `InvokeOpRv` placeholder (instead of a bare `Rv(0)`) to hold a 4-way polymorphic cache: **direct** calls (`f()` with `f` a `FUNCTION` value) and **member** calls (`o.m` with `o` an `LVALUE`) store enough state (holder + key + `Rhash` identity + `gen` + `layoutFp`) to skip repeated `get()` for the callee, mirroring the `LvalueInlineCache` invariants. `new Foo()` / `TOK_INIT` never use this fast path to preserve constructor / prototype setup semantics.
+* **`funCo` pool.** The scope object passed into `call()` for every JS and native (slow-path) callback is recycled from a per-interpreter free list (invoke sites, `invokeJS`, and `js_call_apply` / `Function.call|apply` glue) with `Rhash.reset(11)` in `recycleCallObject` instead of allocating `new Rv(OBJECT, _Object)` on every invocation.
 
 #### `Rv`
 
@@ -249,39 +306,46 @@ This fork diverges substantially from the original [RockScript](https://code.goo
   non-`length` property, which forced runtime branches whenever generic
   container code (for…of desugaring, iterator helpers, …) wanted to walk
   a string the same way it walks an array.
-* **Monomorphic inline cache for `LVALUE`.** Fields `icHolder`, `icValue`, `icKey`, `icRhash`, `icStamp` on each `Rv` RPN token. After the first successful property resolution the token remembers the holder `Rv`, the resolved value, the **backing** `Rhash` instance, and that map’s `gen` stamp. Subsequent evaluations validate **both** `icRhash == holder.prop` and `icStamp == holder.prop.gen` (O(1)) and return `icValue` directly, skipping the prototype-chain walk in `Rv.get`. Relying on `gen` alone is insufficient: several `Array.*` natives (`unshift`, `sort`, `reverse`, …) **replace** `thiz.prop` with a freshly built `Rhash`. The new map starts its own `gen` counter from 0, so two unrelated maps can accidentally share the same `gen` value — the identity check prevents stale reads (e.g. `arr[0]` still pointing at the pre-`unshift` head).
-* **`Rv.shift()` / `Array.pop` + `length` cache.** `Array.pop` and `Array.shift` are implemented via `Rv.shift(idx)`. When removing the **last** element, the inner copy loop runs zero times (no `put` calls), so historically `Rhash.gen` did not change even though `num` (logical length) did. Any monomorphic cache keyed by `gen` could then keep returning the **old** length. The fork always increments `prop.gen` and `this.gen` at the end of `shift()`, so `arr.length` and tight cleanup loops like `while (arr.length > w) arr.pop()` stay consistent (this showed up as a device freeze once particles started dying and the particle array was trimmed every frame).
+* **Polymorphic inline cache (PIC) for `LVALUE` (6 slots, lazy).** A member-read RPN site allocates `Rv.LvalueInlineCache` on first `Rv.get()`; each slot stores holder `Rv`, resolved value, key, the **backing** `Rhash`, that map’s `gen` stamp, and its **`layoutFp`** (see `Rhash`). A hit validates `rhash == holder.prop`, `stamp == holder.prop.gen`, and `layout == holder.prop.layoutFp` (O(1) per slot, linear probe), then returns the cached value and skips the prototype-chain walk. On a miss, the slow path runs and the result is written to the next slot, round-robin, evicting the oldest entry. Relying on `gen` alone is insufficient: several `Array.*` natives (`unshift`, `sort`, `reverse`, …) **replace** `thiz.prop` with a freshly built `Rhash` whose own `gen` can collide with an unrelated map — the `Rhash` **identity** check prevents stale reads (e.g. `arr[0]` after `unshift`). The PIC is still keyed by **receiver identity**: more than six distinct holders at the same bytecode site can thrash; full *hidden classes* (shared shapes across instances) are not implemented, but `layoutFp` gives a second structural signature.
+* **`Rv.shift()` / `Array.pop` + `length` cache.** `Array.pop` and `Array.shift` are implemented via `Rv.shift(idx)`. When removing the **last** element, the inner copy loop runs zero times (no `put` calls), so historically `Rhash.gen` did not change even though `num` (logical length) did. Any inline cache keyed by `gen` could then keep returning the **old** length. The fork always increments `prop.gen` and `this.gen` at the end of `shift()`, so `arr.length` and tight cleanup loops like `while (arr.length > w) arr.pop()` stay consistent (this showed up as a device freeze once particles started dying and the particle array was trimmed every frame).
 * **`isCallable()`** public helper. Replaces ad-hoc checks against the package-private constants `FUNCTION` / `NATIVE` so the MIDlet layer can validate callback arguments without exposing interpreter internals.
+* **Fixed slab for `Rhash` entry `Rv`s.** Property-table nodes are internal `Rv` cells (`key -> value`), not observable JavaScript values, so they can be recycled safely without changing object identity, prototypes, closures, promises, or PIC holders. `Rv` now pre-allocates a fixed 1024-entry slab; `Rhash.put` borrows from it, replacement/removal/reset clear references and return nodes to the slab, and overflow falls back to normal Java allocation.
 
 #### `Rhash`
 
 * **Generation counter.** New field `public int gen`, incremented in `reset()`, `putEntry()` (on both insert and replace) and `remove()`. Acts as the structural-change stamp that feeds the `Rv` inline cache.
+* **Layout fingerprint (`layoutFp`).** A rolling XOR of `layoutKeyMix` for each **new key** on insert and the same on remove. Value-only `putEntry` **replace** does not change `layoutFp` — a cheap *key-set* signal used alongside `gen` in the LVALUE PIC. Resets with `Rhash.reset()`.
 * **`getEntryH(int hash, String key)` / `getH(int hash, String key)`.** Lookup variants that accept a pre-computed hash, exposed for callers (notably `Rv.get` / `Rv.has` / `evalVal`) that already carry a cached hash on the lookup key.
+* **Entry lifecycle hooks.** `removeAndRelease(...)` is used by hot paths that only need to delete a key, letting removed entry nodes go straight back to the fixed `Rv` slab instead of waiting for Java's stop-the-world GC.
 
 #### Net effect
 
 On the reference scene of `res/main.js` (~10 native calls per frame, one `Pad.justPressed` branch, one text draw, four `Image.draw`s and a `Draw.rect`) the combined changes deliver, compared to upstream RockScript with the same bindings:
 
 * ~0 allocations per frame in the `eval` loop (was ~10+ `Pack` + ~N `Rv` per expression).
+* Repeated property writes/deletes reuse fixed `Rhash` entry cells instead of allocating one `Rv` wrapper per table mutation.
 * 1 array load per operator dispatch (was 1 hash + 1 modulo + ≥1 `equals`).
 * 1 direct call per native invocation (was 1 `Hashtable.get` + 1 `arguments` object build + up to `argc` `Integer.toString`).
-* Monomorphic property reads resolved in ~3 field reads + 1 `int` compare.
+* Warm LVALUE property reads: best case one PIC slot (same as before, a few field reads + `int` compare); in the small-polymorphic case, up to six such probes per read.
 
 #### Related non-interpreter changes (binding layer)
 
 While migrating hot-path bindings to `NativeFunctionFast`, a few correctness bugs in the native glue were fixed:
 
-* [`AthenaCanvas._drawImageRegion`](src/AthenaCanvas.java) — was passing `endx`/`endy` to `Graphics.drawRegion`, which expects `width`/`height`. Regions with `startx > 0` or `starty > 0` now render correctly.
-* [`AthenaCanvas.drawFont`](src/AthenaCanvas.java) — ignored the `anchor` parameter and always used `TOP | LEFT`, so `Font.align` was inert. Now forwards the anchor as received.
+* [`AthenaCanvas.drawImageRegion`](src/AthenaCanvas.java) / `_drawImageRegion` — was passing `endx`/`endy` to `Graphics.drawRegion`, which expects `width`/`height`. Regions with `startx > 0` or `starty > 0` now render correctly. `drawImageRegion` also supports optional sprite batching (`Screen.beginBatch` / `flushBatch` / `endBatch`).
+* [`AthenaCanvas.drawFont`](src/AthenaCanvas.java) — previously ignored the `anchor` and always used `TOP | LEFT`, so `font.align` had no effect. The implementation now calls `Graphics.drawString` with a **normalized** anchor mask: if you pass only horizontal bits, vertical defaults to **TOP**; only vertical bits default horizontal to **LEFT** — matching the single-flag style used in AthenaEnv. Game text alignment is therefore fully consistent with J2ME `Graphics` string anchoring.
 * [`AthenaCanvas.loadImage`](src/AthenaCanvas.java) — caches `Image` objects by path in a `Hashtable`. Repeated `new Image("/foo.png")` no longer re-decodes the PNG.
 * [`AthenaTimer`](src/AthenaTimer.java) — unified time base. `get()`/`set()` used to mix a `tick`-relative counter with `System.currentTimeMillis()`; all methods now operate on a consistent relative-ms scale with a proper pause/resume accumulator.
-* New MIDlet-level bindings **`os.sleep(ms)`** and **`os.startFrameLoop(fn, fps)` / `os.stopFrameLoop()`** (see the native frame loop section below). The former was required to fix ANR on real devices when JS code used a `while (running) { … }` main loop; the latter moves pacing, `Pad.update`, callback dispatch, and `Screen.update` to a dedicated Java `Thread`, removing the interpreted loop from the critical path entirely.
+* New MIDlet-level bindings **`os.sleep(ms)`** and **`os.startFrameLoop(fn, fps)` / `os.stopFrameLoop()`** (see the native frame loop section below). The former was required to fix ANR on real devices when JS code used a `while (running) { … }` main loop; the latter moves pacing, per-frame key sampling, **Pad listener dispatch**, Promise microtask drain, the script frame callback, and `Screen.update` to a dedicated Java `Thread`, removing the interpreted loop from the critical path entirely.
+* **Pad input** — [`Pad.addListener`](#pad-module) / `Pad.clearListener`, kinds **`PRESSED`**, **`JUST_PRESSED`**, **`NON_PRESSED`**, and canvas-side **edge + mask** helpers (`padJustPressed`, `padNotPressed`) so games can use **event-style** input and “no button held” conditions without scanning every `pressed` bit in the frame body. The bundled demo [`res/main.js`](res/main.js) uses **`JUST_PRESSED`** listeners for a one-shot feel.
 
 ### JavaScript syntax (ES6+)
 
 Everything below is supported out of the box. The preprocessor rewrites it to
 an equivalent ES5 program before parsing, so there is no runtime cost for
-sources that do not use the feature.
+sources that do not use the feature. The final pass `preprocessConstantFold`
+conservatively folds pure literal sub-expressions to reduce token count (enabled
+by default). Disable with `RocksInterpreter.setPreprocLiteralFold(false)`.
 
 ```js
 // let / const (hoisted like var today; const is a compile-time hint)
@@ -328,8 +392,10 @@ class Boss extends Enemy {
 ```
 
 Known limitations versus full ES6: `let`/`const` do not yet introduce block
-scope (they behave like hoisted `var`); no regex literals, no generators, no
-`async`/`await`, no tagged templates, no `Proxy`/`Reflect`, no symbols as
+scope (they behave like hoisted `var`); no regex literals, no generators; no
+`async`/`await` in the parser grammar—only **linear** `async function` bodies are
+rewritten to `Promise` chains before tokenize (see [Promise (minimal)](#promise-minimal));
+no tagged templates, no `Proxy`/`Reflect`, no symbols as
 object keys (they compare by identity but do not participate in property
 lookup), and no numeric separators. See [`res/tests.js`](res/tests.js) for a
 runnable smoke suite covering every feature listed above.
@@ -357,12 +423,14 @@ and are resolved with the fast-dispatch path described above.
   `fill`, `flat`, `copyWithin`, `Array.isArray`, `Array.of`, `Array.from`
 * **JSON** — `JSON.parse`, `JSON.stringify(value, replacer?, indent?)`
 * **Math** — `random`, `min`, `max`, `abs`, `floor`, `ceil`, `round`, `sign`,
-  `sqrt`, `pow`, `sin`, `cos`, `tan`, `atan`, `atan2`, `exp`, `log`, `PI`,
-  `E` (trigonometric / transcendental functions use precomputed lookup tables
-  to stay predictable on CLDC 1.1)
+  `trunc`, `sqrt`, `pow`, `sin`, `cos`, `tan`, `atan`, `atan2`, `exp`, `log`, `PI`,
+  `E` (trigonometric / transcendental functions are implemented in
+  [`CldcMath`](src/net/cnjm/j2me/tinybro/CldcMath.java) for predictable behaviour on CLDC 1.1)
 * **ArrayBuffer** — `byteLength`, `slice`
 * **Uint8Array** — `length`, `buffer`, `byteOffset`, `byteLength`, `subarray`,
   numeric index `u[i]` (read/write 0–255), `for...of` via index desugaring
+* **Int32Array** — `length`, `byteLength`, `buffer`, `byteOffset`, `BYTES_PER_ELEMENT` (= 4),
+  `subarray`, numeric index `a[i]` (32-bit signed, **little-endian** in the underlying `ArrayBuffer`)
 * **DataView** — `getUint8`/`setUint8`, `getUint16`/`setUint16`, `getInt32`/`setInt32`
   with optional `littleEndian`
 * **Map** / **Set** / **Symbol** — constructors, `size`, `get`/`set`/`has`/
@@ -393,13 +461,20 @@ P.S.: *Italic* parameters refer to optional parameters
 * os.currentTimeMillis() — Wall-clock milliseconds (`System.currentTimeMillis()`).
 * os.uptimeMillis() — Milliseconds since the interpreter booted (`System.currentTimeMillis()` minus internal boot timestamp).
 * os.gc() — Calls `Runtime.getRuntime().gc()` (hint only; behaviour is JVM-dependent).
+* os.pool(*Constructor*, *size*) — Returns a **`Pool`** handle that pre-allocates up to *size* reusable JS object shells (same `Rv` identity per slot) for *Constructor*. *size* is clamped to **`8192`**; non-callable *Constructor* yields an **`Error`**. Typical for particles, bullets, and entities that spawn/die every frame (reduces GC churn).
+  * *Pool*.**acquire**(*...args*) — Takes a free instance, runs *Constructor* with that object as `this` and *args* (initializer semantics), returns the instance; returns **`null`** when the pool is exhausted.
+  * *Pool*.**release**(*obj*) — Returns *obj* to the pool if it belongs to this pool and is checked out; duplicate or foreign objects are ignored (no-op).
+  * *Pool*.**free**() — Number of instances currently available for `acquire`.
+  * *Pool*.**capacity**() — Total slots (`size` passed to `os.pool`).
+  * *Pool*.**inUse**() — Instances checked out and not yet `release`d.
+  * Global **`Pool`** exists for `instanceof` / prototype; prefer **`os.pool(...)`** to construct a populated pool.
 * os.threadYield() — Calls `Thread.yield()`.
 * os.getSystemInfo() - Object with `microedition.platform`, `microedition.configuration`, `microedition.profiles`, `microedition.locale`, and `microedition.encoding` (each is a string or `null` if the property is not exposed). These are the standard J2ME `System.getProperty` keys; the runtime does not expose physical RAM, CPU name, or GPU. Screen size remains on `Screen.width` / `Screen.height`.
 * os.getMemoryStats(*optRunGc*) - Object with `heapTotal`, `heapFree`, and `heapUsed` in **bytes** (Java heap for this MIDlet, not total device RAM). If *optRunGc* is passed and truthy, `System.gc()` runs first (slower, changes meaning of a single sample). Values vary with the garbage collector.
 * os.getStorageStats(*fileUrl*) - **fileUrl** (string) is **required** — a `file://…` URL the implementation can open (often a file-system root, device-specific). On success, returns `total` and `free` in bytes. On failure, returns `error` (string) and no `total`/`free`. The emulator and real handsets may accept different paths.
 * os.sleep(ms) - Yield the current thread for *ms* milliseconds. Before sleeping, pending **Promise** microtasks are flushed on the JS thread (`PromiseRuntime.drain`). Use this in manual loops so I/O callbacks can run and the UI thread stays healthy.
 * os.flushPromises() - Run all queued Promise microtasks once (same drain used by `os.sleep` and the frame loop). Use if you neither `sleep` nor use `startFrameLoop`.
-* os.startFrameLoop(fn, fps) - Hand the main loop over to native code. Java will run a dedicated `Thread` that, every frame: calls `Pad.update()`, drains Promise microtasks, calls *fn*, calls `Screen.update()`, and `sleep`s until the next deadline. *fps* is clamped to `[1, 120]`. Recommended entry point for every new script.
+* os.startFrameLoop(fn, fps) - Hand the main loop over to native code. Java will run a dedicated `Thread` that, every frame: samples keys (`GameCanvas` key state / `padUpdate` equivalent), dispatches **Pad** listeners (same work as the tail of `Pad.update()` in JS), **then** drains Promise microtasks, **then** calls *fn*, **then** flushes the screen (`Screen.update` / `screenUpdate` equivalent), then sleeps until the next frame deadline. A positive *fps* sets the target rate (`1000 / fps` ms per frame, integer); non-positive *fps* paces with `Thread.yield()` only (no sleep). With this entry point you normally **do not** need to call `Pad.update()` yourself; use **`Pad.pressed` / `Pad.justPressed` inside *fn* or register `Pad.addListener`**. Recommended entry point for every new script.
 * os.stopFrameLoop() - Ask the native frame loop to terminate after the current frame. Typical usage is from an exit handler.
 * **Concurrency (Java threads + JS scheduling)** — There is **one** `RocksInterpreter` for the whole MIDlet. All JavaScript execution and `PromiseRuntime.drain` for that interpreter are serialized on a single lock so `jsThread`, the native frame loop thread, and microtasks never corrupt interpreter state. Background Java threads (HTTP, `os.spawn`, etc.) must **not** call into the interpreter directly; they enqueue microtasks instead (same pattern as `Request`).
 * os.spawn(*fn*) — Starts a short-lived Java `Thread` that immediately enqueues a microtask. When the microtask runs (on the next drain), *fn* is invoked with no arguments and the returned **Promise** settles with *fn*'s return value or rejection. *fn* runs on the same serialized JS runtime as everything else; `spawn` only defers work to the next microtask batch.
@@ -422,7 +497,7 @@ Athena2ME is not a multi-runtime environment: you do **not** get parallel JavaSc
 
 Ship extra `.js` files in the JAR (same layout as `main.js`) and load them while the MIDlet runs.
 
-**Paths:** Use absolute paths from the JAR root, e.g. `/lib/helpers.js`. If the string has no leading `/`, one is prepended; `\` is normalized to `/`.
+**Paths:** Use absolute paths from the JAR root, e.g. `/lib/helpers.js` or the bundled demo [`res/lib/demo_math.js`](res/lib/demo_math.js) (add it to your built JAR as `/lib/demo_math.js`). If the string has no leading `/`, one is prepended; `\` is normalized to `/`.
 
 * **`require(path)`** — Loads the file **once**, CommonJS-style, and returns the module **`exports`** object. Inside the file, use **`exports.foo = …`** and/or **`module.exports = …`**. Execution is **synchronous**; only **classpath / JAR** resources are loaded (not HTTP). The same canonical path returns the **cached** exports object.
 
@@ -447,7 +522,7 @@ HTTP/HTTPS via MIDP `HttpConnection`. HTTPS depends on the device TLS stack and 
 
 **Instance properties (defaults after `new Request()`):** `keepalive` (0/1), `useragent`, `userpwd` (`user:password` for Basic auth), `headers` (array of string pairs: `[name0, value0, name1, value1, …]`). After each completed request, the same instance fields are updated: `responseCode`, `error`, `contentLength`.
 
-**Promises:** `get(url)`, `post(url, data)` (`data` = string or `Uint8Array`), `download(url, fileUrl)` (`fileUrl` = `file://…` path your runtime accepts) each return a **`Promise`**. Use `.then` / `.catch` (there is no `async`/`await` in the language). Only one request may be in flight per `Request` instance; if you call `get`/`post`/`download` while busy, the returned Promise rejects with `Request busy`.
+**Promises:** `get(url)`, `post(url, data)` (`data` = string or `Uint8Array`), `download(url, fileUrl)` (`fileUrl` = `file://…` path your runtime accepts) each return a **`Promise`**. Use `.then` / `.catch`, or a **linear** `async function` that the preprocessor rewrites to Promises (see [Promise (minimal)](#promise-minimal)). Only one request may be in flight per `Request` instance; if you call `get`/`post`/`download` while busy, the returned Promise rejects with `Request busy`.
 
 **Fulfilled value for `get` / `post`:** plain object `{ responseCode, error, contentLength, body }` where `body` is a **`Uint8Array`**.
 
@@ -540,8 +615,17 @@ Properties:
 
 Methods:
 
-* draw(x, y) - Draw loaded image onscreen(call it every frame). Example: image.draw(15.0, 100.0);
+* draw(x, y) - Draw loaded image on the **current** render target (main `GameCanvas` buffer or an offscreen layer set with `Screen.setLayer`). Uses `Graphics.drawRegion` for the `startx`/`starty`/`endx`/`endy` window. Example: `image.draw(15, 100);`
 * free() - Free content immediately. 
+
+**Sprite batching:** After `Screen.beginBatch()`, each `Image.draw` **enqueues** one region on the native side (no per-draw Java allocations). The queue is emitted when you call `Screen.flushBatch()` or `Screen.endBatch()`, and is also flushed automatically before `Screen.clear`, `Screen.update`, `Screen.setLayer`, `Screen.drawLayer`, and `Screen.clearLayer` if a batch was left pending. `Draw.*` and `Font.print` never go through the batch—they paint immediately on the current target—so interleave `Screen.flushBatch()` if you need vector/text **between** batched sprites in z-order.
+
+```js
+Screen.beginBatch();
+spriteA.draw(0, 0);
+spriteB.draw(10, 0);
+Screen.endBatch(); // flush + disable batching
+```
   
 ### Draw module
 * Draw.rect(x, y, width, height, color) - Draws a rectangle on the specified color, position and size on the screen.
@@ -549,29 +633,75 @@ Methods:
 * Draw.triangle(x, y, x2, y2, x3, y3, color) - Draws a triangle on the specified points positions and colors on the screen.
   
 ### Screen module
-* Screen.clear(*color*) - Clears screen with the specified color. If you don't specify any argument, it will use black as default.  
-* Screen.update() - Run the render queue and jump to the next frame, i.e.: Updates your screen.  
+* `Screen.width` / `Screen.height` — read-only canvas size in pixels (set at startup from the `GameCanvas`).
+
+* Screen.clear(*color*) - Clears the **current** target: the full `GameCanvas` when drawing to the screen, or the active offscreen layer when `Screen.setLayer(layer)` is in use. Default color is black. Flushes any pending sprite batch first.
+* Screen.update() - Flushes any pending sprite batch, then `flushGraphics()` (next frame).
+
+**Sprite batch (optional, reduces native `drawRegion` overhead):**
+* Screen.beginBatch() - Start accumulating `Image.draw` calls on the current target.
+* Screen.flushBatch() - Draw all queued regions in one Java loop (batching stays active).
+* Screen.endBatch() - Flush, then turn batching off.
+
+**Offscreen layers (background / gameplay / HUD):** each layer is a full RGB buffer (`width * height` pixels in heap/VRAM—`Screen.createLayer(Screen.width, Screen.height)` may fail on small devices; handle `null`).
+
+* Screen.createLayer(width, height) - Returns a layer object `{ width, height }` with native buffer, or **`null`** on failure (e.g. OOM).
+* Screen.setLayer(layer) - Direct `Draw.*`, `Font.print`, and `Image.draw` to the layer’s `Graphics`. Pass no argument or `null` to return to the main screen buffer. Flushes any pending sprite batch first.
+* Screen.clearLayer(layer, color) - `fillRect` the entire layer without changing the current target.
+* Screen.drawLayer(layer, x, y) - Blit the full layer image onto the **current** target at `(x, y)`. Flushes any pending sprite batch first.
+* Screen.freeLayer(layer) - Release the buffer; if that layer was active, the target resets to the main screen.
+
+```js
+var hud = Screen.createLayer(80, 20);
+if (hud) {
+  Screen.clearLayer(hud, 0x80000000);
+  Screen.setLayer(hud);
+  Draw.rect(0, 0, hud.width, hud.height, 0xff0000);
+  Screen.setLayer(null);
+  Screen.drawLayer(hud, 0, 0);
+  Screen.freeLayer(hud);
+}
+```
 
 ### Font module
 
 **Constants:**
 
 *Faces:*  
-* Font.FACE_MONOSPACE
-* Font.FACE_PROPORTIONAL
-* Font.FACE_SYSTEM  
+* `Font.FACE_MONOSPACE`
+* `Font.FACE_PROPORTIONAL`
+* `Font.FACE_SYSTEM`  
   
-*Styles (P.S.: Styles can be combined, excepting STYLE_PLAIN):*  
-* Font.STYLE_PLAIN
-* Font.STYLE_BOLD
-* Font.STYLE_ITALIC
-* Font.STYLE_UNDERLINED  
+*Styles (can be combined, excepting `STYLE_PLAIN` where appropriate):*  
+* `Font.STYLE_PLAIN`
+* `Font.STYLE_BOLD`
+* `Font.STYLE_ITALIC`
+* `Font.STYLE_UNDERLINED`  
   
 *Sizes:*  
-* Font.SIZE_SMALL
-* Font.SIZE_MEDIUM
-* Font.SIZE_LARGE  
-  
+* `Font.SIZE_SMALL`
+* `Font.SIZE_MEDIUM`
+* `Font.SIZE_LARGE`  
+
+*Alignment (same integer values as `javax.microedition.lcdui.Graphics` anchor bits; combine with `|` for corner/center behaviour):*  
+
+On the **`Font` constructor** object:
+
+* `Font.ALIGN_TOP` , `Font.ALIGN_BOTTOM` , `Font.ALIGN_VCENTER` — vertical component  
+* `Font.ALIGN_LEFT` , `Font.ALIGN_RIGHT` , `Font.ALIGN_HCENTER` — horizontal component  
+* `Font.ALIGN_NONE` — `(TOP | LEFT)`: **(x, y)** is the top-left of the string’s bounding box (default for new instances).  
+* `Font.ALIGN_CENTER` — `(VCENTER | HCENTER)`: **(x, y)** is the center of the text.  
+
+The global **`FontAlign`** object exposes the same numbers under short names: `FontAlign.TOP` ≡ `Font.ALIGN_TOP`, `FontAlign.NONE` ≡ `Font.ALIGN_NONE`, `FontAlign.CENTER` ≡ `Font.ALIGN_CENTER`, and so on. Use whichever style you prefer; assignments to `font.align` accept any of these constants.
+
+**How alignment works in scripts**
+
+* **`font.align`** is an integer bit mask. Set it to a single flag or **OR** horizontal and vertical flags, e.g. `font.align = Font.ALIGN_RIGHT | Font.ALIGN_VCENTER` to pin the string’s right edge and vertical center to **`(x, y)`** in `print(text, x, y)`.
+* The runtime calls [`AthenaCanvas.drawFont`](src/AthenaCanvas.java) → `Graphics.drawString` with a **normalized** anchor: if the mask has no vertical bits, **TOP** is assumed; if it has no horizontal bits, **LEFT** is assumed. This matches common game code that sets “just” `RIGHT` or `HCENTER` and still get sensible placement.
+* **`getTextSize(text)`** returns raw width/height of the string for the instance’s `javax.microedition.lcdui.Font`; it does **not** depend on `align` (alignment only affects where the box is drawn, not its size).
+
+**Boot splash text** (`boot.ini` `textAlign` / `textAlign.N`) supports only **horizontal** keywords (`left` / `center` / `right`); the full in-game `Font.ALIGN_*` / `FontAlign` set applies only to `Font` in your scripts. See [Boot splash (`boot.ini`)](#boot-splash-bootini).
+
 Construction:  
 
 ```js
@@ -580,41 +710,43 @@ var font = new Font(Font.FACE_MONOSPACE, Font.STYLE_ITALIC, Font.SIZE_MEDIUM); /
 ``` 
 
 Properties:
-* color - Define font tinting, default value is Color.new(255, 255, 255).
-* align - Font alignment, default value is FontAlign.NONE. Avaliable options below:  
-  • FontAlign.NONE  
-  • FontAlign.TOP  
-  • FontAlign.BOTTOM  
-  • FontAlign.LEFT  
-  • FontAlign.RIGHT  
-  • FontAlign.VCENTER  
-  • FontAlign.HCENTER  
-  • FontAlign.CENTER  
+* `color` — Font tint; default `0x00ffffff` (opaque white) on the native side. Use `Color.new(…)` for API consistency with other modules.
+* `align` — Bit mask described above; default `Font.ALIGN_NONE` (same as `FontAlign.NONE`).
   
 Methods:
-* print(x, y, text) - Draw text on screen(call it every frame). Example: font.print(10.0, 10.0, "Hello world!);
-* getTextSize(text) - Returns text absolute size in pixels (width, height). Example: const size = font.getTextSize("Hello world!");
-* free() - Free asset content immediately. 
+* `print(text, x, y)` — Draws on the **current** screen or layer using `font.color` and `font.align`. Example: `font.print("Hello world!", 10, 10);`
+* `getTextSize(text)` — Returns `{ width, height }` in pixels using the same `javax.microedition.lcdui.Font` as drawing (`stringWidth` + `getHeight`). If the font failed to load, both are `0`.
+* `free()` — Clears the native view; call when discarding the instance.
 
 ### Pad module
 
-* Buttons list:  
-  • Pad.UP  
-  • Pad.DOWN  
-  • Pad.LEFT  
-  • Pad.RIGHT  
-  • Pad.FIRE  
-  • Pad.GAME_A  
-  • Pad.GAME_B  
-  • Pad.GAME_C  
-  • Pad.GAME_D  
+**Button masks (bit flags)** — combine with `|` for `pressed` / `justPressed` / `addListener` *mask*:
 
-* Pad.update() - Updates all pads pressed. 
-* var fire_pressed = Pad.pressed(button) - Check if a button is being pressed (continuously). 
-* var fire_pressed = Pad.justPressed(button) - Checks if a button was pressed only once.  
-  
+* `Pad.UP`, `Pad.DOWN`, `Pad.LEFT`, `Pad.RIGHT`, `Pad.FIRE`, `Pad.GAME_A`, `Pad.GAME_B`, `Pad.GAME_C`, `Pad.GAME_D`
+
+**Polling**
+
+* `Pad.update()` — Samples `GameCanvas.getKeyStates()` and updates internal *previous* / *current* state for edge detection. **When you use `os.startFrameLoop`**, the native loop performs the same sampling and listener pass **before** your frame function each frame, so you usually **omit** a manual `Pad.update()` in that mode. In a **manual** `while` loop, call `Pad.update()` **once per frame** before `Pad.pressed` / `Pad.justPressed` or any listeners you rely on.
+* `Pad.pressed(mask)` — `true` while **any** bit in *mask* is down (sustained).
+* `Pad.justPressed(mask)` — `true` on the **first frame** a transition from *no* masked key down to *some* masked key down (one-shot / edge, OR semantics across the mask).
+* `Pad.NON_PRESSED` and edge helpers — the native canvas exposes `padNotPressed(mask)`: `true` when **none** of the bits in *mask* are currently held. This backs the listener kind below.
+
+**Event listeners (recommended for menus and one-tap actions)**
+
+* `var id = Pad.addListener(mask, kind, callback)` — Registers a callback for a **bitmask** *mask* (same flags as `Pad.UP` …) and a *kind*:
+  * `Pad.PRESSED` (`0`) — Fires **every frame** while the condition holds: **any** masked button is down (`pressed`).
+  * `Pad.JUST_PRESSED` (`1`) — Fires when **any** masked button was **not** down last frame **and** is down this frame (`justPressed` — one edge per key group per transition).
+  * `Pad.NON_PRESSED` (`2`) — Fires while **no** bit in *mask* is down (`padNotPressed`), useful for “all clear” or idle detection on a set of keys.
+* Returns a **positive integer id**, or **`-1`** on error (e.g. non-callable *callback*, *mask* `0`, or *kind* outside `0`…`2`).
+* `Pad.clearListener(id)` — Removes the listener with that *id* (ignored if *id* ≤ 0 or unknown).
+
+**Dispatch order and threading**
+
+* Inside `Pad.update()` (and inside `os.startFrameLoop` each frame): the runtime takes a **snapshot** of the listener list, then invokes listeners whose *kind* and current key state match. Callbacks run **on the JS thread** with the global lock held (same as other native entry points), so keep them **short**.
+* With **`os.startFrameLoop`**, per-frame order is: **key snapshot** → **Pad listener dispatch** → **Promise microtask drain** → your frame *fn* → **screen flush** (see [os module](#os-module) `os.startFrameLoop` bullet). That way input listeners run **before** the body of the frame, which matches the pattern documented in the demo `res/main.js` (snake: `JUST_PRESSED` for move / fire without duplicating `justPressed` checks in the frame body).
+
 ### Keyboard module
-* var c = Keyboard.get() - Get keyboard current char.
+* `var c = Keyboard.get()` — Returns the last keypad key code (numeric), or `0` if none. Compare with `Keyboard.KEY_NUM0` … `Keyboard.KEY_NUM9`, `Keyboard.KEY_STAR`, `Keyboard.KEY_POUND` (see `Athena2ME.java` bindings).
 
 ### Timer module
 

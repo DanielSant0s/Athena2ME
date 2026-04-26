@@ -9,6 +9,15 @@ import net.cnjm.j2me.tinybro.NativeFunction;
 public class RocksInterpreter {
     
     public boolean DEBUG = false;
+
+    /**
+     * Toggles the final ES6 literal-fold preprocessor pass. Exposed for hosts
+     * outside the {@code tinybro} package.
+     */
+    public static void setPreprocLiteralFold(boolean on) {
+        Es6Preproc.ENABLE_LITERAL_FOLD = on;
+    }
+
     /** whether to evaluate in-string expressions in language level */
     public boolean evalString = false;
     
@@ -17,9 +26,24 @@ public class RocksInterpreter {
     public Pack tt;
     public int pos = 0;
     public int endpos = 0;
-    
+
     public StringBuffer out = new StringBuffer();
-    
+
+    /**
+     * When true, the next full-range {@link #reset(String, Pack, int, int)} will skip
+     * {@link Es6Preproc#process(String)} (caller already loaded preprocessed text from e.g. RMS).
+     */
+    public boolean skipEs6PreprocessForNextReset;
+
+    /**
+     * When false, {@link Es6Preproc#process(String)} is never run (faster; scripts must be ES5/legacy
+     * syntax). Hosts set this from boot configuration; default is true.
+     */
+    public boolean es6PreprocessEnabled = true;
+
+    public RocksInterpreter() {
+    }
+
     public RocksInterpreter(String src, Pack tokens, int pos, int len) {
         reset(src, tokens, pos, len);
     }
@@ -28,10 +52,16 @@ public class RocksInterpreter {
         if (tokens == null && src != null && pos == 0 && len == src.length()) {
             // ES6 desugaring runs only on top-level script sources, not on cached
             // sub-token ranges (where pos/len already reference a preprocessed buffer).
-            String pp = Es6Preproc.process(src);
-            if (pp != src) {
-                src = pp;
-                len = pp.length();
+            if (!skipEs6PreprocessForNextReset && es6PreprocessEnabled) {
+                String pp = Es6Preproc.process(src);
+                if (pp != src) {
+                    src = pp;
+                    len = pp.length();
+                }
+                // Reclaim Es6Preproc pass buffers on weak devices (only when preprocess ran).
+                System.gc();
+            } else {
+                skipEs6PreprocessForNextReset = false;
             }
             if (DEBUG) {
                 System.out.println("=== preprocessed source (" + src.length() + " chars) ===");
@@ -70,6 +100,7 @@ public class RocksInterpreter {
             reset(fragment, null, 0, fragment.length());
             Node func = astNode(null, RC.TOK_LBR, 0, 0);
             astNode(func, RC.TOK_LBR, 0, endpos);
+            func.referencesArguments = stmtBlockReferencesArguments(func);
             Rv rv = new Rv(false, func, 0);
             rv.co = globalObj;
             return call(false, rv, globalObj, null, null, 0, 0);
@@ -183,7 +214,7 @@ mainswitch:
                     String symb = new String(cc, p, pos - p);
                     int iKey = keywordIndex(symb);
                     // ES6 aliases: "let" and "const" behave as "var" at the token level.
-                    // Real block-scoping for let/const is layered on top in the parser (Fase D).
+                    // Real block-scoping for let/const is layered on top in the parser.
                     if (iKey < 0 && ("let".equals(symb) || "const".equals(symb))) {
                         iKey = RC.TOK_VAR;
                     }
@@ -513,6 +544,7 @@ mainswitch:
                 Node fn = astNode(n, RC.TOK_FUNCTION, pos, 0);
                 astNode(fn, RC.TOK_LBR, pos, eatUntil(RC.TOK_RBR, 0)); 
                 eat(RC.TOK_RBR);
+                computeFunctionReferencesArguments(fn);
                 boolean hascatch = false, hasfinally = false;
                 if (tti[pos] == RC.TOK_CATCH) {
                     eat(RC.TOK_CATCH);
@@ -523,6 +555,7 @@ mainswitch:
                     eat(RC.TOK_LBR);
                     astNode(fn, RC.TOK_LBR, pos, eatUntil(RC.TOK_RBR, 0)); 
                     eat(RC.TOK_RBR);
+                    computeFunctionReferencesArguments(fn);
                     hascatch = true;
                 }
                 if (pos < endpos && tti[pos] == RC.TOK_FINALLY) {
@@ -534,6 +567,7 @@ mainswitch:
                     fn = astNode(n, RC.TOK_FUNCTION, pos, 0);
                     astNode(fn, RC.TOK_LBR, pos, eatUntil(RC.TOK_RBR, 0)); 
                     eat(RC.TOK_RBR);
+                    computeFunctionReferencesArguments(fn);
                     hasfinally = true;
                 }
                 if (!hasfinally && !hascatch) { // try only
@@ -671,7 +705,7 @@ mainloop:
                 case 4: // n
                     Object o = to[1];
                     Rv val = t == RC.TOK_NUMBER ? (o instanceof Rv ? (Rv) o : new Rv(((Integer) o).intValue()))
-                            : t == RC.TOK_STRING ? new Rv((String) o)
+                            : t == RC.TOK_STRING ? Rv.stringLiteral((String) o)
                             : Rv.symbol((String) o);
                     rpn.add(t).add(val); // this must be an operand
                     break;
@@ -685,7 +719,8 @@ mainloop:
                         rpn.iArray[offset] += rpn.iSize << 16;
                     }
                     --op.iSize;
-                    rpn.add(top).add(new Rv(0)); // this must be an operator
+                    rpn.add(top).add(
+                            (top == RC.TOK_INVOKE || top == RC.TOK_INIT) ? new InvokeOpRv() : new Rv(0)); // operator cell
                     break;
                 case 6: // >
                     int newt = t;
@@ -738,7 +773,9 @@ mainloop:
         }
         // node must be a expression node
         Pack rpn = nd.children;
-        if (rpn.iSize == 0) return Rv._undefined;
+        if (rpn.iSize == 0) {
+            return Rv._undefined;
+        }
         int[] tt = rpn.iArray;
         Object[] to = rpn.oArray;
         // ---- acquire an operand stack from the pool ----
@@ -748,6 +785,12 @@ mainloop:
             Pack[] grown = new Pack[pool.length * 2];
             System.arraycopy(pool, 0, grown, 0, pool.length);
             opndPool = pool = grown;
+            Rv[][] tempGrown = new Rv[grown.length][];
+            System.arraycopy(evalTempPool, 0, tempGrown, 0, evalTempPool.length);
+            evalTempPool = tempGrown;
+            int[] usedGrown = new int[grown.length];
+            System.arraycopy(evalTempUsed, 0, usedGrown, 0, evalTempUsed.length);
+            evalTempUsed = usedGrown;
         }
         Pack opnd = pool[depth];
         if (opnd == null) {
@@ -757,6 +800,7 @@ mainloop:
             opnd.iSize = 0;
             opnd.oSize = 0;
         }
+        evalTempUsed[depth] = 0;
         evalDepth = depth + 1;
         try {
         boolean isLocal = false;
@@ -765,10 +809,11 @@ mainloop:
             int t = tt[i];
             int offset = t >> 16;
             t &= 0xffff;
-            switch (t < OPTR_TABLE_SIZE ? _optrType[t] : 0) {
+            int cat = t < OPTR_TABLE_SIZE ? _optrType[t] : 0;
+            switch (cat) {
             case 1: // unary op
                 Rv o = (Rv) opnd.oArray[opnd.oSize - 1];
-                opnd.oArray[opnd.oSize - 1] = ((Rv) to[i]).unary(callObj, t, o);
+                opnd.oArray[opnd.oSize - 1] = ((Rv) to[i]).unary(callObj, t, o, acquireEvalTemp(depth));
                 break;
             case 2: // binary op
                 Rv o2 = ((Rv) opnd.oArray[--opnd.oSize]).evalVal(callObj);
@@ -782,7 +827,7 @@ mainloop:
                     next = RC.TOK_COM;
                 }
                 o2 = ((Rv) opnd.oArray[--opnd.oSize]).evalVal(callObj);
-                o1 = ((Rv) opnd.oArray[opnd.oSize - 1]).evalRef(callObj);
+                o1 = ((Rv) opnd.oArray[opnd.oSize - 1]).evalRef(callObj, acquireEvalTemp(depth));
                 String symname = o1.str;
                 if (isLocal && next == RC.TOK_COM) {
                     callObj.putl(symname, Rv._undefined);
@@ -837,7 +882,17 @@ mainloop:
                     if (t == RC.TOK_DOT && o2.type != Rv.SYMBOL) {
                         return Rv.error("syntax error");
                     }
-                    String pname = t == RC.TOK_LBK ? o2.evalVal(callObj).toStr().str : o2.str;
+                    String pname;
+                    if (t == RC.TOK_LBK) {
+                        Rv ix = o2.evalVal(callObj);
+                        if (ix.type == Rv.NUMBER && !ix.f) {
+                            pname = Rv.intStr(ix.num);
+                        } else {
+                            pname = ix.toStr().str;
+                        }
+                    } else {
+                        pname = o2.str;
+                    }
                     o1 = ((Rv) opnd.oArray[opnd.oSize - 1]).evalVal(callObj);
                     Rv ref;
                     opnd.oArray[opnd.oSize - 1] = (ref = (Rv) to[i]);
@@ -850,18 +905,29 @@ mainloop:
                     num = ((Rv) opnd.oArray[opnd.oSize - 1]).num;
                     int idx = opnd.oSize - num - 2;
                     Rv fun = (Rv) opnd.oArray[idx];
-                    Rv funRef, funObj;
-                    if (fun.type == Rv.FUNCTION) {
-                        funRef = new Rv("inline", callObj);
-                        funObj = fun;
+                    Rv funRef;
+                    Rv funObj;
+                    boolean callSiteHit = t == RC.TOK_INVOKE && to[i] instanceof InvokeOpRv
+                            && tryCallSiteCache((InvokeOpRv) to[i], fun, callObj, depth, callSiteResolve);
+                    if (callSiteHit) {
+                        funRef = callSiteResolve[0];
+                        funObj = callSiteResolve[1];
                     } else {
-                        funRef = fun.evalRef(callObj);
-                        funObj = funRef.get();
+                        if (fun.type == Rv.FUNCTION) {
+                            funRef = acquireEvalTemp(depth).resetTempLvalue("inline", callObj);
+                            funObj = fun;
+                        } else {
+                            funRef = fun.evalRef(callObj, acquireEvalTemp(depth));
+                            funObj = funRef.get();
+                        }
                     }
                     int type;
                     boolean isInit;
                     if ((type = funObj.type) < Rv.FUNCTION) {
                         return Rv.error("undefined function: " + funRef.str);
+                    }
+                    if (t == RC.TOK_INVOKE && !callSiteHit && to[i] instanceof InvokeOpRv) {
+                        installInvokeCallSite((InvokeOpRv) to[i], fun, funObj);
                     }
                     if ((isInit = (t == RC.TOK_INIT)) && (type & Rv.CTOR_MASK) == 0) { // call as a constructor for the first time
                         funObj.type |= Rv.CTOR_MASK;
@@ -874,7 +940,7 @@ mainloop:
                         Rv explicit = funObj.prop != null ? funObj.prop.get("prototype") : null;
                         if (explicit != null) {
                             funObj.ctorOrProt = explicit;
-                            funObj.prop.remove("prototype".hashCode(), "prototype");
+                            funObj.prop.removeAndRelease("prototype".hashCode(), "prototype");
                         } else if (funObj.ctorOrProt == null || funObj.ctorOrProt == Rv._Function) {
                             funObj.ctorOrProt = new Rv(Rv.OBJECT, Rv._Object);
                         }
@@ -882,14 +948,18 @@ mainloop:
                     for (int ii = idx + 1, nn = ii + num; ii < nn; ii++) {
                         opnd.oArray[ii] = ((Rv) opnd.oArray[ii]).evalVal(callObj).pv();
                     }
-                    Rv funCo = new Rv(Rv.OBJECT, Rv._Object);
-                    funCo.prev = funObj == Rv._Function ? callObj : funObj.co.prev;
-                    Rv thiz = isInit ? new Rv(Rv.OBJECT, funObj) : funRef.co;
-                    Rv cobak = funObj.co;
-                    Rv ret = call(isInit, funObj, funObj.co = funCo, thiz, opnd, idx + 1, num);
-                    funObj.co = cobak;
-                    opnd.oSize = idx + 1;
-                    opnd.oArray[opnd.oSize - 1] = isInit && ret == Rv._undefined ? thiz : ret;
+                    Rv cobakFun = funObj.co;
+                    Rv funCo = borrowCallObject();
+                    try {
+                        funCo.prev = funObj == Rv._Function ? callObj : funObj.co.prev;
+                        Rv thiz = isInit ? new Rv(Rv.OBJECT, funObj) : funRef.co;
+                        Rv ret = call(isInit, funObj, funObj.co = funCo, thiz, opnd, idx + 1, num);
+                        opnd.oSize = idx + 1;
+                        opnd.oArray[opnd.oSize - 1] = isInit && ret == Rv._undefined ? thiz : ret;
+                    } finally {
+                        funObj.co = cobakFun;
+                        recycleCallObject(funCo);
+                    }
                     break;
                 case RC.TOK_COL:
                     num = 3; // fall through
@@ -911,8 +981,10 @@ mainloop:
         if (DEBUG) {
             System.out.println("EVAL_RETURN: " + opnd.oArray[0]);
         }
-        return (Rv) opnd.oArray[0];
+        Rv out = (Rv) opnd.oArray[0];
+        return isEvalTemp(depth, out) ? out.evalVal(callObj) : out;
         } finally {
+            clearEvalTemps(depth);
             evalDepth = depth;
         }
     }
@@ -950,20 +1022,31 @@ mainloop:
         }
         Pack children = isNative ? null : ((Node) function.obj).children;
         if (thiz != null) {
-            Rv args = new Rv(Rv.ARGUMENTS, Rv._Arguments);
-            args.num = num;
-            args.putl("callee", function);
+            // Native callables use function.obj = NativeFunction (or Fast); only JS
+            // functions have a {@link Node} in obj — never cast function.obj to Node
+            // when isNative, or ClassCastException (e.g. setInterval callback to native).
+            boolean needArgs = isNative
+                    || ((Node) function.obj).referencesArguments;
+            Rv args = needArgs ? new Rv(Rv.ARGUMENTS, Rv._Arguments) : null;
+            if (args != null) {
+                args.num = num;
+                args.putl("callee", function);
+            }
             int numFormalArgs = isNative ? 0 : children.oSize - 1; // minus Block node
             for (int i = 0; i < num; i++) {
-                Rv realArg;
-                args.putl(i, realArg = ((Rv) argSrc.getObject(i + start)));
+                Rv realArg = (Rv) argSrc.getObject(i + start);
+                if (args != null) {
+                    args.putl(i, realArg);
+                }
                 if (i >= numFormalArgs) continue;
                 Node argnode = (Node) children.getObject(i);
                 Object argName = ((Object[]) argnode.properties.getObject(argnode.display))[1];
                 funCo.putl((String) argName, realArg);
             }
             funCo.putl("this", thiz);
-            funCo.putl("arguments", args);
+            if (args != null) {
+                funCo.putl("arguments", args);
+            }
         }        
         if (isNative) {
             return callNative(isInit, function, funCo);
@@ -971,8 +1054,22 @@ mainloop:
         
         Node node = (Node) children.getObject(-1); // the block ('{') node
         
-        Pack stack = new Pack(20, 20);
+        int _cd0 = callDepth;
+        if (_cd0 >= callStackPool.length) {
+            Pack[] np = new Pack[callStackPool.length * 2];
+            System.arraycopy(callStackPool, 0, np, 0, callStackPool.length);
+            callStackPool = np;
+        }
+        Pack stack = callStackPool[_cd0];
+        if (stack == null) {
+            callStackPool[_cd0] = stack = new Pack(20, 20);
+        } else {
+            stack.iSize = 0;
+            stack.oSize = 0;
+        }
+        callDepth = _cd0 + 1;
         int idx = 0;
+        try {
         Rv evr = null;
         for (;;) {
             Object next = null;
@@ -1163,6 +1260,9 @@ mainloop:
     
         }
         return Rv._undefined;
+        } finally {
+            callDepth = _cd0;
+        }
     }
 
     public Rv js_call_apply(boolean isNew, Rv _this, Rv args, int magic) {
@@ -1172,27 +1272,30 @@ mainloop:
         boolean isCall = (magic == 0);
         if (jsFunc != null && jsFunc.type >= Rv.OBJECT 
                 && (isCall || jsArgs != null && jsArgs.type == Rv.ARRAY)) {
-            Rv funCo = new Rv(Rv.OBJECT, Rv._Object);
-            funCo.prev = _this.co.prev;
-            int argNum, argStart;
-            Rv argsArr;
-            if (isCall) {
-                argNum = args.num - 1;
-                argStart = 1;
-                argsArr = args;
-            } else {
-                argNum = jsArgs.num;
-                argStart = 0;
-                argsArr = jsArgs;
-            }
-            Pack argSrc = new Pack(-1, argNum);
-            
-            for (int ii = argStart, nn = argStart + argNum; ii < nn; argSrc.add(argsArr.get(Rv.intStr(ii++))));
-            Rv cobak = _this.co;
-            Rv ret = call(false, _this, _this.co = funCo, jsFunc, argSrc, 0, argNum);
-            _this.co = cobak;
+            Rv funCo = borrowCallObject();
+            try {
+                funCo.prev = _this.co.prev;
+                int argNum, argStart;
+                Rv argsArr;
+                if (isCall) {
+                    argNum = args.num - 1;
+                    argStart = 1;
+                    argsArr = args;
+                } else {
+                    argNum = jsArgs.num;
+                    argStart = 0;
+                    argsArr = jsArgs;
+                }
+                Pack argSrc = new Pack(-1, argNum);
 
-            return ret;
+                for (int ii = argStart, nn = argStart + argNum; ii < nn; argSrc.add(argsArr.get(Rv.intStr(ii++))));
+                Rv cobak = _this.co;
+                Rv ret = call(false, _this, _this.co = funCo, jsFunc, argSrc, 0, argNum);
+                _this.co = cobak;
+                return ret;
+            } finally {
+                recycleCallObject(funCo);
+            }
         }
 
         return Rv._undefined;
@@ -1215,18 +1318,23 @@ mainloop:
         if (fn == null || !fn.isCallable()) return Rv._undefined;
         int t = fn.type & ~Rv.CTOR_MASK;
         if (t == Rv.NATIVE) {
-            Rv funCo = new Rv(Rv.OBJECT, Rv._Object);
-            return call(false, fn, funCo, thiz, args, start, num);
+            Rv funCo = borrowCallObject();
+            try {
+                return call(false, fn, funCo, thiz, args, start, num);
+            } finally {
+                recycleCallObject(funCo);
+            }
         }
-        // JS function: respect lexicalThis for arrow-like bindings (Fase B)
+        // JS function: respect lexicalThis for arrow-like bindings
         Rv effThis = fn.opaque instanceof Rv ? (Rv) fn.opaque : thiz;
-        Rv funCo = new Rv(Rv.OBJECT, Rv._Object);
+        Rv funCo = borrowCallObject();
         funCo.prev = fn.co.prev;
         Rv cobak = fn.co;
         try {
             return call(false, fn, fn.co = funCo, effThis, args, start, num);
         } finally {
             fn.co = cobak;
+            recycleCallObject(funCo);
         }
     }
 
@@ -1841,31 +1949,6 @@ mainloop:
                 }
             ),
             new NativeFunctionListEntry(
-                "Math.random",
-                new NativeFunction() {
-                    public final int length = 2;
-                    public Rv func(boolean isNew, Rv thiz, Rv args) {
-                        Rv arg0 = args.get("0");
-                        if (arg0 == null || arg0 == Rv._undefined) {
-                            return new Rv(random.nextDouble());
-                        }
-                        if (arg0.toNum() == Rv._NaN) return Rv._undefined;
-                        int low = (int) Rv.numValue(arg0.toNum());
-                        Rv arg1 = args.get("1");
-                        int high = arg1 != null && arg1.toNum() != Rv._NaN
-                                ? (int) Rv.numValue(arg1.toNum()) : low - 1;
-                        if (high <= low) {
-                            high = low;
-                            low = 0;
-                        }
-                        int span = high - low;
-                        if (span <= 0) return new Rv(low);
-                        int rand = (random.nextInt() & 0x7FFFFFFF) % span;
-                        return new Rv(low + rand);
-                    }
-                }
-            ),
-            new NativeFunctionListEntry(
                 "Math.min",
                 new NativeFunction() {
                     public final int length = 2;
@@ -1965,6 +2048,7 @@ mainloop:
                             reset(s = arg0.toStr().str, null, 0, s.length());
                             Node node = astNode(null, RC.TOK_FUNCTION, 0, 0);
                             astNode(node, RC.TOK_LBR, 0, endpos); // '{' = block
+                            RocksInterpreter.computeFunctionReferencesArguments(node);
                             Rv func = new Rv(false, node, 0);
                             ret = call(false, func, thiz, null, null, 0, 0);
                         }
@@ -2024,6 +2108,28 @@ mainloop:
         return ret;
     }
 
+    private static final Object ACTIVE_CALL_OBJECT = new Object();
+    private static final Object CAPTURED_CALL_OBJECT = new Object();
+
+    private Rv captureScopeChain(Rv env) {
+        return captureScopeChain(env, 0);
+    }
+
+    private Rv captureScopeChain(Rv env, int depth) {
+        if (env == null || env.prev == null) {
+            return env;
+        }
+        // Defensive cap: a valid lexical chain is shallow; a cycle must not be preserved.
+        if (depth >= 64) {
+            return null;
+        }
+        if (env.opaque == ACTIVE_CALL_OBJECT || env.opaque == CAPTURED_CALL_OBJECT) {
+            env.opaque = CAPTURED_CALL_OBJECT;
+        }
+        captureScopeChain(env.prev, depth + 1);
+        return env;
+    }
+
     /**
      * call a native function
      * @param isNew
@@ -2079,10 +2185,13 @@ mainloop:
                     this.reset(src = args.get(Rv.intStr(numArgs)).toStr().str, null, 0, src.length());
                     astNode(n, RC.TOK_LBR, 0, this.endpos); // '{' = block
                 }
+                computeFunctionReferencesArguments(n);
                 ret.obj = n;
                 ret.ctorOrProt = Rv._Function;
                 ret.co = new Rv(Rv.OBJECT, Rv._Object);
-                ret.co.prev = callObj.prev;
+                ret.co.prev = argLen == 1 && arg0.type == Rv.FUNCTION
+                        ? captureScopeChain(callObj.prev)
+                        : callObj.prev;
             }
             break;
         }
@@ -2163,7 +2272,6 @@ mainloop:
                 .putl("log", newNativeFunction("console.log"))   // console.log()
         ;
         Rv _Math = new Rv(Rv.OBJECT, Rv._Object)
-                .putl("random", newNativeFunction("Math.random"))
                 .putl("min", newNativeFunction("Math.min"))
                 .putl("max", newNativeFunction("Math.max"))
         ;
@@ -2310,9 +2418,67 @@ mainloop:
 
         int ret = tpos - pos;
         pos = tpos;
-        return ret; 
+        return ret;
     }
-    
+
+    private static final String ARGUMENTS_NAME = "arguments";
+
+    /**
+     * True if the RPN stream references the special identifier {@code arguments}.
+     */
+    static boolean rpnReferencesArguments(Pack rpn) {
+        if (rpn == null) {
+            return false;
+        }
+        int n = rpn.iSize;
+        int[] tta = rpn.iArray;
+        Object[] toa = rpn.oArray;
+        for (int i = 0; i < n; i++) {
+            if ((tta[i] & 0xffff) == RC.TOK_SYMBOL) {
+                Rv sym = (Rv) toa[i];
+                if (sym != null && sym.type == Rv.SYMBOL && ARGUMENTS_NAME.equals(sym.str)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether the list of {@link Node} children (statement list or block) references
+     * {@code arguments}. Descends into child blocks, {@link RC#TOK_MUL} expression
+     * nodes, etc.; does not look inside nested {@code function} bodies (they have
+     * their own {@code arguments}).
+     */
+    public static boolean stmtBlockReferencesArguments(Node n) {
+        if (n == null || n.children == null) {
+            return false;
+        }
+        Pack p = n.children;
+        for (int i = 0, lim = p.oSize; i < lim; i++) {
+            Node c = (Node) p.getObject(i);
+            if (c.tagType == RC.TOK_FUNCTION) {
+                continue;
+            }
+            if (c.tagType == RC.TOK_MUL) {
+                if (rpnReferencesArguments(c.children)) {
+                    return true;
+                }
+            } else if (stmtBlockReferencesArguments(c)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static void computeFunctionReferencesArguments(Node function) {
+        if (function == null || function.children == null || function.children.oSize < 1) {
+            return;
+        }
+        function.referencesArguments = stmtBlockReferencesArguments(
+                (Node) function.children.getObject(-1));
+    }
+
     /**
      * @param function
      */
@@ -2334,6 +2500,7 @@ mainloop:
         eat(RC.TOK_LBR);
         astNode(function, RC.TOK_LBR, pos, eatUntil(RC.TOK_RBR, 0)); // '{' = block
         eat(RC.TOK_RBR);
+        computeFunctionReferencesArguments(function);
     }
     
     // 
@@ -2529,7 +2696,196 @@ mainloop:
     // as eval() recurses (eval -> call -> eval ...). Reusing these Packs turns
     // "one allocation per expression" into zero on the steady state.
     private Pack[] opndPool = new Pack[16];
+    // Frame-local temporary Rv cells used for non-escaping eval intermediates
+    // such as SYMBOL -> LVALUE refs. Cleared when the eval frame exits.
+    private Rv[][] evalTempPool = new Rv[16][];
+    private int[] evalTempUsed = new int[16];
     private int evalDepth = 0;
+    /** Reused per JS call() control-flow stack; avoids new Pack(20,20) per function invocation. */
+    private int callDepth = 0;
+    private Pack[] callStackPool = new Pack[16];
+
+    /** Pooled empty scope objects for {@code call()} ({@code funCo} / invoke bind records). */
+    private Rv[] callObjectFree = new Rv[48];
+    private int callObjectFreeSize;
+    private final Rv[] callSiteResolve = new Rv[2];
+
+    /**
+     * Polymorphic inline cache for a single RPN call site ({@code TOK_INVOKE}).
+     * {@code KIND_DIRECT} — bare {@code f()} with {@code f} a FUNCTION;
+     * {@code KIND_MEMBER} — {@code o.m} with {@code o} a stable receiver map.
+     */
+    static final class CallSiteCache {
+        static final int SLOTS = 4;
+        static final int KIND_NONE = 0;
+        static final int KIND_DIRECT = 1;
+        static final int KIND_MEMBER = 2;
+        int[] kind = new int[SLOTS];
+        Rv[] directFun = new Rv[SLOTS];
+        Rv[] mHolder = new Rv[SLOTS];
+        String[] mKey = new String[SLOTS];
+        Rhash[] mMap = new Rhash[SLOTS];
+        int[] mStamp = new int[SLOTS];
+        int[] mLayout = new int[SLOTS];
+        Rv[] mFunObj = new Rv[SLOTS];
+        int write;
+    }
+
+    /** RPN placeholder for {@code TOK_INVOKE} / {@code TOK_INIT} — holds optional {@link #csc}. */
+    static final class InvokeOpRv extends Rv {
+        CallSiteCache csc;
+
+        InvokeOpRv() {
+            super(0);
+        }
+    }
+
+    Rv borrowCallObject() {
+        Rv c;
+        if (callObjectFreeSize > 0) {
+            c = callObjectFree[--callObjectFreeSize];
+        } else {
+            c = new Rv(Rv.OBJECT, Rv._Object);
+        }
+        c.type = Rv.OBJECT;
+        c.ctorOrProt = Rv._Object;
+        c.prev = null;
+        c.gen = 0;
+        c.opaque = ACTIVE_CALL_OBJECT;
+        c.num = 0;
+        c.str = null;
+        c.obj = null;
+        c.prop.reset(11);
+        return c;
+    }
+
+    void recycleCallObject(Rv c) {
+        if (c == null) {
+            return;
+        }
+        if (c.opaque == CAPTURED_CALL_OBJECT) {
+            return;
+        }
+        c.prev = null;
+        c.opaque = null;
+        c.num = 0;
+        c.str = null;
+        c.obj = null;
+        c.gen = 0;
+        c.ctorOrProt = Rv._Object;
+        c.prop.reset(11);
+        if (callObjectFreeSize < callObjectFree.length) {
+            callObjectFree[callObjectFreeSize++] = c;
+        }
+    }
+
+    void installInvokeCallSite(InvokeOpRv isite, Rv fun, Rv funObj) {
+        if (isite == null || funObj == null || funObj.type < Rv.FUNCTION) {
+            return;
+        }
+        CallSiteCache csc = isite.csc;
+        if (csc == null) {
+            isite.csc = csc = new CallSiteCache();
+        }
+        int w = csc.write;
+        if (fun.type == Rv.FUNCTION) {
+            csc.kind[w] = CallSiteCache.KIND_DIRECT;
+            csc.directFun[w] = fun;
+        } else if (fun.type == Rv.LVALUE) {
+            Rv h0 = fun.co;
+            Rhash hp0 = h0 != null ? h0.prop : null;
+            if (hp0 != null) {
+                csc.kind[w] = CallSiteCache.KIND_MEMBER;
+                csc.mHolder[w] = h0;
+                csc.mKey[w] = fun.str;
+                csc.mMap[w] = hp0;
+                csc.mStamp[w] = hp0.gen;
+                csc.mLayout[w] = hp0.layoutFp;
+                csc.mFunObj[w] = funObj;
+            }
+        }
+        csc.write = (w + 1) % CallSiteCache.SLOTS;
+    }
+
+    /**
+     * Tries the polymorphic call-site cache for {@code TOK_INVOKE}. On success,
+     * {@code out[0] = funRef} and {@code out[1] = funObj}.
+     */
+    boolean tryCallSiteCache(InvokeOpRv isite, Rv fun, Rv callObj, int depth, Rv[] out) {
+        CallSiteCache csc;
+        if (isite == null || (csc = isite.csc) == null) {
+            return false;
+        }
+        for (int si = 0; si < CallSiteCache.SLOTS; si++) {
+            if (csc.kind[si] == CallSiteCache.KIND_DIRECT) {
+                if (fun.type == Rv.FUNCTION && fun == csc.directFun[si]) {
+                    out[0] = acquireEvalTemp(depth).resetTempLvalue("inline", callObj);
+                    out[1] = fun;
+                    return true;
+                }
+            } else if (csc.kind[si] == CallSiteCache.KIND_MEMBER) {
+                if (fun.type == Rv.LVALUE) {
+                    Rv h0 = fun.co;
+                    Rhash hp0 = h0 != null ? h0.prop : null;
+                    String k0 = fun.str;
+                    if (h0 == csc.mHolder[si] && hp0 == csc.mMap[si] && hp0 != null
+                            && csc.mStamp[si] == hp0.gen && csc.mLayout[si] == hp0.layoutFp
+                            && (k0 == csc.mKey[si]
+                            || (k0 != null && csc.mKey[si] != null && csc.mKey[si].equals(k0)))) {
+                        out[0] = fun.evalRef(callObj, acquireEvalTemp(depth));
+                        out[1] = csc.mFunObj[si];
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private Rv acquireEvalTemp(int depth) {
+        Rv[] pool = evalTempPool[depth];
+        if (pool == null) {
+            pool = new Rv[8];
+            evalTempPool[depth] = pool;
+        }
+        int used = evalTempUsed[depth];
+        if (used >= pool.length) {
+            Rv[] grown = new Rv[pool.length * 2];
+            System.arraycopy(pool, 0, grown, 0, pool.length);
+            evalTempPool[depth] = pool = grown;
+        }
+        Rv r = pool[used];
+        if (r == null) {
+            r = new Rv();
+            pool[used] = r;
+        }
+        evalTempUsed[depth] = used + 1;
+        return r;
+    }
+
+    private boolean isEvalTemp(int depth, Rv r) {
+        Rv[] pool = evalTempPool[depth];
+        int used = evalTempUsed[depth];
+        for (int i = 0; i < used; i++) {
+            if (pool[i] == r) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void clearEvalTemps(int depth) {
+        Rv[] pool = evalTempPool[depth];
+        int used = evalTempUsed[depth];
+        if (pool != null) {
+            for (int i = 0; i < used; i++) {
+                if (pool[i] != null) {
+                    pool[i].clearEvalTemp();
+                }
+            }
+        }
+        evalTempUsed[depth] = 0;
+    }
     
     static final String PRECEDENCE = 
         "Paaaaaaaaaaaaapaaaaapaaaapa" + // DOT

@@ -64,7 +64,7 @@ public class Node {
      *   repeat, positionX, postionY
      *   crop <x, y, width, height>, transform,
      *   font-face(system), font-style(italic|bold|underline), font-size(small|default) 
-     *   'x'-height, 'x'-width, 'X'-width, 'ÖÐ'-width, 
+     *   'x'-height, 'x'-width, 'X'-width, 'ï¿½ï¿½'-width, 
      *   font-color(black|transparent), shadow-color(transparent), length-x, length-y
      *   }
      *   { image_url, image_object, font-object }
@@ -90,6 +90,12 @@ public class Node {
     // As script AST node: len, if (len >= 0) then the node is raw 
     public int state = C.DI_NORMAL; // normal, hover (focus), active
     
+    /**
+     * When {@code true}, the function body may read {@code arguments}; the interpreter
+     * then materializes an ARGUMENTS object. Set during parsing / AST wiring.
+     */
+    public boolean referencesArguments;
+
     public Node(Object owner, int tagType) {
         this.owner = owner;
         this.tagType = tagType;

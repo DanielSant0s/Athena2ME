@@ -1,164 +1,3 @@
-(function () {
-    var i = os.getSystemInfo();
-    function S(x) { return x === null ? "null" : ("" + x); }
-    console.log("os.getSystemInfo platform=" + S(i["microedition.platform"]));
-    var m = os.getMemoryStats(false);
-    console.log("os.getMemoryStats heapTotal=" + m.heapTotal + " heapFree=" + m.heapFree + " heapUsed=" + m.heapUsed);
-    var s = os.getStorageStats("file:///C:/");
-    if (s.error) {
-        console.log("os.getStorageStats C: error=" + s.error);
-    } else {
-        console.log("os.getStorageStats C: total=" + s.total + " free=" + s.free);
-    }
-    var miss = os.getStorageStats();
-    console.log("os.getStorageStats() no arg: error=" + miss.error);
-})();
-
-console.log("Athena2ME main.js — demo HTTP (Request + Promise)");
-
-// require() sample: /lib/demo_math.js in the JAR (see res/lib/demo_math.js)
-var demoMath = require("/lib/demo_math.js");
-console.log("require demo: add(2,3)=" + demoMath.add(2, 3) + " label=" + demoMath.label);
-var demoMath2 = require("/lib/demo_math.js");
-console.log("require cache: same object? " + (demoMath === demoMath2 ? "yes" : "no"));
-
-(function concurrencySelfTest() {
-    function drainUntil(pred, maxRounds) {
-        var i;
-        for (i = 0; i < maxRounds; i++) {
-            if (pred()) {
-                return true;
-            }
-            os.flushPromises();
-        }
-        return pred();
-    }
-
-    console.log("=== concurrency self-test (Mutex / Semaphore / AtomicInt / spawn) ===");
-
-    var ai = os.AtomicInt(10);
-    ai.set(5);
-    console.log("AtomicInt get after set(5)=" + ai.get());
-    console.log("AtomicInt addAndGet(3)=" + ai.addAndGet(3) + " get=" + ai.get());
-
-    var mx = os.Mutex();
-    console.log("Mutex tryLock (expect 1)=" + mx.tryLock());
-    console.log("Mutex tryLock again (expect 0)=" + mx.tryLock());
-    mx.unlock();
-    console.log("Mutex tryLock after unlock (expect 1)=" + mx.tryLock());
-    mx.unlock();
-
-    var sem = os.Semaphore(2, 4);
-    console.log("Semaphore availablePermits initial=" + sem.availablePermits());
-    console.log("Semaphore tryAcquire=" + sem.tryAcquire() + " avail=" + sem.availablePermits());
-    console.log("Semaphore tryAcquire=" + sem.tryAcquire() + " avail=" + sem.availablePermits());
-    console.log("Semaphore tryAcquire empty (expect 0)=" + sem.tryAcquire());
-    sem.release();
-    console.log("Semaphore after release avail=" + sem.availablePermits());
-
-    var spawnOk = false;
-    var spawnVal = null;
-    os.spawn(function () {
-        return "from-spawn";
-    }).then(function (v) {
-        spawnVal = v;
-        spawnOk = true;
-    });
-    if (!drainUntil(function () { return spawnOk; }, 32)) {
-        console.log("concurrency: spawn TIMEOUT");
-    } else {
-        console.log("spawn Promise ok value=" + spawnVal);
-    }
-
-    var thOk = false;
-    var thVal = null;
-    os.Thread.start(function () {
-        return 41;
-    }).then(function (v) {
-        thVal = v;
-        thOk = true;
-    });
-    if (!drainUntil(function () { return thOk; }, 32)) {
-        console.log("concurrency: Thread.start TIMEOUT");
-    } else {
-        console.log("Thread.start Promise ok value=" + thVal);
-    }
-
-    console.log("=== concurrency self-test done ===");
-})();
-
-(function httpDemo() {
-    var done = 0;
-    var r = new Request();
-    r.useragent = "Athena2ME-demo/1.0";
-    r.get("http://www.example.com/").then(function (res) {
-        console.log("HTTP responseCode=" + res.responseCode + " bytes=" + res.contentLength);
-
-        var u8 = res.body;
-        var txt = "";
-        var i;
-        var maxB = 6000;
-        var lim = u8.length < maxB ? u8.length : maxB;
-        for (i = 0; i < lim; i++) {
-            var c = u8[i];
-            if (c === 10 || c === 13) {
-                txt += " ";
-            } else if (c >= 32 && c < 127) {
-                txt += String.fromCharCode(c);
-            } else {
-                txt += ".";
-            }
-        }
-        if (u8.length > maxB) {
-            txt += " ... (" + u8.length + " B total)";
-        }
-
-        var w = Screen.width;
-        var h = Screen.height;
-        var bg = Color.new(8, 8, 24);
-        var f = new Font(Font.FACE_PROPORTIONAL, Font.STYLE_PLAIN, Font.SIZE_SMALL);
-        f.color = Color.new(220, 230, 255);
-
-        Screen.clear(bg);
-        f.print("HTTP " + res.responseCode + "  " + res.contentLength + " bytes", 4, 4);
-        var lineH = 12;
-        var lineW = 28;
-        if (w > 120) lineW = Math.floor((w - 8) / 6);
-        var y = 4 + lineH * 2;
-        var j = 0;
-        while (j < txt.length && y < h - lineH) {
-            var end = j + lineW;
-            if (end > txt.length) end = txt.length;
-            f.print(txt.substring(j, end), 4, y);
-            j = end;
-            y += lineH;
-        }
-        f.color = Color.new(140, 160, 200);
-        var errLine = res.error ? res.error : "ok";
-        f.print("(10s) " + errLine, 4, h - lineH - 2);
-        Screen.update();
-
-        os.sleep(10000);
-        done = 1;
-    }).catch(function (e) {
-        var msg = e && e.message ? e.message : String(e);
-        console.log("HTTP error: " + msg);
-        var w = Screen.width;
-        var h = Screen.height;
-        var bg = Color.new(32, 8, 8);
-        var f = new Font(Font.FACE_PROPORTIONAL, Font.STYLE_PLAIN, Font.SIZE_SMALL);
-        f.color = Color.new(255, 200, 200);
-        Screen.clear(bg);
-        f.print("HTTP failed", 4, 4);
-        f.print(msg, 4, 20);
-        Screen.update();
-        os.sleep(5000);
-        done = 1;
-    });
-    while (!done) {
-        os.sleep(30);
-    }
-})();
 
 // =============================================================================
 //  NEON SNAKE  —  Athena2ME ES6+ fork demo
@@ -168,10 +7,15 @@ console.log("require cache: same object? " + (demoMath === demoMath2 ? "yes" : "
 //    * arrow functions                         * template literals
 //    * destructuring (array, object, params)   * for...of
 //    * default parameters / rest parameters    * Array.map / filter / some
-//    * Uint8Array (compact board occupancy for apple placement)
+//    * Uint8Array / Int32Array (board occupancy + snake/particle buffers)
 //
-//  Keep the visual language TIGHT and cheap: we only have ~1ms per frame on
-//  an S40 mid-range. Every draw call matters.
+//  Performance targets (~200 MHz): static board in an offscreen layer (one
+//  drawLayer per frame instead of hundreds of fillRects), cached HUD text,
+//  snake as Int32Array ring. Particles: two Int32Array slabs (double-buffer step),
+//  fixed-point subpixels (SUB); trig only at spawn, velocities via Math.round.
+//
+//  Input: Pad.addListener(…, Pad.JUST_PRESSED) — despacho após Pad.update, antes
+//  do corpo de cada frame. Callbacks anónimos/arrow preservam escopo capturado.
 // =============================================================================
 
 // ---- canvas / layout --------------------------------------------------------
@@ -183,25 +27,20 @@ const CELL      = 8;
 const HUD_H     = 20;
 const BOARD_X0  = 3;
 const BOARD_Y0  = HUD_H + 3;
-const COLS      = Math.floor((W - BOARD_X0 * 2) / CELL);
-const ROWS      = Math.floor((H - BOARD_Y0 - 3) / CELL);
+const COLS      = Math.max(1, Math.floor((W - BOARD_X0 * 2) / CELL));
+const ROWS      = Math.max(1, Math.floor((H - BOARD_Y0 - 3) / CELL));
 const BOARD_W   = COLS * CELL;
 const BOARD_H   = ROWS * CELL;
 const BOARD_X1  = BOARD_X0 + BOARD_W;
 const BOARD_Y1  = BOARD_Y0 + BOARD_H;
 
-// One byte per grid cell: 0 = free, 1 = snake. Reused every apple respawn so we
-// avoid O(snake) Array.some() inside the random-retry and fallback scans.
-const boardOcc = new Uint8Array(COLS * ROWS);
+const BGW       = BOARD_W + 6;
+const BGH       = BOARD_H + 6;
 
-function syncBoardOcc(occ, snake_body) {
-    let i;
-    for (i = 0; i < occ.length; i++) occ[i] = 0;
-    for (i = 0; i < snake_body.length; i++) {
-        const s = snake_body[i];
-        occ[s.y * COLS + s.x] = 1;
-    }
-}
+const SNAKE_CAP = COLS * ROWS;
+
+// 0 = free, 1 = snake segment. Maintained incrementally by Snake.step (O(1) self-hit).
+const boardOcc = new Uint8Array(COLS * ROWS);
 
 // ---- palette (neon) ---------------------------------------------------------
 
@@ -232,18 +71,35 @@ const TEXT_DIM  = Color.new(80,  90,  130);
 const ACCENT_0  = Color.new(0,   240, 255);
 const ACCENT_1  = Color.new(0,   120, 180);
 
+// Hoisted: avoid per-star array allocation in Star.draw
+const STAR_COLS = [TEXT_DIM, TEXT_1, ACCENT_1];
+
+// Unpack packed cell to globals (avoid {x,y} alloc)
+var unpackX = 0;
+var unpackY = 0;
+function unpackCellToGlobals(p) {
+    unpackX = p % COLS;
+    unpackY = (p / COLS) | 0;
+}
+
 // ---- fonts ------------------------------------------------------------------
 
 const font_big   = new Font(Font.FACE_PROPORTIONAL, Font.STYLE_BOLD,  Font.SIZE_LARGE);
 const font_med   = new Font(Font.FACE_PROPORTIONAL, Font.STYLE_BOLD,  Font.SIZE_MEDIUM);
 const font_small = new Font(Font.FACE_PROPORTIONAL, Font.STYLE_PLAIN, Font.SIZE_SMALL);
 
+/** Pixel size of a string in this font (`javax.microedition.lcdui.Font` stringWidth + getHeight). */
+function textSize(font, text) {
+    return font.getTextSize(text);
+}
+
+/** X so *text* is horizontally centered on the full canvas width. */
+function centerXForText(font, text) {
+    return (W - textSize(font, text).width) / 2 | 0;
+}
+
 // ---- neon primitives --------------------------------------------------------
 
-// Three-layer faux-glow rect (outer, mid, core). Cheaper than real alpha
-// blending — which the MIDP 2.0 canvas drops on setColor() anyway. We take
-// the three colors as separate args to avoid allocating a wrapping array per
-// call (this function runs ~30× per frame just for the snake body).
 function glowRect(x, y, w, h, c0, c1, c2) {
     Draw.rect(x - 2, y - 2, w + 4, h + 4, c2);
     Draw.rect(x - 1, y - 1, w + 2, h + 2, c1);
@@ -263,134 +119,351 @@ function glowText(font, text, x, y, c0, c1) {
 function hline(x, y, w, c) { Draw.rect(x, y, w, 1, c); }
 function vline(x, y, h, c) { Draw.rect(x, y, 1, h, c); }
 
-// ---- particles --------------------------------------------------------------
+// ---- static board (offscreen) ----------------------------------------------
 
-// Particles use sub-pixel coords (1/8 px). Velocities are sub-px/frame; sin/cos
-// are real radians — scale with `mag` only (do not divide by 1000; that was for
-// the old int-scaled trig).
-const SUB = 8;
+let boardBgLayer = null;
 
-class Particle {
-    constructor(sx, sy, svx, svy, life, col) {
-        this.sx = sx; this.sy = sy;
-        this.vx = svx; this.vy = svy;
-        this.life = life;
-        this.max  = life;
-        this.col  = col;
+/** One-time grid + border; avoids per-frame fillRect storm on the board. */
+function buildBoardBgLayer() {
+    if (boardBgLayer) return;
+    boardBgLayer = Screen.createLayer(BGW, BGH);
+    if (!boardBgLayer) return;
+    Screen.setLayer(boardBgLayer);
+    Draw.rect(0, 0, BGW, BGH, BORDER_2);
+    Draw.rect(1, 1, BGW - 2, BGH - 2, BORDER_1);
+    Draw.rect(2, 2, BGW - 4, BGH - 4, BORDER_0);
+    Draw.rect(3, 3, BGW - 6, BGH - 6, BG_DEEP);
+    let y;
+    let x;
+    for (y = 0; y < ROWS; y = y + 2) {
+        for (x = 0; x < COLS; x = x + 2) {
+            Draw.rect(3 + x * CELL, 3 + y * CELL, 1, 1, GRID);
+        }
     }
-    step() {
-        this.sx = this.sx + this.vx;
-        this.sy = this.sy + this.vy;
-        this.vy = this.vy + 1; // gravity (sub-px/frame^2)
-        this.life = this.life - 1;
-    }
-    draw() {
-        const s = this.life > this.max / 2 ? 3 : 2;
-        Draw.rect(this.sx / SUB, this.sy / SUB, s, s, this.col);
-    }
-    alive() { return this.life > 0; }
+    Screen.setLayer(null);
 }
 
-const particles = [];
+/** Fallback if createLayer fails (low heap). */
+function drawBoardFrameFallback() {
+    Draw.rect(BOARD_X0 - 3, BOARD_Y0 - 3, BOARD_W + 6, BOARD_H + 6, BORDER_2);
+    Draw.rect(BOARD_X0 - 2, BOARD_Y0 - 2, BOARD_W + 4, BOARD_H + 4, BORDER_1);
+    Draw.rect(BOARD_X0 - 1, BOARD_Y0 - 1, BOARD_W + 2, BOARD_H + 2, BORDER_0);
+    Draw.rect(BOARD_X0,     BOARD_Y0,     BOARD_W,     BOARD_H,     BG_DEEP);
+    let y;
+    let x;
+    for (y = 0; y < ROWS; y = y + 2) {
+        for (x = 0; x < COLS; x = x + 2) {
+            Draw.rect(BOARD_X0 + x * CELL, BOARD_Y0 + y * CELL, 1, 1, GRID);
+        }
+    }
+}
 
-function spawnBurst(cx, cy, col, n = 10) {
+function blitBoardBg() {
+    if (!boardBgLayer) buildBoardBgLayer();
+    if (boardBgLayer) {
+        Screen.drawLayer(boardBgLayer, BOARD_X0 - 3, BOARD_Y0 - 3);
+    } else {
+        drawBoardFrameFallback();
+    }
+}
+
+// ---- HUD cache (text only when values change) --------------------------------
+
+let hudLayer = null;
+const hudSnap = { score: -1, best: -1, speed: -1 };
+
+function rebuildHudLayer(score, best, speedLevel) {
+    if (!hudLayer) {
+        hudLayer = Screen.createLayer(W, HUD_H);
+        if (!hudLayer) return false;
+    }
+    Screen.setLayer(hudLayer);
+    Draw.rect(0, 0, W, HUD_H, BG_DEEP);
+    hline(0, HUD_H, W, BORDER_2);
+    hline(0, HUD_H - 1, W, BORDER_1);
+
+    font_small.color = TEXT_DIM;
+    font_small.print("SCORE", 4, 2);
+    const bestX = W - 4 - textSize(font_small, "BEST").width;
+    font_small.print("BEST",  bestX, 2);
+    glowText(font_med, "" + score, 4,       9, ACCENT_0, ACCENT_1);
+    const bestStr = "" + best;
+    glowText(font_med, bestStr,  W - 4 - textSize(font_med, bestStr).width,  9, TEXT_0,   TEXT_1);
+
+    let i;
+    for (i = 0; i < 5; i++) {
+        const col = i < speedLevel ? ACCENT_0 : TEXT_DIM;
+        Draw.rect(W / 2 - 12 + i * 5, 8, 3, 6, col);
+    }
+    font_small.color = TEXT_DIM;
+    const spdW = textSize(font_small, "SPD").width;
+    font_small.print("SPD", (W - spdW) / 2 | 0, 1);
+    Screen.setLayer(null);
+    hudSnap.score = score;
+    hudSnap.best = best;
+    hudSnap.speed = speedLevel;
+    return true;
+}
+
+function drawHudCached(score, best, speedLevel) {
+    if (hudLayer &&
+        hudSnap.score === score &&
+        hudSnap.best === best &&
+        hudSnap.speed === speedLevel) {
+        Screen.drawLayer(hudLayer, 0, 0);
+        return;
+    }
+    if (!rebuildHudLayer(score, best, speedLevel)) {
+        Draw.rect(0, 0, W, HUD_H, BG_DEEP);
+        hline(0, HUD_H, W, BORDER_2);
+        hline(0, HUD_H - 1, W, BORDER_1);
+        font_small.color = TEXT_DIM;
+        font_small.print("SCORE", 4, 2);
+        const bestX0 = W - 4 - textSize(font_small, "BEST").width;
+        font_small.print("BEST",  bestX0, 2);
+        glowText(font_med, "" + score, 4,       9, ACCENT_0, ACCENT_1);
+        const bestStr0 = "" + best;
+        glowText(font_med, bestStr0,  W - 4 - textSize(font_med, bestStr0).width,  9, TEXT_0,   TEXT_1);
+        let i;
+        for (i = 0; i < 5; i++) {
+            const col = i < speedLevel ? ACCENT_0 : TEXT_DIM;
+            Draw.rect(W / 2 - 12 + i * 5, 8, 3, 6, col);
+        }
+        font_small.color = TEXT_DIM;
+        const spdW0 = textSize(font_small, "SPD").width;
+        font_small.print("SPD", (W - spdW0) / 2 | 0, 1);
+    } else {
+        Screen.drawLayer(hudLayer, 0, 0);
+    }
+}
+
+// ---- particles (interleaved Int32Array ×2, hard cap) --------------------------
+
+const SUB = 8;
+const PM_MAX = 24;
+/** One slab: [sx,sy,vx,vy,life,maxLife,color] per particle */
+const PM_STRIDE = 7;
+const PM_SX = 0;
+const PM_SY = 1;
+const PM_VX = 2;
+const PM_VY = 3;
+const PM_LIFE = 4;
+const PM_MAXL = 5;
+const PM_COL = 6;
+
+const RECT_STRIDE = 5;
+const RECT_X = 0;
+const RECT_Y = 1;
+const RECT_W = 2;
+const RECT_H = 3;
+const RECT_COL = 4;
+
+const pm0 = new Int32Array(PM_MAX * PM_STRIDE);
+const pm1 = new Int32Array(PM_MAX * PM_STRIDE);
+const pmRects = new Int32Array(PM_MAX * RECT_STRIDE);
+let pm = pm0;
+let pmOut = pm1;
+let pmCount = 0;
+let pmRectCount = 0;
+
+function spawnBurst(cx, cy, col, n) {
     const TAU = Math.PI * 2;
-    for (let i = 0; i < n; i++) {
+    let i;
+    for (i = 0; i < n && pmCount < PM_MAX; i++) {
         const ang = Math.random() * TAU;
-        const mag = 16 + Math.random() * 16; // 16..32 sub-px/frame radial speed
-        const vx  = Math.cos(ang) * mag;
-        const vy  = Math.sin(ang) * mag - 8; // initial upward bias
-        particles.push(new Particle(cx * SUB, cy * SUB, vx, vy,
-                                    14 + Math.floor(Math.random() * 10), col));
+        const mag = 16 + Math.random() * 16;
+        const life = 14 + ((Math.random() * 10) | 0);
+        const k = pmCount;
+        pmCount = pmCount + 1;
+        const b = k * PM_STRIDE;
+        pm[b + PM_SX] = (cx * SUB) | 0;
+        pm[b + PM_SY] = (cy * SUB) | 0;
+        // Arredonda no spawn: |0 truncava ~0 e “congelava”; float no step custa no interpretador.
+        pm[b + PM_VX] = Math.round(Math.cos(ang) * mag);
+        pm[b + PM_VY] = Math.round(Math.sin(ang) * mag - 8);
+        pm[b + PM_LIFE] = life;
+        pm[b + PM_MAXL] = life;
+        pm[b + PM_COL] = col | 0;
+        if (pmRectCount < PM_MAX) {
+            const rb = pmRectCount * RECT_STRIDE;
+            pmRects[rb + RECT_X] = cx | 0;
+            pmRects[rb + RECT_Y] = cy | 0;
+            pmRects[rb + RECT_W] = 3;
+            pmRects[rb + RECT_H] = 3;
+            pmRects[rb + RECT_COL] = col | 0;
+            pmRectCount = pmRectCount + 1;
+        }
     }
 }
 
 function stepParticles() {
-    // In-place compaction. Cheaper than splice() and doesn't depend on it
-    // (our RockScript fork doesn't implement Array.prototype.splice).
+    const src = pm;
+    const dst = pmOut;
+    const rects = pmRects;
     let w = 0;
-    const n = particles.length;
-    for (let i = 0; i < n; i++) {
-        const p = particles[i];
-        p.step();
-        if (p.alive()) {
-            if (w !== i) particles[w] = p;
+    let rw = 0;
+    let i;
+    for (i = 0; i < pmCount; i++) {
+        const b = i * PM_STRIDE;
+        const sx = src[b + PM_SX];
+        const sy = src[b + PM_SY];
+        const vx = src[b + PM_VX];
+        const vy = src[b + PM_VY];
+        const life = src[b + PM_LIFE];
+        const maxl = src[b + PM_MAXL];
+        const col = src[b + PM_COL];
+        const nsx = sx + vx;
+        const nsy = sy + vy;
+        const nvy = vy + 1;
+        const nl = life - 1;
+        if (nl > 0) {
+            const wb = w * PM_STRIDE;
+            dst[wb + PM_SX] = nsx;
+            dst[wb + PM_SY] = nsy;
+            dst[wb + PM_VX] = vx;
+            dst[wb + PM_VY] = nvy;
+            dst[wb + PM_LIFE] = nl;
+            dst[wb + PM_MAXL] = maxl;
+            dst[wb + PM_COL] = col;
+            const s = nl > (maxl >> 1) ? 3 : 2;
+            const rb = rw * RECT_STRIDE;
+            rects[rb + RECT_X] = (nsx / SUB) | 0;
+            rects[rb + RECT_Y] = (nsy / SUB) | 0;
+            rects[rb + RECT_W] = s;
+            rects[rb + RECT_H] = s;
+            rects[rb + RECT_COL] = col;
             w = w + 1;
+            rw = rw + 1;
         }
     }
-    while (particles.length > w) particles.pop();
+    pmCount = w;
+    pmRectCount = rw;
+    pmOut = src;
+    pm = dst;
 }
 
 function drawParticles() {
-    for (const p of particles) p.draw();
+    const buf = pm;
+    if (Draw.rects) {
+        Draw.rects(pmRects, pmRectCount);
+        return;
+    }
+    let i;
+    for (i = 0; i < pmCount; i++) {
+        const b = i * PM_STRIDE;
+        const life = buf[b + PM_LIFE];
+        if (life <= 0) continue;
+        const maxl = buf[b + PM_MAXL];
+        const s = life > (maxl >> 1) ? 3 : 2;
+        Draw.rect((buf[b + PM_SX] / SUB) | 0, (buf[b + PM_SY] / SUB) | 0, s, s, buf[b + PM_COL]);
+    }
 }
 
-// ---- snake ------------------------------------------------------------------
+function clearParticles() {
+    pmCount = 0;
+    pmRectCount = 0;
+}
+
+// ---- snake (ring buffer, no segment objects) -------------------------------
+
+function packCell(x, y) {
+    return (y * COLS + x) | 0;
+}
 
 class Snake {
     constructor() {
+        this.buf = new Int32Array(SNAKE_CAP);
+        this.tail = 0;
+        this.len = 4;
         const cx = (COLS / 2) | 0;
         const cy = (ROWS / 2) | 0;
-        this.body = [
-            { x: cx,     y: cy },
-            { x: cx - 1, y: cy },
-            { x: cx - 2, y: cy },
-            { x: cx - 3, y: cy },
-        ];
-        this.dx = 1; this.dy = 0;
-        this.qdx = 1; this.qdy = 0;
+        this.buf[0] = packCell(cx - 3, cy);
+        this.buf[1] = packCell(cx - 2, cy);
+        this.buf[2] = packCell(cx - 1, cy);
+        this.buf[3] = packCell(cx, cy);
+        this.tail = 0;
+        this.dx = 1;
+        this.dy = 0;
+        this.qdx = 1;
+        this.qdy = 0;
         this.grow = 0;
+        let i;
+        for (i = 0; i < boardOcc.length; i++) boardOcc[i] = 0;
+        for (i = 0; i < this.len; i++) {
+            boardOcc[this.buf[(this.tail + i) % SNAKE_CAP]] = 1;
+        }
+    }
+
+    headPacked() {
+        return this.buf[(this.tail + this.len - 1) % SNAKE_CAP];
     }
 
     queue(dx, dy) {
-        // forbid 180-degree reversal against the last *committed* direction
         if (this.dx + dx === 0 && this.dy + dy === 0) return;
-        this.qdx = dx; this.qdy = dy;
+        this.qdx = dx;
+        this.qdy = dy;
     }
 
     step() {
-        this.dx = this.qdx; this.dy = this.qdy;
-        const head = this.body[0];
-        const nx = head.x + this.dx;
-        const ny = head.y + this.dy;
+        this.dx = this.qdx;
+        this.dy = this.qdy;
+        const headP = this.headPacked();
+        const hx = headP % COLS;
+        const hy = (headP / COLS) | 0;
+        const nx = hx + this.dx;
+        const ny = hy + this.dy;
 
         if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) return "wall";
 
-        const bodyLen = this.body.length;
-        // Ignore the tail: it will move out of the way this tick unless we grow.
-        const limit = this.grow > 0 ? bodyLen : bodyLen - 1;
-        for (let i = 0; i < limit; i++) {
-            const s = this.body[i];
-            if (s.x === nx && s.y === ny) return "self";
+        const np = packCell(nx, ny);
+        if (this.grow > 0) {
+            if (boardOcc[np]) return "self";
+        } else {
+            const tailP = this.buf[this.tail];
+            if (np !== tailP && boardOcc[np]) return "self";
         }
 
-        this.body.unshift({ x: nx, y: ny });
-        if (this.grow > 0) this.grow = this.grow - 1;
-        else this.body.pop();
+        if (this.grow > 0) {
+            this.grow = this.grow - 1;
+            this.len = this.len + 1;
+        } else {
+            boardOcc[this.buf[this.tail]] = 0;
+            this.tail = (this.tail + 1) % SNAKE_CAP;
+        }
+
+        const hi = (this.tail + this.len - 1) % SNAKE_CAP;
+        this.buf[hi] = np;
+        boardOcc[np] = 1;
         return "ok";
     }
 
     eatOn(apple) {
-        const h = this.body[0];
-        return h.x === apple.x && h.y === apple.y;
+        const h = this.headPacked();
+        return h === packCell(apple.x, apple.y);
     }
 
     draw() {
-        const n = this.body.length;
-        for (let i = n - 1; i >= 0; i--) {
-            const s = this.body[i];
-            const px = BOARD_X0 + s.x * CELL + 1;
-            const py = BOARD_Y0 + s.y * CELL + 1;
-            const isHead = i === 0;
+        let i;
+        let idx = this.tail;
+        for (i = this.len - 1; i >= 0; i = i - 1) {
+            const p = this.buf[idx];
+            idx = idx + 1;
+            if (idx === SNAKE_CAP) idx = 0;
+            const x = p % COLS;
+            const y = (p / COLS) | 0;
+            const px = BOARD_X0 + x * CELL + 1;
+            const py = BOARD_Y0 + y * CELL + 1;
+            const isHead = i === this.len - 1;
             if (isHead) glowRect(px, py, CELL - 2, CELL - 2, HEAD_0,  HEAD_1,  SNAKE_2);
             else        glowRect(px, py, CELL - 2, CELL - 2, SNAKE_0, SNAKE_1, SNAKE_2);
         }
-        // little "eye" on the head to face the direction
-        const h = this.body[0];
-        const hx = BOARD_X0 + h.x * CELL;
-        const hy = BOARD_Y0 + h.y * CELL;
-        const cx = hx + CELL / 2 + this.dx * 2;
-        const cy = hy + CELL / 2 + this.dy * 2;
+        const hp = this.headPacked();
+        const hx = hp % COLS;
+        const hy = (hp / COLS) | 0;
+        const hpx = BOARD_X0 + hx * CELL;
+        const hpy = BOARD_Y0 + hy * CELL;
+        const cx = hpx + CELL / 2 + this.dx * 2;
+        const cy = hpy + CELL / 2 + this.dy * 2;
         Draw.rect(cx - 1, cy - 1, 2, 2, BG_DEEP);
     }
 }
@@ -398,83 +471,54 @@ class Snake {
 // ---- apple ------------------------------------------------------------------
 
 class Apple {
-    constructor() { this.x = 0; this.y = 0; this.pulse = 0; this.respawn([]); }
+    constructor() { this.x = 0; this.y = 0; this.respawn(); }
 
-    respawn(snake_body) {
-        syncBoardOcc(boardOcc, snake_body);
-        // Try random; if collides with snake, scan linearly for a free cell.
-        for (let attempts = 0; attempts < 40; attempts++) {
-            const rx = Math.floor(Math.random() * COLS);
-            const ry = Math.floor(Math.random() * ROWS);
+    respawn() {
+        let attempts;
+        for (attempts = 0; attempts < 40; attempts++) {
+            const rx = (Math.random() * COLS) | 0;
+            const ry = (Math.random() * ROWS) | 0;
             if (boardOcc[ry * COLS + rx] === 0) {
-                this.x = rx; this.y = ry; return;
+                this.x = rx;
+                this.y = ry;
+                return;
             }
         }
-        for (let y = 0; y < ROWS; y++) {
-            for (let x = 0; x < COLS; x++) {
+        let y;
+        let x;
+        for (y = 0; y < ROWS; y++) {
+            for (x = 0; x < COLS; x++) {
                 if (boardOcc[y * COLS + x] === 0) {
-                    this.x = x; this.y = y; return;
+                    this.x = x;
+                    this.y = y;
+                    return;
                 }
             }
         }
     }
 
-    draw(frame) {
-        const pulse = (frame >> 2) & 3;       // 0..3, wraps every 16 frames
+    drawBaked(appleBaked, frame) {
+        const pulse = (frame >> 2) & 3;
+        const fat = pulse === 1 || pulse === 3 ? 1 : 0;
+        const L = appleBaked[fat];
+        if (L) {
+            const sx = BOARD_X0 + this.x * CELL - 1;
+            const sy = BOARD_Y0 + this.y * CELL - 1;
+            Screen.drawLayer(L, sx, sy);
+        } else {
+            this.drawProcedural(frame);
+        }
+    }
+
+    drawProcedural(frame) {
+        const pulse = (frame >> 2) & 3;
         const px = BOARD_X0 + this.x * CELL + 1;
         const py = BOARD_Y0 + this.y * CELL + 1;
         const fat = pulse === 1 || pulse === 3 ? 1 : 0;
         glowRect(px - fat, py - fat, CELL - 2 + fat * 2, CELL - 2 + fat * 2,
                  APPLE_0, APPLE_1, APPLE_2);
-        // highlight dot
         Draw.rect(px + 1, py + 1, 2, 2, APPLE_HI);
     }
-}
-
-// ---- background -------------------------------------------------------------
-
-function drawBoardFrame(frame) {
-    // pulsating border
-    const t = (frame >> 3) & 7;
-    const pulse = t < 4 ? t : 7 - t;
-    const pr = 70  + pulse * 25;
-    const pg = 30  + pulse * 8;
-    const pb = 140 + pulse * 20;
-    const BORDER_PULSE = Color.new(pr, pg, pb);
-
-    // outer glow
-    Draw.rect(BOARD_X0 - 3, BOARD_Y0 - 3, BOARD_W + 6, BOARD_H + 6, BORDER_2);
-    Draw.rect(BOARD_X0 - 2, BOARD_Y0 - 2, BOARD_W + 4, BOARD_H + 4, BORDER_1);
-    Draw.rect(BOARD_X0 - 1, BOARD_Y0 - 1, BOARD_W + 2, BOARD_H + 2, BORDER_PULSE);
-    Draw.rect(BOARD_X0,     BOARD_Y0,     BOARD_W,     BOARD_H,     BG_DEEP);
-
-    // sparse grid dots (every 2 cells) — cheap, still reads as a grid
-    for (let y = 0; y < ROWS; y = y + 2) {
-        for (let x = 0; x < COLS; x = x + 2) {
-            Draw.rect(BOARD_X0 + x * CELL, BOARD_Y0 + y * CELL, 1, 1, GRID);
-        }
-    }
-}
-
-function drawHUD(score, best, speedLevel) {
-    // top bar
-    Draw.rect(0, 0, W, HUD_H, BG_DEEP);
-    hline(0, HUD_H, W, BORDER_2);
-    hline(0, HUD_H - 1, W, BORDER_1);
-
-    font_small.color = TEXT_DIM;
-    font_small.print("SCORE", 4, 2);
-    font_small.print("BEST",  W - 52, 2);
-    glowText(font_med, "" + score, 4,       9, ACCENT_0, ACCENT_1);
-    glowText(font_med, "" + best,  W - 52,  9, TEXT_0,   TEXT_1);
-
-    // speed pips
-    for (let i = 0; i < 5; i++) {
-        const col = i < speedLevel ? ACCENT_0 : TEXT_DIM;
-        Draw.rect(W / 2 - 12 + i * 5, 8, 3, 6, col);
-    }
-    font_small.color = TEXT_DIM;
-    font_small.print("SPD", W / 2 - 12, 1);
 }
 
 // ---- menu / title stars -----------------------------------------------------
@@ -482,18 +526,17 @@ function drawHUD(score, best, speedLevel) {
 class Star {
     constructor() { this.reset(true); }
     reset(init) {
-        this.x = Math.floor(Math.random() * W);
-        this.y = init ? Math.floor(Math.random() * H) : -2;
+        this.x = (Math.random() * W) | 0;
+        this.y = init ? (Math.random() * H) | 0 : -2;
         this.sp = 1 + Math.random() * 2;
-        this.c  = Math.floor(Math.random() * 3);
+        this.c  = (Math.random() * 3) | 0;
     }
     step() {
         this.y = this.y + this.sp;
         if (this.y > H + 2) this.reset(false);
     }
     draw() {
-        const cols = [TEXT_DIM, TEXT_1, ACCENT_1];
-        Draw.rect(this.x | 0, this.y | 0, 1, 1, cols[this.c | 0]);
+        Draw.rect(this.x | 0, this.y | 0, 1, 1, STAR_COLS[this.c | 0]);
     }
 }
 
@@ -501,20 +544,46 @@ const stars = [];
 for (let i = 0; i < 28; i++) stars.push(new Star());
 
 function drawStars() {
-    for (const s of stars) { s.step(); s.draw(); }
+    let i;
+    for (i = 0; i < stars.length; i++) {
+        stars[i].step();
+        stars[i].draw();
+    }
 }
 
 // ---- state machine ----------------------------------------------------------
 
 const STATE_MENU  = 0;
-const STATE_READY = 1;   // snake visible but stationary, waiting for 1st input
+const STATE_READY = 1;
 const STATE_PLAY  = 2;
 const STATE_PAUSE = 3;
 const STATE_OVER  = 4;
 
 const MENU_ITEMS = ["PLAY", "SPEED: ", "EXIT"];
 const SPEED_LABELS = ["SLOW", "NORMAL", "FAST", "INSANE"];
-const SPEED_TICKS  = [9, 6, 4, 2]; // frames per snake-step at 30 FPS
+const SPEED_TICKS  = [9, 6, 4, 2];
+
+/** Pre-baked apple sprite (fat 0 / 1); fallback if createLayer fails */
+let appleBaked = [null, null];
+
+function buildAppleBakedLayers() {
+    let fat;
+    for (fat = 0; fat < 2; fat = fat + 1) {
+        if (appleBaked[fat]) continue;
+        const L = Screen.createLayer(CELL + 4, CELL + 4);
+        if (!L) return;
+        appleBaked[fat] = L;
+        Screen.setLayer(L);
+        // Offscreen buffer defaults to white on MIDP; fill with the cell background
+        // (same as the board interior) or drawLayer shows a light halo.
+        Draw.rect(0, 0, CELL + 4, CELL + 4, BG_DEEP);
+        const px = 2;
+        const py = 2;
+        glowRect(px - fat, py - fat, CELL - 2 + fat * 2, CELL - 2 + fat * 2, APPLE_0, APPLE_1, APPLE_2);
+        Draw.rect(px + 1, py + 1, 2, 2, APPLE_HI);
+        Screen.setLayer(null);
+    }
+}
 
 const game = {
     state: STATE_MENU,
@@ -530,14 +599,17 @@ const game = {
 };
 
 function startGame() {
+    buildBoardBgLayer();
+    buildAppleBakedLayers();
     game.snake = new Snake();
     game.apple = new Apple();
-    game.apple.respawn(game.snake.body);
+    game.apple.respawn();
     game.score = 0;
     game.tick = 0;
     game.flashDeath = 0;
     game.state = STATE_READY;
-    while (particles.length > 0) particles.pop();
+    clearParticles();
+    hudSnap.score = -1;
 }
 
 // ---- drawing screens --------------------------------------------------------
@@ -547,12 +619,13 @@ function drawTitle(frame) {
     const hop = t < 12 ? t : 24 - t;
     const y = 38 + (hop >> 3);
 
-    glowText(font_big, "NEON",  W / 2 - 40, y,      ACCENT_0, ACCENT_1);
-    glowText(font_big, "SNAKE", W / 2 - 8,  y + 2,  APPLE_0,  APPLE_1);
+    glowText(font_big, "NEON",  centerXForText(font_big, "NEON"), y,      ACCENT_0, ACCENT_1);
+    glowText(font_big, "SNAKE", centerXForText(font_big, "SNAKE"), y + 2,  APPLE_0,  APPLE_1);
 
-    // underline accent
-    hline(W / 2 - 48, y + 22, 96, BORDER_1);
-    hline(W / 2 - 48, y + 23, 96, BORDER_0);
+    const lineW = 96;
+    const lineX = (W - lineW) / 2 | 0;
+    hline(lineX, y + 22, lineW, BORDER_1);
+    hline(lineX, y + 23, lineW, BORDER_0);
 }
 
 function drawMenu() {
@@ -561,17 +634,16 @@ function drawMenu() {
     drawTitle(game.frame);
 
     const base_y = H / 2 + 12;
-    for (let i = 0; i < MENU_ITEMS.length; i++) {
+    let i;
+    for (i = 0; i < MENU_ITEMS.length; i++) {
         const selected = i === game.menuSel;
         let label = MENU_ITEMS[i];
         if (i === 1) label = `${label}${SPEED_LABELS[game.speedIdx]}`;
 
         const y = base_y + i * 18;
         if (selected) {
-            // selection bar
             Draw.rect(W / 2 - 54, y + 1, 108, 14, BORDER_2);
             Draw.rect(W / 2 - 53, y + 2, 106, 12, BORDER_1);
-            // arrows that pulse
             const arrow = (game.frame >> 2) & 1 ? ">" : ">>";
             glowText(font_med, arrow, W / 2 - 58, y, ACCENT_0, ACCENT_1);
             glowText(font_med, label, W / 2 - 30, y, TEXT_0, ACCENT_1);
@@ -582,42 +654,46 @@ function drawMenu() {
     }
 
     font_small.color = TEXT_DIM;
-    font_small.print("ARROWS + FIRE", W / 2 - 36, H - 14);
+    font_small.print("ARROWS + FIRE", centerXForText(font_small, "ARROWS + FIRE"), H - 14);
 }
 
-function drawScene() {
-    Screen.clear(game.flashDeath > 0 ? APPLE_2 : BG);
-    drawHUD(game.score, game.best, game.speedIdx + 2);
-    drawBoardFrame(game.frame);
-    game.apple.draw(game.frame);
-    game.snake.draw();
+function drawScenePlay() {
+    const g = game;
+    const flash = g.flashDeath > 0;
+    if (flash) {
+        Screen.clear(APPLE_2);
+    } else {
+        Draw.rect(0, HUD_H, W, H - HUD_H, BG);
+    }
+    drawHudCached(g.score, g.best, g.speedIdx + 2);
+    blitBoardBg();
+    g.apple.drawBaked(appleBaked, g.frame);
+    g.snake.draw();
     drawParticles();
 }
 
 function drawPlay() {
-    drawScene();
+    drawScenePlay();
     if (game.state === STATE_PAUSE) {
         Draw.rect(0, H / 2 - 16, W, 32, BG_DEEP);
         hline(0, H / 2 - 17, W, BORDER_1);
         hline(0, H / 2 + 16, W, BORDER_1);
-        glowText(font_big, "PAUSED", W / 2 - 28, H / 2 - 8, ACCENT_0, ACCENT_1);
+        glowText(font_big, "PAUSED", centerXForText(font_big, "PAUSED"), H / 2 - 8, ACCENT_0, ACCENT_1);
     }
 }
 
 function drawReady() {
-    drawScene();
+    drawScenePlay();
     if ((game.frame >> 3) & 1) {
         font_med.color = ACCENT_0;
-        font_med.print("PRESS A DIRECTION", W / 2 - 58, H / 2 - 6);
+        font_med.print("PRESS A DIRECTION", centerXForText(font_med, "PRESS A DIRECTION"), H / 2 - 6);
     }
 }
 
 function drawOver() {
-    // Cheaper than calling drawScene() again: just render the last snake/apple
-    // frame dimly and focus the eye on the game-over box.
     Screen.clear(BG_DEEP);
-    drawHUD(game.score, game.best, game.speedIdx + 2);
-    drawBoardFrame(game.frame);
+    drawHudCached(game.score, game.best, game.speedIdx + 2);
+    blitBoardBg();
     game.snake.draw();
     drawParticles();
 
@@ -628,7 +704,7 @@ function drawOver() {
     vline(8,     boxY, 68, BORDER_1);
     vline(W - 9, boxY, 68, BORDER_1);
 
-    glowText(font_big, "GAME OVER", W / 2 - 46, boxY + 6, APPLE_0, APPLE_1);
+    glowText(font_big, "GAME OVER", centerXForText(font_big, "GAME OVER"), boxY + 6, APPLE_0, APPLE_1);
     font_med.color = TEXT_1;
     font_med.print("score",    W / 2 - 44, boxY + 28);
     font_med.print("best",     W / 2 - 44, boxY + 42);
@@ -637,112 +713,169 @@ function drawOver() {
 
     if ((game.frame >> 3) & 1) {
         font_small.color = ACCENT_0;
-        font_small.print("FIRE TO RESTART", W / 2 - 40, boxY + 56);
+        font_small.print("FIRE TO RESTART", centerXForText(font_small, "FIRE TO RESTART"), boxY + 56);
     }
 }
 
-// ---- input ------------------------------------------------------------------
+// ---- input (Pad.addListener, JUST_PRESSED; runs before the frame body) ------
 
-function readDir() {
-    if      (Pad.justPressed(Pad.UP))    return [0, -1];
-    else if (Pad.justPressed(Pad.DOWN))  return [0,  1];
-    else if (Pad.justPressed(Pad.LEFT))  return [-1, 0];
-    else if (Pad.justPressed(Pad.RIGHT)) return [ 1, 0];
-    return null;
+var padEventIds = [];
+
+function clearPadInputListeners() {
+    let k;
+    for (k = 0; k < padEventIds.length; k++) {
+        Pad.clearListener(padEventIds[k]);
+    }
+    padEventIds = [];
 }
 
-function handleMenu() {
-    if (Pad.justPressed(Pad.UP))   game.menuSel = (game.menuSel + 2) % 3;
-    if (Pad.justPressed(Pad.DOWN)) game.menuSel = (game.menuSel + 1) % 3;
-    if (game.menuSel === 1) {
-        if (Pad.justPressed(Pad.LEFT))  game.speedIdx = (game.speedIdx + 3) % 4;
-        if (Pad.justPressed(Pad.RIGHT)) game.speedIdx = (game.speedIdx + 1) % 4;
-    }
-    if (Pad.justPressed(Pad.FIRE)) {
-        if      (game.menuSel === 0) startGame();
-        else if (game.menuSel === 2) os.stopFrameLoop();
+function registerPadListener(mask, kind, fn) {
+    const id = Pad.addListener(mask, kind, fn);
+    if (id > 0) {
+        padEventIds.push(id);
     }
 }
 
-function handleReady() {
-    // wait for first direction press, then kick off actual play
-    const dir = readDir();
-    if (dir !== null) {
-        const [dx, dy] = dir;
-        game.snake.dx  = dx; game.snake.dy  = dy;
-        game.snake.qdx = dx; game.snake.qdy = dy;
+function onDirectionJust(dx, dy) {
+    const s = game.state;
+    if (s === STATE_MENU) {
+        if (dy !== 0) {
+            if (dy < 0) game.menuSel = (game.menuSel + 2) % 3;
+            else        game.menuSel = (game.menuSel + 1) % 3;
+        } else if (dx !== 0 && game.menuSel === 1) {
+            if (dx < 0) game.speedIdx = (game.speedIdx + 3) % 4;
+            else        game.speedIdx = (game.speedIdx + 1) % 4;
+        }
+        return;
+    }
+    if (s === STATE_READY) {
+        const sn = game.snake;
+        sn.dx = dx; sn.dy = dy; sn.qdx = dx; sn.qdy = dy;
         game.state = STATE_PLAY;
-        game.tick  = 0;
+        game.tick = 0;
+        return;
     }
+    if (s === STATE_PLAY) {
+        game.snake.queue(dx, dy);
+    }
+}
+
+function onFireJust() {
+    if (game.state === STATE_MENU) {
+        if (game.menuSel === 0) {
+            startGame();
+        } else if (game.menuSel === 2) {
+            clearPadInputListeners();
+            os.stopFrameLoop();
+        }
+        return;
+    }
+    if (game.state === STATE_PLAY) {
+        game.state = STATE_PAUSE;
+    } else if (game.state === STATE_PAUSE) {
+        game.state = STATE_PLAY;
+    } else if (game.state === STATE_OVER) {
+        startGame();
+    }
+}
+
+function onGameAJust() {
+    if (game.state === STATE_PLAY) {
+        game.state = STATE_PAUSE;
+    } else if (game.state === STATE_PAUSE) {
+        game.state = STATE_PLAY;
+    }
+}
+
+function onGameBJust() {
+    if (game.state === STATE_PAUSE || game.state === STATE_OVER) {
+        game.state = STATE_MENU;
+    }
+}
+
+function installPadInput() {
+    const J = Pad.JUST_PRESSED;
+    registerPadListener(Pad.UP,    J, () => { onDirectionJust(0, -1); });
+    registerPadListener(Pad.DOWN,  J, () => { onDirectionJust(0, 1);  });
+    registerPadListener(Pad.LEFT,  J, () => { onDirectionJust(-1, 0); });
+    registerPadListener(Pad.RIGHT, J, () => { onDirectionJust(1, 0);  });
+    registerPadListener(Pad.FIRE,  J, onFireJust);
+    registerPadListener(Pad.GAME_A, J, onGameAJust);
+    registerPadListener(Pad.GAME_B, J, onGameBJust);
 }
 
 function handlePlay() {
-    if (Pad.justPressed(Pad.GAME_A) || Pad.justPressed(Pad.FIRE)) {
-        game.state = STATE_PAUSE;
-        return;
-    }
-    const dir = readDir();
-    if (dir !== null) {
-        const [dx, dy] = dir;
-        game.snake.queue(dx, dy);
-    }
+    const g = game;
+    const sn = g.snake;
 
-    const tickEvery = SPEED_TICKS[game.speedIdx];
-    game.tick = game.tick + 1;
-    if (game.tick < tickEvery) return;
-    game.tick = 0;
+    const tickEvery = SPEED_TICKS[g.speedIdx];
+    g.tick = g.tick + 1;
+    if (g.tick < tickEvery) return;
+    g.tick = 0;
 
-    const r = game.snake.step();
+    const r = sn.step();
     if (r === "wall" || r === "self") {
-        game.state = STATE_OVER;
-        game.flashDeath = 4;
-        if (game.score > game.best) game.best = game.score;
-        const h = game.snake.body[0];
-        const bx = BOARD_X0 + h.x * CELL + CELL / 2;
-        const by = BOARD_Y0 + h.y * CELL + CELL / 2;
+        g.state = STATE_OVER;
+        g.flashDeath = 4;
+        if (g.score > g.best) g.best = g.score;
+        const hp = sn.headPacked();
+        unpackCellToGlobals(hp);
+        const bx = BOARD_X0 + unpackX * CELL + CELL / 2;
+        const by = BOARD_Y0 + unpackY * CELL + CELL / 2;
         spawnBurst(bx, by, SPARK_0, 24);
         spawnBurst(bx, by, SNAKE_0, 12);
         return;
     }
 
-    if (game.snake.eatOn(game.apple)) {
-        game.score = game.score + 1;
-        game.snake.grow = game.snake.grow + 1;
-        const ax = BOARD_X0 + game.apple.x * CELL + CELL / 2;
-        const ay = BOARD_Y0 + game.apple.y * CELL + CELL / 2;
+    if (sn.eatOn(g.apple)) {
+        g.score = g.score + 1;
+        sn.grow = sn.grow + 1;
+        const ap = g.apple;
+        const ax = BOARD_X0 + ap.x * CELL + CELL / 2;
+        const ay = BOARD_Y0 + ap.y * CELL + CELL / 2;
         spawnBurst(ax, ay, APPLE_0, 8);
         spawnBurst(ax, ay, SPARK_0, 6);
-        game.apple.respawn(game.snake.body);
+        ap.respawn();
     }
-}
-
-function handlePause() {
-    if (Pad.justPressed(Pad.FIRE) || Pad.justPressed(Pad.GAME_A)) {
-        game.state = STATE_PLAY;
-    }
-    if (Pad.justPressed(Pad.GAME_B)) {
-        game.state = STATE_MENU;
-    }
-}
-
-function handleOver() {
-    if (Pad.justPressed(Pad.FIRE)) startGame();
-    else if (Pad.justPressed(Pad.GAME_B)) game.state = STATE_MENU;
 }
 
 // ---- main loop --------------------------------------------------------------
 
-os.setExitHandler(() => os.stopFrameLoop());
+os.setExitHandler(() => {
+    clearPadInputListeners();
+    os.stopFrameLoop();
+});
 
+// FPS meter (~60-frame average) — remove or comment out console in release builds if needed
+const _fps = { t0: 0, acc: 0, st: STATE_MENU };
+const _logFps = () => {
+    const t = os.uptimeMillis();
+    if (_fps.t0 === 0) { _fps.t0 = t; return; }
+    _fps.acc = _fps.acc + 1;
+    if (_fps.acc < 60) return;
+    const dt = t - _fps.t0;
+    if (dt > 0 && typeof console !== "undefined" && console.log) {
+        console.log("FPS~" + ((60000 + (dt >> 1)) / dt | 0) + " st=" + _fps.st);
+    }
+    _fps.t0 = t;
+    _fps.acc = 0;
+};
+
+// Do not create layers during script load (Graphics may not be ready); only in startGame / blitBoardBg.
+installPadInput();
 os.startFrameLoop(() => {
-    game.frame = game.frame + 1;
-    if (game.flashDeath > 0) game.flashDeath = game.flashDeath - 1;
+    const g = game;
+    g.frame = g.frame + 1;
+    if (g.flashDeath > 0) g.flashDeath = g.flashDeath - 1;
     stepParticles();
 
-    const s = game.state;
-    if      (s === STATE_MENU)  { handleMenu();  drawMenu(); }
-    else if (s === STATE_READY) { handleReady(); drawReady(); }
+    const s = g.state;
+    if (s !== _fps.st) { _fps.st = s; _fps.t0 = 0; _fps.acc = 0; }
+    _logFps();
+
+    if      (s === STATE_MENU)  { drawMenu(); }
+    else if (s === STATE_READY) { drawReady(); }
     else if (s === STATE_PLAY)  { handlePlay();  drawPlay(); }
-    else if (s === STATE_PAUSE) { handlePause(); drawPlay(); }
-    else if (s === STATE_OVER)  { handleOver();  drawOver(); }
-}, 60);
+    else if (s === STATE_PAUSE) { drawPlay(); }
+    else if (s === STATE_OVER)  { drawOver(); }
+}, 30);
