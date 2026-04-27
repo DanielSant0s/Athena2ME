@@ -348,6 +348,51 @@ line`, "multi\nline", "template newline");
         truthy(true, "Screen batch/layer smoke");
     }
 
+    /** Soft-path timing + getCapabilities (plan: profile Render3D). */
+    function testRender3DBench() {
+        if (typeof Render3D === "undefined") {
+            console.log("SKIP Render3D (module missing)");
+            return;
+        }
+        var cap0 = Render3D.getCapabilities();
+        truthy(cap0 != null && typeof cap0.backend === "string", "Render3D.getCapabilities");
+        truthy(cap0.m3gPresent === 0 || cap0.m3gPresent === 1, "getCapabilities.m3gPresent");
+        var err = Render3D.setBackend("soft");
+        if (err) {
+            console.log("SKIP Render3D soft: " + err);
+            return;
+        }
+        Render3D.init();
+        var cap = Render3D.getCapabilities();
+        eq(cap.backend, "soft", "getCapabilities.backend after setBackend soft");
+        eq(cap.depthBufferOption, 1, "getCapabilities.depthBufferOption soft");
+        truthy(cap.maxTriangles >= 32 && cap.maxTriangles <= 4096, "getCapabilities.maxTriangles range");
+        var tA = os.uptimeMillis ? os.uptimeMillis() : 0;
+        var strip = new Int32Array([3]);
+        var pos = new Float32Array([-1, 0, 0, 1, 0, 0, 0, 1, 0]);
+        Render3D.setTriangleStripMesh(pos, strip, null);
+        var f;
+        for (f = 0; f < 40; f++) {
+            Render3D.begin();
+            Render3D.render();
+            Render3D.end();
+        }
+        var tB = os.uptimeMillis ? os.uptimeMillis() : 0;
+        console.log("Render3D soft profile: 40 frames solid tris ~" + (tB - tA) + "ms (uptimeMillis)");
+        err = Render3D.setTextureFilter("linear");
+        if (err) {
+            failed++;
+            console.log("FAIL setTextureFilter: " + err);
+        }
+        err = Render3D.setTextureWrap("repeat");
+        if (err) {
+            failed++;
+            console.log("FAIL setTextureWrap: " + err);
+        }
+        Render3D.setBackend("auto");
+        truthy(true, "Render3D profile + texture options");
+    }
+
     // ------------------------------------------------------------------------
 
     function runAll() {
@@ -374,6 +419,7 @@ line`, "multi\nline", "template newline");
         try { testConstantFolding(); } catch (e) { failed++; console.log("FAIL constfold: " + e.message); }
         try { testOsPool(); }         catch (e) { failed++; console.log("FAIL ospool: " + e.message); }
         try { testScreenBatchAndLayer(); } catch (e) { failed++; console.log("FAIL screen render: " + e.message); }
+        try { testRender3DBench(); } catch (e) { failed++; console.log("FAIL render3d: " + e.message); }
 
         console.log("----------");
         console.log("Tests run: " + total + ", failed: " + failed);

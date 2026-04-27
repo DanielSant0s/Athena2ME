@@ -56,6 +56,7 @@ Athena2ME is a project that seeks to facilitate and at the same time brings a co
 * WebSocket: Minimal `ws://` client (RFC 6455 framing over TCP).
 * Bluetooth: JSR-82 inquiry, `btspp://` client (`BTSocket`), optional `/lib/bluetooth.js` helper — see [Bluetooth (JSR-82)](#bluetooth-jsr-82).
 * **Sound** — BGM `Sound.Stream` and short `Sound.Sfx` with a channel pool (MMAPI; see [Sound module](#sound-module)).
+* **Render3D** — immediate 3D: **M3G** (JSR-184) when available, else **software**; shared API includes `getBackend` / `getCapabilities` / `setBackend` / `init` / perspective & camera / `setTexture` + `setTexCoords` + `setTextureFilter` / `setTextureWrap` / mesh (`setTriangleStripMesh`, `setIndexedMesh`) / `setDepthBuffer` (soft only) / `setMaxTriangles` (soft) / matrix stack / `begin` · `render` · `end`, plus **M3G-only** `load(.m3g)` and `worldAnimate` / `m3gNode*` / `m3gAnim*` (see [Render3D (JSR-184)](#render3d-jsr-184); helpers [res/lib/mesh3d.js](res/lib/mesh3d.js), e.g. [res/lib/cube_strips.js](res/lib/cube_strips.js)).
 * **Threads & sync** — `os.spawn`, `os.Thread.start`, `os.Mutex`, `os.Semaphore`, `os.AtomicInt` (single shared JS runtime; see [Threads and concurrency](#threads-and-concurrency)).
 
 New types are always being added and this list can grow a lot over time, so stay tuned.
@@ -87,11 +88,11 @@ New types are always being added and this list can grow a lot over time, so stay
 - [x] OS file I/O — `os.open` / `os.close` / `os.read` / `os.write` / `os.seek` / `os.fstat` for `file://` paths (see [os module](#os-module))
 - [x] OS / device info — `os.platform`, `os.getSystemInfo`, `os.getProperty`, `os.getStorageStats` (not a full native “platform SDK”; screen size remains `Screen.width` / `Screen.height`)
 - [x] Thread functions (`os.spawn`, `os.Thread.start`, `os.Mutex`, `os.Semaphore`, `os.AtomicInt`; serialized JS runtime — see [Threads and concurrency](#threads-and-concurrency))
-- [ ] 3D Render functions
+- [x] 3D render (`Render3D`: M3G / JSR-184 when available, **software** fallback; optional JSR-184 in build for M3G on device)
 - [x] HTTP/HTTPS, TCP/UDP sockets, WebSocket (`ws://`) — see [Request / Socket / WebSocket](#request-module) (limits: `wss://`, `SOCK_RAW`)
 - [ ] Archive (zip, 7zip, tar, rar) system
 - [x] Add float support
-- [x] Add ArrayBuffer support (`ArrayBuffer`, `Uint8Array`, `Int32Array`, `DataView` subset — see standard library list)
+- [x] Add ArrayBuffer support (`ArrayBuffer`, `Uint8Array`, `Int32Array`, `Float32Array`, `DataView` subset — see standard library list)
 - [ ] Block-scoped `let`/`const` (currently hoisted like `var`)
 - [x] **`Promise`** (`then` / `catch`, `Promise.resolve` / `Promise.reject`, `new Promise(executor)`, thenable assimilation); microtasks drain on `os.sleep`, `os.flushPromises`, `os.startFrameLoop`, and after the main script finishes
 - [x] Constant folding in the ES6 pre-processor (literal/const-folding in `Es6Preproc` before tokenize, incl. `Math`/`Number` constants; partial `const` propagation)
@@ -104,7 +105,7 @@ New types are always being added and this list can grow a lot over time, so stay
 * [WTK](https://www.oracle.com/java/technologies/sun-java-wireless-toolkit.html) (or your Java ME 3 / MSA SDK toolchain, depending on how you import this project)
 * [RockScript](https://code.google.com/archive/p/javascript4me/)
 
-`project.properties` in this tree targets **MSA** with optional **JSR-239** and **SATSA-JCRMI** flags; adjust the platform line for your WTK or SDK profile.
+`project.properties` in this tree targets **MSA** with optional **JSR-184** (M3G / `Render3D`), **JSR-239**, and **SATSA-JCRMI** flags; adjust the platform line for your WTK or SDK profile.
 
 ## Coding
 
@@ -430,7 +431,8 @@ and are resolved with the fast-dispatch path described above.
 * **Uint8Array** — `length`, `buffer`, `byteOffset`, `byteLength`, `subarray`,
   numeric index `u[i]` (read/write 0–255), `for...of` via index desugaring
 * **Int32Array** — `length`, `byteLength`, `buffer`, `byteOffset`, `BYTES_PER_ELEMENT` (= 4),
-  `subarray`, numeric index `a[i]` (32-bit signed, **little-endian** in the underlying `ArrayBuffer`)
+  `subarray`, numeric index `a[i]` (32-bit signed, **little-endian** in the underlying `ArrayBuffer`); `new Int32Array(jsArray)` copies element-wise from a JavaScript **Array**
+* **Float32Array** — same fields as `Int32Array` (also `BYTES_PER_ELEMENT` 4), IEEE-754 floats **little-endian**; `new Float32Array(jsArray)` copies from a JavaScript **Array**; `Render3D.setTriangleStripMesh` and **`Render3D.setObjectMatrix`** read typed views without per-element `Rv` access
 * **DataView** — `getUint8`/`setUint8`, `getUint16`/`setUint16`, `getInt32`/`setInt32`
   with optional `littleEndian`
 * **Map** / **Set** / **Symbol** — constructors, `size`, `get`/`set`/`has`/
@@ -441,7 +443,7 @@ and are resolved with the fast-dispatch path described above.
 
 **How to run it**
 
-Athena is basically a JavaScript loader, so it loads .js files inside .jar file (which is a zip file). It runs `main.js` by default. Other scripts in the JAR can be pulled in at runtime with **`require`** (module `exports`) or **`loadScript`** (global execution). To run the regression suite, rename [`res/tests.js`](res/tests.js) to `main.js` (or paste its contents on top of your main).
+Athena is basically a JavaScript loader, so it loads .js files inside .jar file (which is a zip file). It runs `main.js` by default. Other scripts in the JAR can be pulled in at runtime with **`require`** (module `exports`) or **`loadScript`** (global execution). To run the regression suite, rename [`res/tests.js`](res/tests.js) to `main.js` (or paste its contents on top of your main). That suite includes a **`Render3D` soft-path smoke + timing** (`testRender3DBench`) when the module is bound.
 
 ## Functions, classes and consts
 
@@ -781,6 +783,54 @@ Methods:
   **Properties:** `volume` **0..100** (default 100; combined with master), `pan` and `pitch` **-100..100** — `pitch` is applied if `PitchControl` exists; **pan** is reserved (many MMAPI builds have no panned sample mix).
 
 SFX is loaded into memory **once** per `Sfx` object; each `play()` creates a new `Player` for that **channel** and releases the slot when the clip **ends** (`END_OF_MEDIA`). Stopping and closing all SFX/Stream `Player` instances runs when the MIDlet is destroyed (`destroyApp`).
+
+### Render3D (JSR-184)
+
+**3D** — `Render3D` picks **`m3g`** (JSR-184) when `Graphics3D` is in the runtime; otherwise **`soft`** (CPU raster: triangle strips or indexed lists; **no** `.m3g` **Loader** in software — use immediate meshes or a separate art path). For M3G, enable JSR-184 in the WTK / MSA. **`Render3D.load`(*path.m3g*)** only applies when the backend is **`m3g`** (returns a string error in software mode).
+
+**Software raster (implementation)** — **Untextured** triangles use **`Graphics.fillTriangle`** via [`AthenaCanvas.drawTriangle`](src/AthenaCanvas.java) (fast). **Textured** triangles rasterize per scanline into a buffer and call **`Graphics.drawRGB`** through [`AthenaCanvas.drawRgb`](src/AthenaCanvas.java) (fewer native calls than one `fillRect` per pixel). UVs use perspective-correct interpolation; sampling is **bilinear** by default on **soft** (**`setTextureFilter`** / **`setTextureWrap`** adjust sampling and wrap/clamp).
+
+**Backend parity** — New `Render3D` APIs are implemented on **both** `m3g` and `soft` **unless** called out (e.g. **`setDepthBuffer`**, **`setMaxTriangles`**, and **`getCapabilities`** field **`depthBufferOption`** are **soft**-centric; **`load`**, **`worldAnimate`**, and **`m3g*`** are **M3G-only**). **Texture mapping** — call **`setTexture`(*jar path*)**, then **`setTexCoords`(*2 floats per vertex*)**, then **`setTriangleStripMesh` / `setIndexedMesh`** (same for both backends). Both backends use the JAR image resource path (e.g. `"/tex.png"`). If the image fails to load, drawing falls back to **flat / Gouraud** shading (no texture). **Texture alpha** — **soft** samples **ARGB** from `Image.getRGB` and blends with **`drawRGB(..., processAlpha true)`**; the software Z-buffer is updated only when texel alpha is **≥ 128** (approximate cut-out; overlapping transparent surfaces can still look wrong without **back-to-front** ordering). **M3G** uses **`CompositingMode.ALPHA`** on the immediate mesh when a texture is present, and tries **`Image2D.RGBA`** first when loading the image. The **`soft`** default triangle budget is **1024** (reallocate up to **4096** with `setMaxTriangles`); M3G has no per-frame triangle cap in this API. **`Render3D.setDepthBuffer(true)`** (software only) enables a per-pixel **depth buffer** and correct intersection for opaque geometry at the cost of **W×H** `int` plus extra fill work; M3G ignores it (hardware Z already). If depth is off, the software path uses **painter’s sort** (triangle centroid), which can be wrong for intersecting surfaces.
+
+**`Float32Array` UVs** — `setTexCoords` accepts **2×N** floats (a `Float32Array` of UV pairs, or a JS array with an even length ≥ 2). Position arrays still require a multiple of 3 floats in `setTriangleStripMesh` / `setIndexedMesh`.
+
+* **`Render3D.getBackend()`** — string `"m3g"` or `"soft"` (after `init` it matches the active backend; before `init`, the predicted value: M3G if the API is present, else software).
+* **`Render3D.getCapabilities()`** — object: **`backend`** (string, active or predicted), **`m3gPresent`** (**1** / **0**, whether JSR-184 `Graphics3D` is available), **`maxTriangles`** (after `init` on **`soft`**: budget **32**..**4096**; on **`m3g`**: **-1**; if **`r3d`** is not created yet but the predicted backend is **`soft`**, **1024** is reported; otherwise **-1**), **`depthBufferOption`** (**1** when **`backend` === `"soft"`** so `setDepthBuffer` applies, else **0**).
+* **`Render3D.setTextureFilter`("nearest" \| "linear")** — **both** backends: **nearest** vs **linear** sampling (software default **linear** / bilinear; M3G immediate mesh default was **nearest**, unchanged if you never call this).
+* **`Render3D.setTextureWrap`("repeat" \| "clamp")** — **both** backends: **repeat** (wrap UVs) vs **clamp** to **[0,1]**.
+* **`Render3D.setBackend`("m3g" \| "soft" \| "auto")** — choose the engine before (or during) the app: `"soft"` forces the raster path, `"m3g"` requires M3G in the runtime, `"auto"` / `"default"` restores auto-detect. Releases current 3D state (`end`); the next `init` / `begin` re-creates. Returns an error (string) if `m3g` is requested without the API.
+* **`Render3D.init()`** — one-time state: default 55° FOV, `zNear` / `zFar` 0.1 / 200, clear color black, camera at (0, 0, **5**), default directional “global” light and material colours, `setMaxTriangles(1024)` and back-face culling on (both backends where applicable). **No default geometry** in Java: call **`Render3D.setTriangleStripMesh(...)`** or **`Render3D.setIndexedMesh(...)`** or **`Render3D.load`(*path.m3g*)** before the first `render`.
+* **`Render3D.setPerspective(fov, near, far)`** — vertical FOV in **degrees**; `near` / `far` clip planes. Aspect uses the current draw target: main canvas or the active `Screen` layer.
+* **`Render3D.setBackground(r, g, b)`** — each **0..255** (opaque clear).
+* **`Render3D.setCamera(x, y, z)`** — eye position in world space; cancels a previous `setLookAt` on the same backend.
+* **`Render3D.setLookAt(eyeX, eyeY, eyeZ, targetX, targetY, targetZ, upX, upY, upZ)`** — build a look-at view from `eye` toward `target` with `up` (same conventions as common graphics samples). M3G `Graphics3D` camera; software renderer uses the same basis for projection. Calling **`setCamera`** switches back to the simple eye-offset view (default forward **−Z** in world, **+X** / **+Y** right and up in software).
+* **`Render3D.setMaxTriangles(n)`** — software backend only: reserve internal buffers (clamped **32**..**4096**); reallocation when the value changes. **No effect** on the M3G path.
+* **`Render3D.setBackfaceCulling(true \| false)`** — **m3g:** `PolygonMode` cull back or none. **soft:** cull back-facing triangles in software before the painter sort. Default **true** after `init`.
+* **`Render3D.setGlobalLight(dx, dy, dz)`** — one directional light in **world** space (not normalized; zero falls back to (0,1,0)). M3G updates the directional `Light` each frame. **soft:** N·L against vertex normals; combined with `setMaterialAmbient` / `setMaterialDiffuse`.
+* **`Render3D.setMaterialAmbient(r, g, b)`** / **`setMaterialDiffuse(r, g, b)`** — **0..255** per channel; on **m3g** (immediate mesh) these feed `Material` colours; on **soft** they scale the same lighting model. Defaults match the previous M3G-like appearance after `init`.
+* **`Render3D.setTexture`(*path*)** — JAR resource path for a **Texture2D** (M3G) or **`Image`/`getRGB`** (soft). Call **`setTexCoords`**, then **`setTriangleStripMesh` / `setIndexedMesh`** in that order. If loading fails, the mesh is still drawn without a texture.
+* **`Render3D.setTexCoords`(*uvs*)** — per-vertex (u, v): **`Float32Array` with 2×N floats** (N = vertex count) or normal array with an **even** length **≥ 2** (must equal **2 ×** vertex count after the mesh is set). Paired with `setTexture` when texturing.
+* **`Render3D.setDepthBuffer`(*true* \| *false*)** — **Software backend only** (M3G: no-op): enable a **Z-buffer** for the current draw target size (allocated per frame as needed). **Off** (default) uses back-face cull + **depth sort by triangle** (fast, not correct for all overlaps).
+* **`Render3D.setTriangleStripMesh`(*positions*, *stripLens*[, *normals*])** — `positions` and optional `normals` are **arrays** of numbers (3 floats per vertex) or **`Float32Array`**. `stripLens` is **`Int32Array`** or array of strip lengths. Replaces the **immediate** mesh; clears a loaded `World` if any. Clears any **index** mode mesh.
+* **`Render3D.setIndexedMesh`(*positions*, *indices*[, *normals*])** — `indices` is a list of **triangle** indices, length multiple of **3**; each index refers to a vertex in `positions` (3 floats per vertex). Optional `normals` per unique vertex, same float count as `positions`. The runtime expands to M3G strips and uses the same path in **soft** as a triangle list. Clears strip mesh mode and loaded world when applicable.
+* **`Render3D.pushObjectMatrix()`** / **`popObjectMatrix()`** — save / restore the current object 4×4 (stack depth **8** on both backends). **Multiple `render` calls** between the same `begin` and `end` are supported: e.g. `setObjectMatrix` → `render` → change matrix or push/pop → `render` again.
+* **`Render3D.clearMesh()`** — drop immediate strip/index mesh, pending UVs, and texture path; does not unload a **loaded** `World` from `load` (use a new `load` to replace the scene).
+* **`Render3D.setMeshRotation(degrees)`** — Y-axis spin for the **immediate** mesh (with `setObjectMatrix`, rotation is applied after your matrix). Ignored when a **loaded** `World` is active.
+* **`Render3D.setObjectMatrix`(*array16*)** — 16 `number`s, column-major 4×4, or 16 elements in a **`Float32Array`**; **`Render3D.setObjectMatrixIdentity()`** resets the mesh transform to identity.
+* **`Render3D.load`(*path*)** — `Loader.load` on a JAR resource (e.g. `"/model.m3g"`). Resolves a **World** or wraps roots in a new **World** with a new **Camera**; on failure returns a **string** error, on success **null**. Clears the current **immediate** geometry.
+* **`Render3D.getSceneInfo()`** — short one-line string (backend, loaded world, mesh/cull), for logging.
+* **`Render3D.worldAnimate`(*timeMs*)** — when the backend is **m3g** and a scene was loaded with **`load`**, calls **`World.animate(timeMs)`** (JSR-184) if supported. **no-op** for immediate-only meshes or **soft** backend.
+* **M3G loaded scene (all require `load` + `m3g` backend; return a string error or `null` on success)**  
+  * **`Render3D.m3gNodeTranslate`(*userId*, *dx*, *dy*, *dz*)** — `Node.translate`.  
+  * **`Render3D.m3gNodeSetTranslation`(*userId*, *x*, *y*, *z*)** — `Node.setTranslation`.  
+  * **`Render3D.m3gNodeGetTranslation`(*userId*)** — `float[3]` or **`null`**.  
+  * **`Render3D.m3gNodeSetOrientation`(*userId*, *angleDeg*, *ax*, *ay*, *az*)** — `Node.setOrientation`.  
+  * **`Render3D.m3gAnimSetActiveInterval`(*userId*, *startMs*, *endMs*)** — `AnimationController.setActiveInterval`.  
+  * **`Render3D.m3gAnimSetPosition`(*userId*, *sequence*, *timeMs*)** — `AnimationController.setPosition`.  
+  * **`Render3D.m3gAnimSetSpeed`(*userId*, *speed*)** — `AnimationController.setSpeed` (sequence **0**).  
+  * **`Render3D.m3gKeyframeDurationTrack0`(*userId*)** — duration ms of keyframe track **0** for a **`Node`**, or **-1**.
+* **Frame (same thread as 2D / `os.startFrameLoop`):** `Render3D.begin()` (bind, viewport, clear, camera, lights) → `Render3D.render()` (one or more draws of the current mesh) → `Render3D.end()` (release) → e.g. **`Screen.update()`**. Draw 2D **after** `Render3D.end()` for a HUD, or keep 3D only and clear 2D first as needed.
+* **Helpers** — [res/lib/mesh3d.js](res/lib/mesh3d.js) (optional): `indexBufferToStrips(vertices, faceIndices)`, `computeIndexedNormals(vertices, indices)`, and `uvsToExpandedIndexed(uvs, indices)` for indexed draw paths.
 
 ## CI and AthenaStudio API manifest
 

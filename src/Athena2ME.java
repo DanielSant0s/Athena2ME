@@ -37,6 +37,13 @@ public class Athena2ME extends MIDlet implements CommandListener {
     /** Cache for {@code require()}: canonical resource path → module {@code exports} object. */
     private final Hashtable moduleCache = new Hashtable();
 
+    private Render3DBackend r3d;
+    /** {@code null} = auto-detect; {@code "soft"} / {@code "m3g"} = forced (see {@code Render3D.setBackend} in JS). */
+    private String r3dMode;
+    /** Column-major 4x4 transform from JS; no {@code javax.microedition.m3g.Transform} on the MIDlet class
+     * (avoids loading M3G types on devices without JSR-184 at startup). */
+    private final float[] m3gUserMatrix16 = new float[16];
+
     /** Monotonic id for {@code Pad.addListener}. */
     private int padListenerNextId = 1;
     private final Vector padListeners = new Vector();
@@ -104,6 +111,175 @@ public class Athena2ME extends MIDlet implements CommandListener {
         Rv n = v.toNum();
         if (n == Rv._NaN) return 0;
         return (int) Rv.numValue(n);
+    }
+
+    private static float jsFloat(Rv v) {
+        if (v == null || v == Rv._undefined) return 0.0f;
+        Rv n = v.toNum();
+        if (n == Rv._NaN) return 0.0f;
+        return (float) Rv.numValue(n);
+    }
+
+    /** Mirrors package-private {@code Rv.ARRAY} for {@code type} checks. */
+    private static final int RV_T_ARRAY = Rv.OBJECT + 0x0A;
+
+    private static boolean m3gMatrix16FromArray(Rv arr, float[] out16) {
+        if (arr == null || out16 == null || out16.length < 16) {
+            return false;
+        }
+        if (arr.type == Rv.FLOAT32_ARRAY && arr.opaque instanceof Rv.Float32View) {
+            Rv.Float32View v = (Rv.Float32View) arr.opaque;
+            if ((v.byteLength >> 2) != 16) {
+                return false;
+            }
+            try {
+                for (int i = 0, p = v.offset; i < 16; i++, p += 4) {
+                    out16[i] = Float.intBitsToFloat(int32le(v.data, p));
+                }
+                return true;
+            } catch (Throwable e) {
+                return false;
+            }
+        }
+        if (arr.type != RV_T_ARRAY || arr.num < 16) {
+            return false;
+        }
+        try {
+            for (int i = 0; i < 16; i++) {
+                Rv el = arr.get(String.valueOf(i));
+                out16[i] = (float) Rv.numValue(el.toNum());
+            }
+            return true;
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    private static int int32le(byte[] b, int o) {
+        if (b == null || o < 0 || o + 4 > b.length) {
+            return 0;
+        }
+        return (b[o] & 0xff) | ((b[o + 1] & 0xff) << 8) | ((b[o + 2] & 0xff) << 16) | (b[o + 3] << 24);
+    }
+
+    private void ensureR3D() {
+        if (r3d != null) {
+            return;
+        }
+        if (r3dMode == null) {
+            r3d = Render3DFactory.create();
+        } else {
+            r3d = Render3DFactory.createForId(r3dMode);
+        }
+        if (r3d == null) {
+            r3d = new Render3DSoftBackend();
+        }
+    }
+
+    private String render3dPredictedId() {
+        if (r3dMode != null) {
+            if ("soft".equals(r3dMode)) {
+                return "soft";
+            }
+            if ("m3g".equals(r3dMode)) {
+                return AthenaM3G.isApiAvailable() ? "m3g" : "soft";
+            }
+        }
+        return AthenaM3G.isApiAvailable() ? "m3g" : "soft";
+    }
+
+    /** Float positions; length must be a multiple of 3 (xyz triples). */
+    private static float[] floatsFromRArray(Rv a) {
+        if (a == null) {
+            return null;
+        }
+        if (a.type == Rv.FLOAT32_ARRAY && a.opaque instanceof Rv.Float32View) {
+            Rv.Float32View v = (Rv.Float32View) a.opaque;
+            int n = v.byteLength >> 2;
+            if (n < 9 || (n % 3) != 0) {
+                return null;
+            }
+            float[] o = new float[n];
+            for (int i = 0, p = v.offset; i < n; i++, p += 4) {
+                o[i] = Float.intBitsToFloat(int32le(v.data, p));
+            }
+            return o;
+        }
+        if (a.type != RV_T_ARRAY) {
+            return null;
+        }
+        int n = a.num;
+        if (n < 9 || (n % 3) != 0) {
+            return null;
+        }
+        float[] o = new float[n];
+        for (int i = 0; i < n; i++) {
+            Rv e = a.get(String.valueOf(i));
+            o[i] = (float) Rv.numValue((e == null) ? Rv._NaN : e.toNum());
+        }
+        return o;
+    }
+
+    /** Per-vertex (u,v) pairs: length {@code 2N} for N vertices, even and at least 2. */
+    private static float[] uvFloatsFromRArray(Rv a) {
+        if (a == null) {
+            return null;
+        }
+        if (a.type == Rv.FLOAT32_ARRAY && a.opaque instanceof Rv.Float32View) {
+            Rv.Float32View v = (Rv.Float32View) a.opaque;
+            int n = v.byteLength >> 2;
+            if (n < 2 || (n & 1) != 0) {
+                return null;
+            }
+            float[] o = new float[n];
+            for (int i = 0, p = v.offset; i < n; i++, p += 4) {
+                o[i] = Float.intBitsToFloat(int32le(v.data, p));
+            }
+            return o;
+        }
+        if (a.type != RV_T_ARRAY) {
+            return null;
+        }
+        int n = a.num;
+        if (n < 2 || (n & 1) != 0) {
+            return null;
+        }
+        float[] o = new float[n];
+        for (int i = 0; i < n; i++) {
+            Rv e = a.get(String.valueOf(i));
+            o[i] = (float) Rv.numValue((e == null) ? Rv._NaN : e.toNum());
+        }
+        return o;
+    }
+
+    /** Strip lengths or other integers; accepts a JS array or Int32Array. */
+    private static int[] intsFromRArray(Rv a) {
+        if (a == null) {
+            return null;
+        }
+        if (a.type == Rv.INT32_ARRAY && a.opaque instanceof Rv.Int32View) {
+            Rv.Int32View v = (Rv.Int32View) a.opaque;
+            int w = v.byteLength >> 2;
+            if (w <= 0) {
+                return null;
+            }
+            int[] o = new int[w];
+            for (int i = 0, p = v.offset; i < w; i++, p += 4) {
+                o[i] = int32le(v.data, p);
+            }
+            return o;
+        }
+        if (a.type != RV_T_ARRAY) {
+            return null;
+        }
+        if (a.num <= 0) {
+            return null;
+        }
+        int[] o = new int[a.num];
+        for (int i = 0; i < a.num; i++) {
+            o[i] = jsInt(a.get(String.valueOf(i)));
+        }
+        return o;
     }
 
     /** {@link AthenaCanvas.Layer} wrapper exposed as JS object ({@code opaque}). */
@@ -1173,6 +1349,576 @@ public class Athena2ME extends MIDlet implements CommandListener {
         })));
 
         ri.addToObject(callObj, "Screen", _Screen);
+
+        Rv _Render3D = ri.newModule();
+        ri.addToObject(_Render3D, "getBackend",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.getBackend", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                if (r3d != null) {
+                    return new Rv(r3d.getId());
+                }
+                return new Rv(render3dPredictedId());
+            }
+        })));
+        ri.addToObject(_Render3D, "getCapabilities",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.getCapabilities", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                String bid = r3d != null ? r3d.getId() : render3dPredictedId();
+                Rv o = ri.newModule();
+                ri.addToObject(o, "backend", new Rv(bid));
+                ri.addToObject(o, "m3gPresent", new Rv(AthenaM3G.isApiAvailable() ? 1 : 0));
+                int mt = -1;
+                if (r3d != null) {
+                    mt = r3d.getEffectiveMaxTriangles();
+                } else if ("soft".equals(bid)) {
+                    mt = 1024;
+                }
+                ri.addToObject(o, "maxTriangles", new Rv(mt));
+                ri.addToObject(o, "depthBufferOption", new Rv("soft".equals(bid) ? 1 : 0));
+                return o;
+            }
+        })));
+        ri.addToObject(_Render3D, "setTextureFilter",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setTextureFilter", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.init(canvas);
+                Rv a0 = Rv.argAt(args, start, num, 0);
+                if (a0 == null || a0 == Rv._undefined) {
+                    return Rv.error("setTextureFilter: \"nearest\" | \"linear\"");
+                }
+                String s = a0.toStr().str;
+                if (s == null) {
+                    return Rv.error("setTextureFilter: string");
+                }
+                s = s.trim().toLowerCase();
+                if ("nearest".equals(s)) {
+                    r3d.setTextureFilterNearest(true);
+                } else if ("linear".equals(s)) {
+                    r3d.setTextureFilterNearest(false);
+                } else {
+                    return Rv.error("setTextureFilter: nearest | linear");
+                }
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "setTextureWrap",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setTextureWrap", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.init(canvas);
+                Rv a0 = Rv.argAt(args, start, num, 0);
+                if (a0 == null || a0 == Rv._undefined) {
+                    return Rv.error("setTextureWrap: \"repeat\" | \"clamp\"");
+                }
+                String s = a0.toStr().str;
+                if (s == null) {
+                    return Rv.error("setTextureWrap: string");
+                }
+                s = s.trim().toLowerCase();
+                if ("repeat".equals(s)) {
+                    r3d.setTextureWrapRepeat(true);
+                } else if ("clamp".equals(s)) {
+                    r3d.setTextureWrapRepeat(false);
+                } else {
+                    return Rv.error("setTextureWrap: repeat | clamp");
+                }
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "setBackend",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setBackend", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv a0 = Rv.argAt(args, start, num, 0);
+                if (a0 == null || a0 == Rv._undefined) {
+                    return Rv.error("setBackend: pass \"m3g\" | \"soft\" | \"auto\"");
+                }
+                String id = a0.toStr().str;
+                if (id == null) {
+                    return Rv.error("setBackend: invalid string");
+                }
+                String li = id.trim().toLowerCase();
+                String newMode;
+                if ("auto".equals(li) || "default".equals(li)) {
+                    newMode = null;
+                } else if ("soft".equals(li) || "software".equals(li)) {
+                    newMode = "soft";
+                } else if ("m3g".equals(li) || "hw".equals(li)) {
+                    if (!AthenaM3G.isApiAvailable()) {
+                        return Rv.error("setBackend: m3g not available; use soft or auto");
+                    }
+                    newMode = "m3g";
+                } else {
+                    return Rv.error("setBackend: m3g | soft | auto");
+                }
+                if (r3d != null) {
+                    try {
+                        r3d.end();
+                    } catch (Throwable t) { }
+                }
+                r3d = null;
+                r3dMode = newMode;
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "init",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.init", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.init(canvas);
+                int tw = canvas.getTargetWidth3D();
+                int th = canvas.getTargetHeight3D();
+                float aspect = th > 0 ? ((float) tw) / th : 1.0f;
+                r3d.setPerspectiveFromViewport(aspect, 55.0f, 0.1f, 200.0f);
+                r3d.setBackgroundColor(0, 0, 0);
+                r3d.setCameraPosition(0.0f, 0.0f, 5.0f);
+                r3d.setGlobalLightDirection(0.0f, 1.0f, 0.0f);
+                r3d.setMaterialAmbient(136, 136, 204);
+                r3d.setMaterialDiffuse(255, 255, 255);
+                r3d.setMaxTriangles(1024);
+                r3d.setBackfaceCulling(true);
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "setPerspective",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setPerspective", new NativeFunctionFast() {
+            public final int length = 3;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.init(canvas);
+                int tw = canvas.getTargetWidth3D();
+                int th = canvas.getTargetHeight3D();
+                float aspect = th > 0 ? ((float) tw) / th : 1.0f;
+                float fov = num > 0 ? jsFloat(Rv.argAt(args, start, num, 0)) : 60.0f;
+                float n = num > 1 ? jsFloat(Rv.argAt(args, start, num, 1)) : 0.1f;
+                float f = num > 2 ? jsFloat(Rv.argAt(args, start, num, 2)) : 200.0f;
+                r3d.setPerspectiveFromViewport(aspect, fov, n, f);
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "setBackground",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setBackground", new NativeFunctionFast() {
+            public final int length = 3;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.init(canvas);
+                r3d.setBackgroundColor(
+                        jsInt(Rv.argAt(args, start, num, 0)),
+                        jsInt(Rv.argAt(args, start, num, 1)),
+                        jsInt(Rv.argAt(args, start, num, 2)));
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "setCamera",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setCamera", new NativeFunctionFast() {
+            public final int length = 3;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.init(canvas);
+                r3d.setCameraPosition(
+                        jsFloat(Rv.argAt(args, start, num, 0)),
+                        jsFloat(Rv.argAt(args, start, num, 1)),
+                        jsFloat(Rv.argAt(args, start, num, 2)));
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "setLookAt",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setLookAt", new NativeFunctionFast() {
+            public final int length = 9;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.init(canvas);
+                r3d.setLookAt(
+                        jsFloat(Rv.argAt(args, start, num, 0)),
+                        jsFloat(Rv.argAt(args, start, num, 1)),
+                        jsFloat(Rv.argAt(args, start, num, 2)),
+                        jsFloat(Rv.argAt(args, start, num, 3)),
+                        jsFloat(Rv.argAt(args, start, num, 4)),
+                        jsFloat(Rv.argAt(args, start, num, 5)),
+                        jsFloat(Rv.argAt(args, start, num, 6)),
+                        jsFloat(Rv.argAt(args, start, num, 7)),
+                        jsFloat(Rv.argAt(args, start, num, 8)));
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "setMaxTriangles",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setMaxTriangles", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.setMaxTriangles(jsInt(Rv.argAt(args, start, num, 0)));
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "setDepthBuffer",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setDepthBuffer", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.init(canvas);
+                Rv a0 = Rv.argAt(args, start, num, 0);
+                r3d.setDepthBuffer(a0 != Rv._false && a0 != Rv._null && a0 != Rv._undefined);
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "setBackfaceCulling",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setBackfaceCulling", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.init(canvas);
+                Rv a0 = Rv.argAt(args, start, num, 0);
+                r3d.setBackfaceCulling(a0 != Rv._false && a0 != Rv._null && a0 != Rv._undefined);
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "setGlobalLight",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setGlobalLight", new NativeFunctionFast() {
+            public final int length = 3;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.init(canvas);
+                r3d.setGlobalLightDirection(
+                        jsFloat(Rv.argAt(args, start, num, 0)),
+                        jsFloat(Rv.argAt(args, start, num, 1)),
+                        jsFloat(Rv.argAt(args, start, num, 2)));
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "setMaterialAmbient",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setMaterialAmbient", new NativeFunctionFast() {
+            public final int length = 3;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.init(canvas);
+                r3d.setMaterialAmbient(
+                        jsInt(Rv.argAt(args, start, num, 0)),
+                        jsInt(Rv.argAt(args, start, num, 1)),
+                        jsInt(Rv.argAt(args, start, num, 2)));
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "setMaterialDiffuse",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setMaterialDiffuse", new NativeFunctionFast() {
+            public final int length = 3;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.init(canvas);
+                r3d.setMaterialDiffuse(
+                        jsInt(Rv.argAt(args, start, num, 0)),
+                        jsInt(Rv.argAt(args, start, num, 1)),
+                        jsInt(Rv.argAt(args, start, num, 2)));
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "setTexture",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setTexture", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.init(canvas);
+                Rv a0 = Rv.argAt(args, start, num, 0);
+                r3d.setTexture2DPath(a0 != null && a0 != Rv._undefined ? a0.toStr().str : null);
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "setTexCoords",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setTexCoords", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv a0 = Rv.argAt(args, start, num, 0);
+                if (a0 == null) {
+                    return Rv._undefined;
+                }
+                float[] uv = uvFloatsFromRArray(a0);
+                ensureR3D();
+                r3d.init(canvas);
+                r3d.setTexCoords(uv);
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "setIndexedMesh",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setIndexedMesh", new NativeFunctionFast() {
+            public final int length = 3;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv a0 = Rv.argAt(args, start, num, 0);
+                Rv a1 = Rv.argAt(args, start, num, 1);
+                if (a0 == null || a1 == null) {
+                    return Rv.error("setIndexedMesh: need positions and indices");
+                }
+                float[] pos = floatsFromRArray(a0);
+                int[] idx = intsFromRArray(a1);
+                if (pos == null || idx == null) {
+                    return Rv.error("setIndexedMesh: invalid positions or indices");
+                }
+                Rv a2 = Rv.argAt(args, start, num, 2);
+                float[] nrm = (num > 2 && a2 != null && a2 != Rv._undefined && a2 != Rv._null)
+                        ? floatsFromRArray(a2) : null;
+                if (nrm != null && nrm.length != pos.length) {
+                    return Rv.error("setIndexedMesh: normals length must match positions");
+                }
+                ensureR3D();
+                r3d.init(canvas);
+                r3d.setIndexedTriangleMesh(pos, idx, nrm);
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "pushObjectMatrix",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.pushObjectMatrix", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                if (r3d != null) {
+                    r3d.pushObjectMatrix();
+                }
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "popObjectMatrix",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.popObjectMatrix", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                if (r3d != null) {
+                    r3d.popObjectMatrix();
+                }
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "getSceneInfo",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.getSceneInfo", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                String t = r3d.getSceneInfo();
+                return new Rv(t != null ? t : "");
+            }
+        })));
+        ri.addToObject(_Render3D, "worldAnimate",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.worldAnimate", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                if (r3d == null) {
+                    return Rv._undefined;
+                }
+                r3d.worldAnimate(jsInt(Rv.argAt(args, start, num, 0)));
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "m3gNodeTranslate",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.m3gNodeTranslate", new NativeFunctionFast() {
+            public final int length = 4;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                int uid = jsInt(Rv.argAt(args, start, num, 0));
+                float dx = jsFloat(Rv.argAt(args, start, num, 1));
+                float dy = jsFloat(Rv.argAt(args, start, num, 2));
+                float dz = jsFloat(Rv.argAt(args, start, num, 3));
+                String err = r3d.m3gNodeTranslate(uid, dx, dy, dz);
+                return err != null ? new Rv(err) : Rv._null;
+            }
+        })));
+        ri.addToObject(_Render3D, "m3gNodeSetTranslation",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.m3gNodeSetTranslation", new NativeFunctionFast() {
+            public final int length = 4;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                int uid = jsInt(Rv.argAt(args, start, num, 0));
+                float x = jsFloat(Rv.argAt(args, start, num, 1));
+                float y = jsFloat(Rv.argAt(args, start, num, 2));
+                float z = jsFloat(Rv.argAt(args, start, num, 3));
+                String err = r3d.m3gNodeSetTranslation(uid, x, y, z);
+                return err != null ? new Rv(err) : Rv._null;
+            }
+        })));
+        ri.addToObject(_Render3D, "m3gNodeGetTranslation",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.m3gNodeGetTranslation", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                int uid = jsInt(Rv.argAt(args, start, num, 0));
+                float[] t = r3d.m3gNodeGetTranslation(uid);
+                if (t == null || t.length < 3) {
+                    return Rv._null;
+                }
+                return Rv.newJsArray3((double) t[0], (double) t[1], (double) t[2]);
+            }
+        })));
+        ri.addToObject(_Render3D, "m3gNodeSetOrientation",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.m3gNodeSetOrientation", new NativeFunctionFast() {
+            public final int length = 5;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                int uid = jsInt(Rv.argAt(args, start, num, 0));
+                float ang = jsFloat(Rv.argAt(args, start, num, 1));
+                float ax = jsFloat(Rv.argAt(args, start, num, 2));
+                float ay = jsFloat(Rv.argAt(args, start, num, 3));
+                float az = jsFloat(Rv.argAt(args, start, num, 4));
+                String err = r3d.m3gNodeSetOrientation(uid, ang, ax, ay, az);
+                return err != null ? new Rv(err) : Rv._null;
+            }
+        })));
+        ri.addToObject(_Render3D, "m3gAnimSetActiveInterval",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.m3gAnimSetActiveInterval", new NativeFunctionFast() {
+            public final int length = 3;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                int uid = jsInt(Rv.argAt(args, start, num, 0));
+                int t0 = jsInt(Rv.argAt(args, start, num, 1));
+                int t1 = jsInt(Rv.argAt(args, start, num, 2));
+                String err = r3d.m3gAnimSetActiveInterval(uid, t0, t1);
+                return err != null ? new Rv(err) : Rv._null;
+            }
+        })));
+        ri.addToObject(_Render3D, "m3gAnimSetPosition",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.m3gAnimSetPosition", new NativeFunctionFast() {
+            public final int length = 3;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                int uid = jsInt(Rv.argAt(args, start, num, 0));
+                int seq = jsInt(Rv.argAt(args, start, num, 1));
+                int tm = jsInt(Rv.argAt(args, start, num, 2));
+                String err = r3d.m3gAnimSetPosition(uid, seq, tm);
+                return err != null ? new Rv(err) : Rv._null;
+            }
+        })));
+        ri.addToObject(_Render3D, "m3gAnimSetSpeed",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.m3gAnimSetSpeed", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                int uid = jsInt(Rv.argAt(args, start, num, 0));
+                float sp = jsFloat(Rv.argAt(args, start, num, 1));
+                String err = r3d.m3gAnimSetSpeed(uid, sp);
+                return err != null ? new Rv(err) : Rv._null;
+            }
+        })));
+        ri.addToObject(_Render3D, "m3gKeyframeDurationTrack0",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.m3gKeyframeDurationTrack0", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                int uid = jsInt(Rv.argAt(args, start, num, 0));
+                return new Rv((double) r3d.m3gKeyframeDurationTrack0(uid));
+            }
+        })));
+        ri.addToObject(_Render3D, "setMeshRotation",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setMeshRotation", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.setObjectRotationY(jsFloat(Rv.argAt(args, start, num, 0)));
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "setObjectMatrix",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setObjectMatrix", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.init(canvas);
+                Rv arr = Rv.argAt(args, start, num, 0);
+                if (m3gMatrix16FromArray(arr, m3gUserMatrix16)) {
+                    r3d.setObjectTransformFromColumnMajor(m3gUserMatrix16);
+                }
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "setObjectMatrixIdentity",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setObjectMatrixIdentity", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.setObjectTransformIdentity();
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "load",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.load", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.init(canvas);
+                String p = Rv.argAt(args, start, num, 0).toStr().str;
+                String err = r3d.loadM3G(p);
+                if (err != null) {
+                    return new Rv(err);
+                }
+                return Rv._null;
+            }
+        })));
+        ri.addToObject(_Render3D, "setTriangleStripMesh",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.setTriangleStripMesh", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv a0 = Rv.argAt(args, start, num, 0);
+                Rv a1 = Rv.argAt(args, start, num, 1);
+                if (a0 == null || a1 == null) {
+                    return Rv.error("setTriangleStripMesh: need positions and stripLens");
+                }
+                float[] pos = floatsFromRArray(a0);
+                int[] sl = intsFromRArray(a1);
+                if (pos == null || sl == null) {
+                    return Rv.error("setTriangleStripMesh: invalid positions (n*3) or stripLens");
+                }
+                Rv a2 = Rv.argAt(args, start, num, 2);
+                float[] nrm = (num > 2 && a2 != null && a2 != Rv._undefined && a2 != Rv._null)
+                        ? floatsFromRArray(a2) : null;
+                if (nrm != null && nrm.length != pos.length) {
+                    return Rv.error("setTriangleStripMesh: normals length must match positions");
+                }
+                ensureR3D();
+                r3d.init(canvas);
+                r3d.setTriangleStripMesh(pos, sl, nrm);
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "clearMesh",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.clearMesh", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                if (r3d != null) {
+                    r3d.clearImmediateMesh();
+                }
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "begin",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.begin", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                ensureR3D();
+                r3d.init(canvas);
+                r3d.beginFrame(canvas);
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "render",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.render", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                if (r3d == null) {
+                    return Rv._undefined;
+                }
+                r3d.renderImmediate(canvas);
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "end",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.end", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                if (r3d != null) {
+                    r3d.end();
+                }
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(callObj, "Render3D", _Render3D);
 
         Rv _Draw = ri.newModule();
         ri.addToObject(_Draw, "line", 
