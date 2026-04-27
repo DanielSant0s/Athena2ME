@@ -186,6 +186,11 @@ final class StdLib {
                 ? (Rv.Int32View) r.opaque : null;
     }
 
+    static final Rv.Float32View float32ViewOf(Rv r) {
+        return r != null && r.type == Rv.FLOAT32_ARRAY && r.opaque instanceof Rv.Float32View
+                ? (Rv.Float32View) r.opaque : null;
+    }
+
     /** Element count for {@code new Int32Array(n)}; caps total bytes via {@link #clampArrayBufferLength}. */
     static final int clampInt32ArrayElementCount(double d) {
         if (Double.isNaN(d) || d <= 0) {
@@ -296,7 +301,7 @@ final class StdLib {
             math.putl("E",      new Rv(Math.E));
         }
 
-        // ---- ArrayBuffer / Uint8Array / Int32Array / DataView ----
+        // ---- ArrayBuffer / Uint8Array / Int32Array / Float32Array / DataView ----
         Rv._ArrayBuffer = new Rv();
         Rv._ArrayBuffer.nativeCtor("ArrayBuffer", go).ctorOrProt
                 .putl("slice", ri.addNativeFunction(entryOf("ArrayBuffer.slice")));
@@ -312,6 +317,12 @@ final class StdLib {
                 .putl("subarray", ri.addNativeFunction(entryOf("Int32Array.subarray")));
         go.putl("Int32Array", Rv._Int32Array);
         Rv._Int32Array.putl("BYTES_PER_ELEMENT", new Rv(4));
+
+        Rv._Float32Array = new Rv();
+        Rv._Float32Array.nativeCtor("Float32Array", go).ctorOrProt
+                .putl("subarray", ri.addNativeFunction(entryOf("Float32Array.subarray")));
+        go.putl("Float32Array", Rv._Float32Array);
+        Rv._Float32Array.putl("BYTES_PER_ELEMENT", new Rv(4));
 
         Rv._DataView = new Rv();
         Rv._DataView.nativeCtor("DataView", go).ctorOrProt
@@ -1231,7 +1242,7 @@ final class StdLib {
         }),
 
         // ============================================================
-        //           ArrayBuffer / Uint8Array / Int32Array / DataView
+        //           ArrayBuffer / Uint8Array / Int32Array / Float32Array / DataView
         // ============================================================
 
         new NativeFunctionListEntry("ArrayBuffer", new NativeFunctionFast() {
@@ -1360,6 +1371,23 @@ final class StdLib {
                     inst.putl("byteLength", new Rv(0));
                     return inst;
                 }
+                if (a0.type == Rv.ARRAY && a0.num > 0) {
+                    int el = a0.num;
+                    int bytes = el << 2;
+                    Rv bufRv = newArrayBufferRv(bytes);
+                    Rv.ArrayBufferBacking bb = arrayBufferOf(bufRv);
+                    for (int i = 0; i < el; i++) {
+                        Rv e = a0.get(String.valueOf(i));
+                        Rv n = (e == null) ? Rv._NaN : e.toNum();
+                        Rv.int32StoreLE(bb.data, i << 2, Rv.toInt32(Rv.numValue(n)));
+                    }
+                    inst.opaque = new Rv.Int32View(bb.data, 0, bytes, bufRv);
+                    inst.num = el;
+                    inst.putl("buffer", bufRv);
+                    inst.putl("byteOffset", new Rv(0));
+                    inst.putl("byteLength", new Rv(bytes));
+                    return inst;
+                }
                 Rv.ArrayBufferBacking bb0 = arrayBufferOf(a0);
                 if (bb0 != null) {
                     int bufLen = bb0.data.length;
@@ -1428,6 +1456,116 @@ final class StdLib {
                 out.opaque = new Rv.Int32View(iv.data, byteOff, byteLen, iv.bufferRv);
                 out.num = n;
                 out.putl("buffer", iv.bufferRv);
+                out.putl("byteOffset", new Rv(byteOff));
+                out.putl("byteLength", new Rv(byteLen));
+                return out;
+            }
+        }),
+
+        new NativeFunctionListEntry("Float32Array", new NativeFunctionFast() {
+            public final int length = 3;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv inst = isNew ? thiz : new Rv(Rv.FLOAT32_ARRAY, Rv._Float32Array);
+                inst.type = Rv.FLOAT32_ARRAY;
+                inst.ctorOrProt = Rv._Float32Array;
+                Rv a0 = arg(args, start, num, 0);
+                if (a0 == null || a0 == Rv._undefined) {
+                    Rv bufRv = newArrayBufferRv(0);
+                    Rv.ArrayBufferBacking bb = arrayBufferOf(bufRv);
+                    inst.opaque = new Rv.Float32View(bb.data, 0, 0, bufRv);
+                    inst.num = 0;
+                    inst.putl("buffer", bufRv);
+                    inst.putl("byteOffset", new Rv(0));
+                    inst.putl("byteLength", new Rv(0));
+                    return inst;
+                }
+                if (a0.type == Rv.ARRAY && a0.num > 0) {
+                    int el = a0.num;
+                    int bytes = el << 2;
+                    Rv bufRv = newArrayBufferRv(bytes);
+                    Rv.ArrayBufferBacking bb = arrayBufferOf(bufRv);
+                    for (int i = 0; i < el; i++) {
+                        Rv e = a0.get(String.valueOf(i));
+                        Rv n = (e == null) ? Rv._NaN : e.toNum();
+                        double nv = Rv.numValue(n);
+                        float f = Double.isNaN(nv) ? Float.NaN : (float) nv;
+                        Rv.int32StoreLE(bb.data, i << 2, Float.floatToIntBits(f));
+                    }
+                    inst.opaque = new Rv.Float32View(bb.data, 0, bytes, bufRv);
+                    inst.num = el;
+                    inst.putl("buffer", bufRv);
+                    inst.putl("byteOffset", new Rv(0));
+                    inst.putl("byteLength", new Rv(bytes));
+                    return inst;
+                }
+                Rv.ArrayBufferBacking bb0 = arrayBufferOf(a0);
+                if (bb0 != null) {
+                    int bufLen = bb0.data.length;
+                    int bo = toInt(arg(args, start, num, 1), 0);
+                    if (bo < 0) {
+                        bo = 0;
+                    }
+                    bo = bo - (bo & 3);
+                    if (bo > bufLen) {
+                        bo = bufLen;
+                    }
+                    int maxB = bufLen - bo;
+                    maxB = maxB - (maxB & 3);
+                    int elen;
+                    if (num >= 3 && arg(args, start, num, 2) != Rv._undefined) {
+                        elen = toInt(arg(args, start, num, 2), maxB >> 2);
+                    } else {
+                        elen = maxB >> 2;
+                    }
+                    if (elen < 0) {
+                        elen = 0;
+                    }
+                    int maxEl = maxB >> 2;
+                    if (elen > maxEl) {
+                        elen = maxEl;
+                    }
+                    int byteLen = elen << 2;
+                    inst.opaque = new Rv.Float32View(bb0.data, bo, byteLen, a0);
+                    inst.num = elen;
+                    inst.putl("buffer", a0);
+                    inst.putl("byteOffset", new Rv(bo));
+                    inst.putl("byteLength", new Rv(byteLen));
+                    return inst;
+                }
+                int el = clampInt32ArrayElementCount(toDouble(a0, 0));
+                int bytes = el << 2;
+                Rv bufRv = newArrayBufferRv(bytes);
+                Rv.ArrayBufferBacking bb = arrayBufferOf(bufRv);
+                inst.opaque = new Rv.Float32View(bb.data, 0, bytes, bufRv);
+                inst.num = el;
+                inst.putl("buffer", bufRv);
+                inst.putl("byteOffset", new Rv(0));
+                inst.putl("byteLength", new Rv(bytes));
+                return inst;
+            }
+        }),
+
+        new NativeFunctionListEntry("Float32Array.subarray", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv.Float32View fv = float32ViewOf(thiz);
+                if (fv == null) {
+                    return Rv._undefined;
+                }
+                int elemLen = fv.byteLength >> 2;
+                int b = sliceIndex(toDouble(arg(args, start, num, 0), 0), elemLen);
+                int e = num > 1
+                        ? sliceEndIndex(toDouble(arg(args, start, num, 1), elemLen), elemLen, b)
+                        : elemLen;
+                int n = e - b;
+                int byteOff = fv.offset + (b << 2);
+                int byteLen = n << 2;
+                Rv out = new Rv(Rv.FLOAT32_ARRAY, Rv._Float32Array);
+                out.type = Rv.FLOAT32_ARRAY;
+                out.ctorOrProt = Rv._Float32Array;
+                out.opaque = new Rv.Float32View(fv.data, byteOff, byteLen, fv.bufferRv);
+                out.num = n;
+                out.putl("buffer", fv.bufferRv);
                 out.putl("byteOffset", new Rv(byteOff));
                 out.putl("byteLength", new Rv(byteLen));
                 return out;

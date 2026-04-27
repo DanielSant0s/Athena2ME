@@ -373,6 +373,20 @@ public class AthenaCanvas extends GameCanvas {
         currentGraphics.fillTriangle(x1, y1, x2, y2, x3, y3);
     }
 
+    /**
+     * Flushes 2D batches then {@link Graphics#drawRGB(int[], int, int, int, int, int, int, boolean)}.
+     * Used by the software 3D path for scanline texturing (fewer native calls than per-pixel {@link #drawRect}).
+     */
+    public void drawRgb(int[] rgbData, int offset, int scanlength, int x, int y, int width, int height, boolean processAlpha) {
+        if (rgbData == null || width <= 0 || height <= 0) {
+            return;
+        }
+        flushRectBatch();
+        flushPendingSpriteBatch();
+        invalidateDrawColor();
+        currentGraphics.drawRGB(rgbData, offset, scanlength, x, y, width, height, processAlpha);
+    }
+
     public void _drawImage(Image img, int x, int y) {
         flushRectBatch();
         flushPendingSpriteBatch();
@@ -477,5 +491,29 @@ public class AthenaCanvas extends GameCanvas {
 
     public int getKeypad() {
         return key;
+    }
+
+    /**
+     * Flushes 2D batches and returns the {@link Graphics} target for M3G
+     * {@code bindTarget} (main buffer or current layer).
+     */
+    public Graphics getBindGraphicsFor3D() {
+        flushRectBatch();
+        flushPendingSpriteBatch();
+        return currentGraphics;
+    }
+
+    public int getTargetWidth3D() {
+        if (currentLayer != null) {
+            return currentLayer.width;
+        }
+        return getWidth();
+    }
+
+    public int getTargetHeight3D() {
+        if (currentLayer != null) {
+            return currentLayer.height;
+        }
+        return getHeight();
     }
 }

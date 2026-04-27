@@ -20,6 +20,8 @@ public class Rv {
     public static final int UINT8_ARRAY = OBJECT + 0x0E;
     /** Int32Array: uses {@link #opaque} {@link Int32View}; {@code num} is element count (not bytes). */
     public static final int INT32_ARRAY = OBJECT + 0x0F;
+    /** Float32Array: uses {@link #opaque} {@link Float32View}; element size 4 bytes; {@code num} = element count. */
+    public static final int FLOAT32_ARRAY = OBJECT + 0x10;
     
     static final int FUNCTION =         0x2C;
     static final int NATIVE =           0x2D; // native function
@@ -483,7 +485,7 @@ public class Rv {
             return this.ctorOrProt != null;
         } else if (type >= Rv.ARRAY && "length".equals(p)) { // array/arguments/function/native
             return true;
-        } else if (type == Rv.UINT8_ARRAY || type == Rv.INT32_ARRAY) {
+        } else if (type == Rv.UINT8_ARRAY || type == Rv.INT32_ARRAY || type == Rv.FLOAT32_ARRAY) {
             int idx = arrayIndexKey(p);
             if (idx >= 0) {
                 return idx < this.num;
@@ -567,7 +569,7 @@ public class Rv {
         } else if ("length".equals(p)) { // array/arguments/function/native
             int num = type >= Rv.ARRAY ? this.num : -1;
             if (num >= 0) return new Rv(num);
-        } else if (type == Rv.UINT8_ARRAY || type == Rv.INT32_ARRAY) {
+        } else if (type == Rv.UINT8_ARRAY || type == Rv.INT32_ARRAY || type == Rv.FLOAT32_ARRAY) {
             int idx = arrayIndexKey(p);
             if (idx >= 0) {
                 if (type == Rv.UINT8_ARRAY) {
@@ -575,11 +577,17 @@ public class Rv {
                     if (idx < uv.byteLength) {
                         return new Rv(uv.data[uv.offset + idx] & 0xff);
                     }
-                } else {
+                } else if (type == Rv.INT32_ARRAY) {
                     Int32View iv = (Int32View) this.opaque;
                     int nel = iv.byteLength >> 2;
                     if (idx < nel) {
                         return new Rv(int32LoadLE(iv.data, iv.offset + (idx << 2)));
+                    }
+                } else {
+                    Float32View fv = (Float32View) this.opaque;
+                    int nel = fv.byteLength >> 2;
+                    if (idx < nel) {
+                        return new Rv((double) Float.intBitsToFloat(int32LoadLE(fv.data, fv.offset + (idx << 2))));
                     }
                 }
             }
@@ -687,6 +695,20 @@ public class Rv {
                     if (idx < nel) {
                         Rv n = val.toNum();
                         int32StoreLE(iv.data, iv.offset + (idx << 2), toInt32(numValue(n)));
+                    }
+                }
+                return this;
+            } else if (obj.type == Rv.FLOAT32_ARRAY) {
+                int idx = arrayIndexKey(p);
+                if (idx >= 0) {
+                    Float32View fv = (Float32View) obj.opaque;
+                    int nel = fv.byteLength >> 2;
+                    if (idx < nel) {
+                        Rv n = val.toNum();
+                        if (n != Rv._NaN) {
+                            float f = (float) numValue(n);
+                            int32StoreLE(fv.data, fv.offset + (idx << 2), Float.floatToIntBits(f));
+                        }
                     }
                 }
                 return this;
@@ -873,7 +895,7 @@ public class Rv {
                     : type == Rv.STRING || type == Rv.STRING_OBJECT ? this.str.length()
                     : -1;
             if (num >= 0) return new Rv(num);
-        } else if (type == Rv.UINT8_ARRAY || type == Rv.INT32_ARRAY) {
+        } else if (type == Rv.UINT8_ARRAY || type == Rv.INT32_ARRAY || type == Rv.FLOAT32_ARRAY) {
             int idx = arrayIndexKey(p);
             if (idx >= 0) {
                 Rv tarr;
@@ -888,11 +910,23 @@ public class Rv {
                         symPicHostGen = this.gen;
                         return tarr;
                     }
-                } else {
+                } else if (type == Rv.INT32_ARRAY) {
                     Int32View iv = (Int32View) this.opaque;
                     int nel = iv.byteLength >> 2;
                     if (idx < nel) {
                         tarr = new Rv(int32LoadLE(iv.data, iv.offset + (idx << 2)));
+                        symPicKey = key;
+                        symPicVal = tarr;
+                        symPicGen = this.gen;
+                        symPicHost = this;
+                        symPicHostGen = this.gen;
+                        return tarr;
+                    }
+                } else {
+                    Float32View fv = (Float32View) this.opaque;
+                    int nel = fv.byteLength >> 2;
+                    if (idx < nel) {
+                        tarr = new Rv((double) Float.intBitsToFloat(int32LoadLE(fv.data, fv.offset + (idx << 2))));
                         symPicKey = key;
                         symPicVal = tarr;
                         symPicGen = this.gen;
@@ -1546,6 +1580,7 @@ public class Rv {
     public static Rv _Uint8Array;
     /** Int32Array constructor (initialized lazily by StdLib). */
     public static Rv _Int32Array;
+    public static Rv _Float32Array;
     /** DataView constructor (initialized lazily by StdLib). */
     public static Rv _DataView;
     /** Promise constructor (initialized lazily by StdLib). */
@@ -1590,6 +1625,23 @@ public class Rv {
         }
     }
 
+    /**
+     * View for {@code Float32Array} ({@link #type} is {@link #FLOAT32_ARRAY}).
+     * Layout matches {@link Int32View} (IEEE-754 little-endian per element).
+     */
+    public static final class Float32View {
+        public final byte[] data;
+        public final int offset;
+        public final int byteLength;
+        public final Rv bufferRv;
+        public Float32View(byte[] data, int offset, int byteLength, Rv bufferRv) {
+            this.data = data;
+            this.offset = offset;
+            this.byteLength = byteLength;
+            this.bufferRv = bufferRv;
+        }
+    }
+
     /** Byte range for {@code DataView} instances ({@code opaque}). */
     public static final class DataViewState {
         public final byte[] data;
@@ -1603,7 +1655,20 @@ public class Rv {
             this.bufferRv = bufferRv;
         }
     }
-    
+
+    /**
+     * Plain JS array of three numbers (e.g. translation {@code [x,y,z]}) for native bindings
+     * outside this package; {@link #ARRAY} and {@link #putl(int, Rv)} are not public.
+     */
+    public static Rv newJsArray3(double x, double y, double z) {
+        Rv a = new Rv(Rv.ARRAY, Rv._Array);
+        a.putl(0, new Rv(x));
+        a.putl(1, new Rv(y));
+        a.putl(2, new Rv(z));
+        a.num = 3;
+        return a;
+    }
+
     static {
         for (int i = 0; i < RHASH_ENTRY_SLAB_CAP; i++) {
             RHASH_ENTRY_SLAB[i] = new Rv();
