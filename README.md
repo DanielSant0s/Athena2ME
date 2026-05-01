@@ -491,6 +491,16 @@ P.S.: *Italic* parameters refer to optional parameters
 * os.bluetoothGetCapabilities() — Synchronous object `{ jsr82, available, powered, name, address, error }` (numeric flags use `0`/`1`; `error` is a string, empty when OK). Uses **JSR-82** (`javax.bluetooth`). Requires `jsr082.jar` (or equivalent) on the **compile** classpath; runtime still needs a device or emulator stack that exposes Bluetooth.
 * os.bluetoothInquiry(*timeoutMs*) — Returns a **`Promise`** that fulfills with a dense array of `{ address, friendlyName, majorDeviceClass }`. *timeoutMs* is clamped internally: values `≤ 0` use a **30s** default. Only **one** inquiry may run at a time; a second call rejects with `Bluetooth inquiry busy`. A timer cancels the inquiry when *timeoutMs* elapses.
 
+### localStorage
+
+Standard key-value string storage mapped to a single J2ME `RecordStore` (named `localStorage`). It features an in-memory cache for fast `O(1)` reads, loading from disk only on first access.
+**Warning**: Writes (`setItem`, `removeItem`, `clear`) are saved **synchronously** to disk (web-standard behavior). Repeated writes on every frame inside a game loop may cause performance stutters.
+
+* **`localStorage.setItem(key, value)`** — Add or update a key.
+* **`localStorage.getItem(key)`** — Return value or `null`.
+* **`localStorage.removeItem(key)`** — Remove a key.
+* **`localStorage.clear()`** — Clear all data and delete the record.
+
 ### Threads and concurrency
 
 Athena2ME is not a multi-runtime environment: you do **not** get parallel JavaScript heaps or Web Workers. You get **Java** `Thread` primitives (including the existing HTTP client and frame loop) plus **synchronization objects** that coordinate those threads with the single JS engine.
