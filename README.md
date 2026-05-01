@@ -490,6 +490,8 @@ P.S.: *Italic* parameters refer to optional parameters
 * os.AtomicInt(*initial*) — `get()`, `set(n)`, `addAndGet(delta)`.
 * os.bluetoothGetCapabilities() — Synchronous object `{ jsr82, available, powered, name, address, error }` (numeric flags use `0`/`1`; `error` is a string, empty when OK). Uses **JSR-82** (`javax.bluetooth`). Requires `jsr082.jar` (or equivalent) on the **compile** classpath; runtime still needs a device or emulator stack that exposes Bluetooth.
 * os.bluetoothInquiry(*timeoutMs*) — Returns a **`Promise`** that fulfills with a dense array of `{ address, friendlyName, majorDeviceClass }`. *timeoutMs* is clamped internally: values `≤ 0` use a **30s** default. Only **one** inquiry may run at a time; a second call rejects with `Bluetooth inquiry busy`. A timer cancels the inquiry when *timeoutMs* elapses.
+* **`os.vibrate(durationMs)`** — Synchronously activates the device's vibration motor for the specified number of milliseconds (e.g. `os.vibrate(100)`). If the device does not support vibration or it's disabled in system settings, this call is safely ignored.
+* **`os.camera.takeSnapshot(options)`** — Takes a picture using the device camera (MMAPI `capture://video`). Returns a **`Promise`** that resolves with a `Uint8Array` containing the raw JPEG bytes. The `options` object is optional and defaults to `{ width: 320, height: 240, encoding: 'jpeg' }`. Execution happens asynchronously to avoid blocking the game loop. Reject reasons include `No VideoControl`, `Snapshot failed`, or underlying J2ME security exceptions.
 
 ### localStorage
 
@@ -500,6 +502,22 @@ Standard key-value string storage mapped to a single J2ME `RecordStore` (named `
 * **`localStorage.getItem(key)`** — Return value or `null`.
 * **`localStorage.removeItem(key)`** — Remove a key.
 * **`localStorage.clear()`** — Clear all data and delete the record.
+
+### LZ4 and DEFLATE module
+
+Native, zero-allocation J2ME ports of decompression algorithms. Ideal for extremely fast data processing of memory buffers.
+
+* **`LZ4.compress(srcBuffer)`** — Compresses a `Uint8Array` using the LZ4 algorithm and returns a new `Uint8Array`.
+* **`LZ4.decompress(srcBuffer, uncompressedSize)`** — Decompresses a `Uint8Array` LZ4 block into a new `Uint8Array`.
+* **`DEFLATE.inflate(srcBuffer, uncompressedSize)`** — Decompresses a raw DEFLATE block into a new `Uint8Array`.
+
+### ZIP module
+
+A native J2ME `.zip` archive reader. Ideal for loading multiple game assets from a single compressed package without hitting the filesystem for each file.
+
+* **`ZIP.open(buffer)`** — Parses a `Uint8Array` containing a `.zip` file and returns a virtual zip object.
+* **`zipObj.list()`** — Returns an Array of strings representing the filenames inside the archive.
+* **`zipObj.get("filename.ext")`** — Extracts and decompresses the file, returning a `Uint8Array`, or `null` if the file doesn't exist.
 
 ### Threads and concurrency
 

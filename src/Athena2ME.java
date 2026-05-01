@@ -646,6 +646,97 @@ public class Athena2ME extends MIDlet implements CommandListener {
             }
         })));
 
+        Rv lz4 = ri.newModule();
+        ri.addToObject(callObj, "LZ4", lz4);
+        
+        ri.addToObject(lz4, "compress", ri.addNativeFunction(new NativeFunctionListEntry("LZ4.compress", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                if (num < 1) return Rv._undefined;
+                byte[] src = bytesFromBufferArg((Rv) args.oArray[start]);
+                byte[] comp = AthenaLZ4.compressRaw(src, 0, src.length);
+                return newUint8Array(ri, comp);
+            }
+        })));
+        
+        ri.addToObject(lz4, "decompress", ri.addNativeFunction(new NativeFunctionListEntry("LZ4.decompress", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                if (num < 2) return Rv._undefined;
+                byte[] src = bytesFromBufferArg((Rv) args.oArray[start]);
+                int size = jsInt((Rv) args.oArray[start + 1]);
+                byte[] dest = new byte[size];
+                try {
+                    AthenaLZ4.decompressRaw(src, 0, src.length, dest, 0, size);
+                } catch (Exception e) {
+                    return Rv._undefined;
+                }
+                return newUint8Array(ri, dest);
+            }
+        })));
+
+        Rv deflateMod = ri.newModule();
+        ri.addToObject(callObj, "DEFLATE", deflateMod);
+        ri.addToObject(deflateMod, "inflate", ri.addNativeFunction(new NativeFunctionListEntry("DEFLATE.inflate", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                if (num < 2) return Rv._undefined;
+                byte[] src = bytesFromBufferArg((Rv) args.oArray[start]);
+                int size = jsInt((Rv) args.oArray[start + 1]);
+                try {
+                    byte[] dest = new net.cnjm.j2me.util.ZipMe(null).inflate(src, 0, size);
+                    return newUint8Array(ri, dest);
+                } catch (Exception e) {
+                    return Rv._undefined;
+                }
+            }
+        })));
+
+        Rv zipMod = ri.newModule();
+        ri.addToObject(callObj, "ZIP", zipMod);
+        ri.addToObject(zipMod, "open", ri.addNativeFunction(new NativeFunctionListEntry("ZIP.open", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, final RocksInterpreter ri) {
+                if (num < 1) return Rv._undefined;
+                byte[] src = bytesFromBufferArg((Rv) args.oArray[start]);
+                final net.cnjm.j2me.util.ZipMe zip = new net.cnjm.j2me.util.ZipMe(src);
+                
+                Rv zobj = ri.newModule();
+                ri.addToObject(zobj, "list", ri.addNativeFunction(new NativeFunctionListEntry("ZIP_list", new NativeFunctionFast() {
+                    public final int length = 0;
+                    public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter r) {
+                        try {
+                            Pack list = zip.list();
+                            Rv arr = r.newEmptyArray();
+                            arr.num = list.oSize;
+                            for (int i = 0; i < list.oSize; i++) {
+                                ri.addToObject(arr, String.valueOf(i), new Rv((String) list.oArray[i]));
+                            }
+                            return arr;
+                        } catch (Exception e) {
+                            return r.newEmptyArray();
+                        }
+                    }
+                })));
+                
+                ri.addToObject(zobj, "get", ri.addNativeFunction(new NativeFunctionListEntry("ZIP_get", new NativeFunctionFast() {
+                    public final int length = 1;
+                    public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter r) {
+                        if (num < 1) return Rv._undefined;
+                        String name = ((Rv) args.oArray[start]).toStr().str;
+                        try {
+                            byte[] data = zip.get(name);
+                            if (data == null) return Rv._null;
+                            return newUint8Array(r, data);
+                        } catch (Exception e) {
+                            return Rv._null;
+                        }
+                    }
+                })));
+                return zobj;
+            }
+        })));
+
         Rv _os = ri.newModule();
         ri.addToObject(_os, "platform", new Rv("j2me"));
         ri.addToObject(_os, "O_RDONLY", new Rv(AthenaFile.O_RDONLY));
@@ -659,6 +750,76 @@ public class Athena2ME extends MIDlet implements CommandListener {
         ri.addToObject(_os, "SEEK_SET", new Rv(AthenaFile.SEEK_SET));
         ri.addToObject(_os, "SEEK_CUR", new Rv(AthenaFile.SEEK_CUR));
         ri.addToObject(_os, "SEEK_END", new Rv(AthenaFile.SEEK_END));
+
+        ri.addToObject(_os, "vibrate", ri.addNativeFunction(new NativeFunctionListEntry("os.vibrate", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter r) {
+                if (num > 0) {
+                    int duration = jsInt((Rv) args.oArray[start]);
+                    if (duration > 0) {
+                        try {
+                            javax.microedition.lcdui.Display.getDisplay(selfMidlet).vibrate(duration);
+                        } catch (Exception e) {}
+                    }
+                }
+                return Rv._undefined;
+            }
+        })));
+
+        Rv _camera = ri.newModule();
+        ri.addToObject(_os, "camera", _camera);
+        ri.addToObject(_camera, "takeSnapshot", ri.addNativeFunction(new NativeFunctionListEntry("os.camera.takeSnapshot", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, final RocksInterpreter r) {
+                int w = 320, h = 240;
+                String enc = "jpeg";
+                if (num > 0 && args.oArray[start] != null) {
+                    Rv opts = (Rv) args.oArray[start];
+                    Rv rw = opts.get("width");
+                    if (rw != null && rw != Rv._undefined) w = jsInt(rw);
+                    Rv rh = opts.get("height");
+                    if (rh != null && rh != Rv._undefined) h = jsInt(rh);
+                    Rv re = opts.get("encoding");
+                    if (re != null && re != Rv._undefined) enc = re.toStr().str;
+                }
+                final int width = w;
+                final int height = h;
+                final String encoding = enc;
+                final Rv promise = net.cnjm.j2me.tinybro.PromiseRuntime.createPending(r);
+                
+                new Thread(new Runnable() {
+                    public void run() {
+                        javax.microedition.media.Player player = null;
+                        try {
+                            player = javax.microedition.media.Manager.createPlayer("capture://video");
+                            player.realize();
+                            player.start();
+                            javax.microedition.media.control.VideoControl vc = (javax.microedition.media.control.VideoControl) player.getControl("VideoControl");
+                            if (vc == null) {
+                                net.cnjm.j2me.tinybro.PromiseRuntime.reject(r, promise, Rv.error("No VideoControl"));
+                            } else {
+                                byte[] raw = vc.getSnapshot("encoding=" + encoding + "&width=" + width + "&height=" + height);
+                                if (raw == null) {
+                                    net.cnjm.j2me.tinybro.PromiseRuntime.reject(r, promise, Rv.error("Snapshot failed"));
+                                } else {
+                                    net.cnjm.j2me.tinybro.PromiseRuntime.resolveViaCapability(r, promise, newUint8Array(r, raw));
+                                }
+                            }
+                        } catch (Exception e) {
+                            net.cnjm.j2me.tinybro.PromiseRuntime.reject(r, promise, Rv.error(e.toString()));
+                        } finally {
+                            if (player != null) {
+                                try {
+                                    player.close();
+                                } catch (Exception e) {}
+                            }
+                        }
+                    }
+                }).start();
+                
+                return promise;
+            }
+        })));
 
         ri.addToObject(_os, "setExitHandler", 
             ri.addNativeFunction(new NativeFunctionListEntry("os.setExitHandler", new NativeFunction() {
