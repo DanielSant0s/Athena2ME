@@ -1,86 +1,86 @@
 // Asteroids showcase: vector ship + asteroids with screen wrap and bullets.
 
-var W = Screen.width;
-var H = Screen.height;
+const W = Screen.width;
+const H = Screen.height;
 
-var fontTitle = new Font(Font.FACE_PROPORTIONAL, Font.STYLE_BOLD, Font.SIZE_MEDIUM);
-var fontSmall = new Font(Font.FACE_PROPORTIONAL, Font.STYLE_PLAIN, Font.SIZE_SMALL);
-var fontBig = new Font(Font.FACE_PROPORTIONAL, Font.STYLE_BOLD, Font.SIZE_LARGE);
+const fontTitle = new Font(Font.FACE_PROPORTIONAL, Font.STYLE_BOLD, Font.SIZE_MEDIUM);
+const fontSmall = new Font(Font.FACE_PROPORTIONAL, Font.STYLE_PLAIN, Font.SIZE_SMALL);
+const fontBig = new Font(Font.FACE_PROPORTIONAL, Font.STYLE_BOLD, Font.SIZE_LARGE);
 
-var BG = Color.new(2, 4, 12);
-var STAR = Color.new(60, 75, 110);
-var SHIP = Color.new(220, 235, 255);
-var SHIP_THRUST = Color.new(255, 160, 60);
-var BULLET = Color.new(255, 240, 120);
-var ROCK = Color.new(180, 195, 220);
-var ROCK_HI = Color.new(230, 240, 255);
-var TEXT = Color.new(235, 245, 255);
-var DIM = Color.new(120, 145, 185);
-var ACCENT = Color.new(0, 220, 255);
-var DANGER = Color.new(255, 80, 100);
+const BG = Color.new(2, 4, 12);
+const STAR = Color.new(60, 75, 110);
+const SHIP = Color.new(220, 235, 255);
+const SHIP_THRUST = Color.new(255, 160, 60);
+const BULLET = Color.new(255, 240, 120);
+const ROCK = Color.new(180, 195, 220);
+const ROCK_HI = Color.new(230, 240, 255);
+const TEXT = Color.new(235, 245, 255);
+const DIM = Color.new(120, 145, 185);
+const ACCENT = Color.new(0, 220, 255);
+const DANGER = Color.new(255, 80, 100);
 
-var DEG_TO_RAD = Math.PI / 180.0;
+const DEG_TO_RAD = Math.PI / 180.0;
 
-var SHIP_RADIUS = 7;
-var SHIP_TURN = 8;
-var SHIP_THRUST_ACC = 0.25;
-var SHIP_FRICTION = 0.985;
-var SHIP_MAX_SPEED = 4.5;
+const SHIP_RADIUS = 7;
+const SHIP_TURN = 8;
+const SHIP_THRUST_ACC = 0.25;
+const SHIP_FRICTION = 0.985;
+const SHIP_MAX_SPEED = 4.5;
 
-var BULLET_CAP = 12;
-var BULLET_SPEED = 6.0;
-var BULLET_LIFE = 60;
+const BULLET_CAP = 12;
+const BULLET_SPEED = 6.0;
+const BULLET_LIFE = 60;
 
-var ROCK_CAP = 18;
-var ROCK_BIG = 0;
-var ROCK_MED = 1;
-var ROCK_SMALL = 2;
-var ROCK_RADIUS = [16, 10, 6];
-var ROCK_SCORE = [20, 50, 100];
-var ROCK_SPEED_BASE = [1.1, 1.6, 2.2];
+const ROCK_CAP = 18;
+const ROCK_BIG = 0;
+const ROCK_MED = 1;
+const ROCK_SMALL = 2;
+const ROCK_RADIUS = [16, 10, 6];
+const ROCK_SCORE = [20, 50, 100];
+const ROCK_SPEED_BASE = [1.1, 1.6, 2.2];
 
-var STAR_COUNT = 24;
-var starX = new Int32Array(STAR_COUNT);
-var starY = new Int32Array(STAR_COUNT);
+const STAR_COUNT = 24;
+const starX = new Int32Array(STAR_COUNT);
+const starY = new Int32Array(STAR_COUNT);
 
-var bx = new Float32Array(BULLET_CAP);
-var by = new Float32Array(BULLET_CAP);
-var bvx = new Float32Array(BULLET_CAP);
-var bvy = new Float32Array(BULLET_CAP);
-var blife = new Int32Array(BULLET_CAP);
+const bx = new Float32Array(BULLET_CAP);
+const by = new Float32Array(BULLET_CAP);
+const bvx = new Float32Array(BULLET_CAP);
+const bvy = new Float32Array(BULLET_CAP);
+const blife = new Int32Array(BULLET_CAP);
 
-var rx = new Float32Array(ROCK_CAP);
-var ry = new Float32Array(ROCK_CAP);
-var rvx = new Float32Array(ROCK_CAP);
-var rvy = new Float32Array(ROCK_CAP);
-var rsize = new Int32Array(ROCK_CAP);
-var ralive = new Int32Array(ROCK_CAP);
+const rx = new Float32Array(ROCK_CAP);
+const ry = new Float32Array(ROCK_CAP);
+const rvx = new Float32Array(ROCK_CAP);
+const rvy = new Float32Array(ROCK_CAP);
+const rsize = new Int32Array(ROCK_CAP);
+const ralive = new Int32Array(ROCK_CAP);
 
-var shipX = 0;
-var shipY = 0;
-var shipVX = 0;
-var shipVY = 0;
-var shipAngle = 0;
-var shipCos = 1;
-var shipSin = 0;
+let shipX = 0;
+let shipY = 0;
+let shipVX = 0;
+let shipVY = 0;
+let shipAngle = 0;
+let shipCos = 1;
+let shipSin = 0;
 
-var score = 0;
-var lives = 3;
-var level = 1;
-var fireCooldown = 0;
-var invuln = 0;
-var gameOver = false;
-var frame = 0;
-var returnToMenu = null;
+let score = 0;
+let lives = 3;
+let level = 1;
+let fireCooldown = 0;
+let invuln = 0;
+let gameOver = false;
+let frame = 0;
+let returnToMenu = null;
 
 function refreshShipDirection() {
-    var rad = shipAngle * DEG_TO_RAD;
+    let rad = shipAngle * DEG_TO_RAD;
     shipCos = Math.cos(rad);
     shipSin = Math.sin(rad);
 }
 
 function spawnRock(size, atX, atY, vx, vy) {
-    var k;
+    let k;
     for (k = 0; k < ROCK_CAP; k++) {
         if (ralive[k] === 0) {
             rsize[k] = size;
@@ -96,13 +96,13 @@ function spawnRock(size, atX, atY, vx, vy) {
 }
 
 function spawnLevel(n) {
-    var k;
+    let k;
     for (k = 0; k < n; k++) {
-        var ang = Math.random() * Math.PI * 2.0;
-        var sp = ROCK_SPEED_BASE[ROCK_BIG] + Math.random() * 0.6;
-        var atEdge = Math.random();
-        var sx;
-        var sy;
+        let ang = Math.random() * Math.PI * 2.0;
+        let sp = ROCK_SPEED_BASE[ROCK_BIG] + Math.random() * 0.6;
+        let atEdge = Math.random();
+        let sx;
+        let sy;
         if (atEdge < 0.25) {
             sx = 4;
             sy = Math.random() * H;
@@ -136,7 +136,7 @@ function resetGame() {
     level = 1;
     gameOver = false;
     fireCooldown = 0;
-    var k;
+    let k;
     for (k = 0; k < BULLET_CAP; k++) blife[k] = 0;
     for (k = 0; k < ROCK_CAP; k++) ralive[k] = 0;
     for (k = 0; k < STAR_COUNT; k++) {
@@ -157,7 +157,7 @@ function fire() {
     if (fireCooldown > 0 || gameOver) {
         return;
     }
-    var k;
+    let k;
     for (k = 0; k < BULLET_CAP; k++) {
         if (blife[k] === 0) {
             bx[k] = shipX + shipCos * SHIP_RADIUS;
@@ -172,9 +172,9 @@ function fire() {
 }
 
 function thrust() {
-    var nvx = shipVX + shipCos * SHIP_THRUST_ACC;
-    var nvy = shipVY + shipSin * SHIP_THRUST_ACC;
-    var sp = Math.sqrt(nvx * nvx + nvy * nvy);
+    let nvx = shipVX + shipCos * SHIP_THRUST_ACC;
+    let nvy = shipVY + shipSin * SHIP_THRUST_ACC;
+    let sp = Math.sqrt(nvx * nvx + nvy * nvy);
     if (sp > SHIP_MAX_SPEED) {
         nvx = nvx * SHIP_MAX_SPEED / sp;
         nvy = nvy * SHIP_MAX_SPEED / sp;
@@ -192,7 +192,7 @@ function updateShip() {
         shipAngle += SHIP_TURN;
         refreshShipDirection();
     }
-    var thrusting = Pad.pressed(Pad.UP);
+    let thrusting = Pad.pressed(Pad.UP);
     if (thrusting) {
         thrust();
     } else {
@@ -210,7 +210,7 @@ function updateShip() {
 }
 
 function updateBullets() {
-    var k;
+    let k;
     for (k = 0; k < BULLET_CAP; k++) {
         if (blife[k] === 0) continue;
         bx[k] = wrap(bx[k] + bvx[k], W);
@@ -220,7 +220,7 @@ function updateBullets() {
 }
 
 function updateRocks() {
-    var k;
+    let k;
     for (k = 0; k < ROCK_CAP; k++) {
         if (ralive[k] === 0) continue;
         rx[k] = wrap(rx[k] + rvx[k], W);
@@ -229,24 +229,24 @@ function updateRocks() {
 }
 
 function destroyRock(k) {
-    var size = rsize[k];
+    let size = rsize[k];
     score += ROCK_SCORE[size];
     ralive[k] = 0;
     if (size >= ROCK_SMALL) return;
-    var nx = rx[k];
-    var ny = ry[k];
-    var nextSize = size + 1;
-    var s;
+    let nx = rx[k];
+    let ny = ry[k];
+    let nextSize = size + 1;
+    let s;
     for (s = 0; s < 2; s++) {
-        var ang = Math.random() * Math.PI * 2.0;
-        var sp = ROCK_SPEED_BASE[nextSize] + Math.random() * 0.7;
+        let ang = Math.random() * Math.PI * 2.0;
+        let sp = ROCK_SPEED_BASE[nextSize] + Math.random() * 0.7;
         spawnRock(nextSize, nx, ny, Math.cos(ang) * sp, Math.sin(ang) * sp);
     }
 }
 
 function rocksAlive() {
-    var n = 0;
-    var k;
+    let n = 0;
+    let k;
     for (k = 0; k < ROCK_CAP; k++) {
         if (ralive[k] !== 0) n++;
     }
@@ -254,17 +254,17 @@ function rocksAlive() {
 }
 
 function checkBulletHits() {
-    var k;
-    var j;
+    let k;
+    let j;
     for (k = 0; k < BULLET_CAP; k++) {
         if (blife[k] === 0) continue;
-        var bxp = bx[k];
-        var byp = by[k];
+        let bxp = bx[k];
+        let byp = by[k];
         for (j = 0; j < ROCK_CAP; j++) {
             if (ralive[j] === 0) continue;
-            var dxp = bxp - rx[j];
-            var dyp = byp - ry[j];
-            var rad = ROCK_RADIUS[rsize[j]];
+            let dxp = bxp - rx[j];
+            let dyp = byp - ry[j];
+            let rad = ROCK_RADIUS[rsize[j]];
             if (dxp * dxp + dyp * dyp <= rad * rad) {
                 blife[k] = 0;
                 destroyRock(j);
@@ -276,12 +276,12 @@ function checkBulletHits() {
 
 function checkShipHit() {
     if (invuln > 0 || gameOver) return;
-    var j;
+    let j;
     for (j = 0; j < ROCK_CAP; j++) {
         if (ralive[j] === 0) continue;
-        var dxp = shipX - rx[j];
-        var dyp = shipY - ry[j];
-        var rad = ROCK_RADIUS[rsize[j]] + SHIP_RADIUS - 2;
+        let dxp = shipX - rx[j];
+        let dyp = shipY - ry[j];
+        let rad = ROCK_RADIUS[rsize[j]] + SHIP_RADIUS - 2;
         if (dxp * dxp + dyp * dyp <= rad * rad) {
             lives--;
             if (lives <= 0) {
@@ -301,7 +301,7 @@ function maybeAdvanceLevel() {
 }
 
 function drawStars() {
-    var k;
+    let k;
     for (k = 0; k < STAR_COUNT; k++) {
         Draw.rect(starX[k], starY[k], 1, 1, STAR);
     }
@@ -310,39 +310,39 @@ function drawStars() {
 function drawShip(thrusting) {
     if (gameOver) return;
     if (invuln > 0 && (frame & 3) < 2) return;
-    var px = shipX | 0;
-    var py = shipY | 0;
-    var nx = -shipSin;
-    var ny = shipCos;
-    var tipX = (px + shipCos * SHIP_RADIUS) | 0;
-    var tipY = (py + shipSin * SHIP_RADIUS) | 0;
-    var leftX = (px - shipCos * (SHIP_RADIUS - 1) + nx * (SHIP_RADIUS - 2)) | 0;
-    var leftY = (py - shipSin * (SHIP_RADIUS - 1) + ny * (SHIP_RADIUS - 2)) | 0;
-    var rightX = (px - shipCos * (SHIP_RADIUS - 1) - nx * (SHIP_RADIUS - 2)) | 0;
-    var rightY = (py - shipSin * (SHIP_RADIUS - 1) - ny * (SHIP_RADIUS - 2)) | 0;
+    let px = shipX | 0;
+    let py = shipY | 0;
+    let nx = -shipSin;
+    let ny = shipCos;
+    let tipX = (px + shipCos * SHIP_RADIUS) | 0;
+    let tipY = (py + shipSin * SHIP_RADIUS) | 0;
+    let leftX = (px - shipCos * (SHIP_RADIUS - 1) + nx * (SHIP_RADIUS - 2)) | 0;
+    let leftY = (py - shipSin * (SHIP_RADIUS - 1) + ny * (SHIP_RADIUS - 2)) | 0;
+    let rightX = (px - shipCos * (SHIP_RADIUS - 1) - nx * (SHIP_RADIUS - 2)) | 0;
+    let rightY = (py - shipSin * (SHIP_RADIUS - 1) - ny * (SHIP_RADIUS - 2)) | 0;
     Draw.line(tipX, tipY, leftX, leftY, SHIP);
     Draw.line(tipX, tipY, rightX, rightY, SHIP);
     Draw.line(leftX, leftY, rightX, rightY, SHIP);
     if (thrusting && (frame & 1) === 0) {
-        var flameX = (px - shipCos * (SHIP_RADIUS + 4)) | 0;
-        var flameY = (py - shipSin * (SHIP_RADIUS + 4)) | 0;
+        let flameX = (px - shipCos * (SHIP_RADIUS + 4)) | 0;
+        let flameY = (py - shipSin * (SHIP_RADIUS + 4)) | 0;
         Draw.line(leftX, leftY, flameX, flameY, SHIP_THRUST);
         Draw.line(rightX, rightY, flameX, flameY, SHIP_THRUST);
     }
 }
 
 function drawBullets() {
-    var k;
+    let k;
     for (k = 0; k < BULLET_CAP; k++) {
         if (blife[k] === 0) continue;
-        var px = bx[k] | 0;
-        var py = by[k] | 0;
+        let px = bx[k] | 0;
+        let py = by[k] | 0;
         Draw.rect(px - 1, py - 1, 2, 2, BULLET);
     }
 }
 
 function drawRock(px, py, rad, hi) {
-    var s = (rad * 0.7) | 0;
+    let s = (rad * 0.7) | 0;
     Draw.line(px - rad, py, px - s, py - s, hi);
     Draw.line(px - s, py - s, px, py - rad, hi);
     Draw.line(px, py - rad, px + s, py - s, hi);
@@ -354,12 +354,12 @@ function drawRock(px, py, rad, hi) {
 }
 
 function drawRocks() {
-    var k;
+    let k;
     for (k = 0; k < ROCK_CAP; k++) {
         if (ralive[k] === 0) continue;
-        var px = rx[k] | 0;
-        var py = ry[k] | 0;
-        var rad = ROCK_RADIUS[rsize[k]];
+        let px = rx[k] | 0;
+        let py = ry[k] | 0;
+        let rad = ROCK_RADIUS[rsize[k]];
         drawRock(px, py, rad, rsize[k] === ROCK_BIG ? ROCK : ROCK_HI);
     }
 }
@@ -370,13 +370,13 @@ function drawHud() {
     fontSmall.color = ACCENT;
     fontSmall.print("Score " + score, 5, 22);
     fontSmall.color = DIM;
-    var rightLbl = "Lvl " + level + "  Lives " + lives;
+    let rightLbl = "Lvl " + level + "  Lives " + lives;
     fontSmall.print(rightLbl, W - fontSmall.getTextSize(rightLbl).width - 4, 22);
     fontSmall.color = DIM;
     fontSmall.print("UP thrust  L/R turn  FIRE shoot  GAME_B menu", 5, H - 16);
     if (gameOver) {
-        var msg = "GAME OVER";
-        var hint = "FIRE: restart";
+        let msg = "GAME OVER";
+        let hint = "FIRE: restart";
         fontBig.color = DANGER;
         fontBig.print(msg, ((W - fontBig.getTextSize(msg).width) / 2) | 0, ((H / 2) - 18) | 0);
         fontSmall.color = TEXT;
@@ -397,7 +397,7 @@ exports.frame = function () {
         return;
     }
 
-    var thrusting = false;
+    let thrusting = false;
     if (gameOver) {
         if (Pad.justPressed(Pad.FIRE)) {
             resetGame();

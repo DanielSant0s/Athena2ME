@@ -89,6 +89,13 @@ public class Rhash {
         entry.co = value;
         return putEntry(0, key, entry);
     }
+    
+    public final Rhash putConst(String key, Rv value) {
+        Rv entry = Rv.acquireRhashEntry();
+        entry.co = value;
+        entry.f = true;
+        return putEntry(0, key, entry);
+    }
 
     /**
      * Store a host/Java object (e.g. {@code javax.microedition.lcdui.Image}) keyed by string.
