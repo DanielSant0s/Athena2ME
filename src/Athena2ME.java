@@ -1,6 +1,5 @@
 import java.io.*;
 import java.util.Hashtable;
-import java.util.Vector;
 
 import javax.microedition.io.Connector;
 import javax.microedition.io.file.FileConnection;
@@ -46,7 +45,17 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
     /** Monotonic id for {@code Pad.addListener}. */
     private int padListenerNextId = 1;
-    private final Vector padListeners = new Vector();
+    private PadListener[] padListeners = new PadListener[4];
+    private int padListenerCount;
+    /** Grow-only snapshot for {@link #dispatchPadListeners}; avoids per-frame allocation. */
+    private PadListener[] padListenerSnap;
+    /** Canonical resource path → decoded {@link Image} (shared with boot splash). */
+    private final Rhash imageResourceCache = new Rhash(16);
+
+    private static long perfFramesRendered;
+    private static long perfNsPadDispatch;
+    private static long perfNsJsCallback;
+    private static long perfNsScreenUpdate;
 
     private static final class PadListener {
         int id;
@@ -75,17 +84,49 @@ public class Athena2ME extends MIDlet implements CommandListener {
         return cv.padNotPressed(L.buttons);
     }
 
+    private void ensurePadListenerCapacity(int need) {
+        if (need <= padListeners.length) {
+            return;
+        }
+        int n = padListeners.length;
+        while (n < need) {
+            n *= 2;
+        }
+        PadListener[] neu = new PadListener[n];
+        System.arraycopy(padListeners, 0, neu, 0, padListenerCount);
+        padListeners = neu;
+    }
+
+    private void addPadListener(PadListener L) {
+        ensurePadListenerCapacity(padListenerCount + 1);
+        padListeners[padListenerCount++] = L;
+    }
+
+    private void removePadListenerById(int id) {
+        for (int i = 0; i < padListenerCount; i++) {
+            if (padListeners[i].id == id) {
+                padListeners[i] = padListeners[--padListenerCount];
+                padListeners[padListenerCount] = null;
+                return;
+            }
+        }
+    }
+
     private void dispatchPadListeners(RocksInterpreter ri, Rv thisRef) {
-        int n = padListeners.size();
+        int n = padListenerCount;
         if (n == 0) {
             return;
         }
-        PadListener[] snap = new PadListener[n];
+        if (padListenerSnap == null || padListenerSnap.length < n) {
+            padListenerSnap = new PadListener[n + 4];
+        }
+        PadListener[] snap = padListenerSnap;
         for (int i = 0; i < n; i++) {
-            snap[i] = (PadListener) padListeners.elementAt(i);
+            snap[i] = padListeners[i];
         }
         for (int i = 0; i < n; i++) {
             PadListener L = snap[i];
+            snap[i] = null;
             if (L == null) {
                 continue;
             }
@@ -97,6 +138,36 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 }
             }
         }
+    }
+
+    /**
+     * Loads and caches a classpath image (same keying as {@link AthenaCanvas#loadImage}).
+     * Used by the main canvas and {@link BootSplashCanvas} so PNGs are decoded once.
+     */
+    public Image loadResourceImage(String name) {
+        if (name == null) {
+            return null;
+        }
+        String path = name.trim();
+        if (path.length() == 0) {
+            return null;
+        }
+        if (path.charAt(0) != '/') {
+            path = "/" + path;
+        }
+        Object hit = imageResourceCache.getNativeRef(path);
+        if (hit instanceof Image) {
+            return (Image) hit;
+        }
+        Image ret = null;
+        try {
+            ret = Image.createImage(path);
+        } catch (Throwable ignored) {
+        }
+        if (ret != null) {
+            imageResourceCache.putNativeRef(path, ret);
+        }
+        return ret;
     }
 
     /**
@@ -146,7 +217,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
         }
         try {
             for (int i = 0; i < 16; i++) {
-                Rv el = arr.get(String.valueOf(i));
+                Rv el = arr.get(Rv.intStr(i));
                 out16[i] = (float) Rv.numValue(el.toNum());
             }
             return true;
@@ -214,7 +285,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
         }
         float[] o = new float[n];
         for (int i = 0; i < n; i++) {
-            Rv e = a.get(String.valueOf(i));
+            Rv e = a.get(Rv.intStr(i));
             o[i] = (float) Rv.numValue((e == null) ? Rv._NaN : e.toNum());
         }
         return o;
@@ -246,7 +317,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
         }
         float[] o = new float[n];
         for (int i = 0; i < n; i++) {
-            Rv e = a.get(String.valueOf(i));
+            Rv e = a.get(Rv.intStr(i));
             o[i] = (float) Rv.numValue((e == null) ? Rv._NaN : e.toNum());
         }
         return o;
@@ -277,7 +348,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
         }
         int[] o = new int[a.num];
         for (int i = 0; i < a.num; i++) {
-            o[i] = jsInt(a.get(String.valueOf(i)));
+            o[i] = jsInt(a.get(Rv.intStr(i)));
         }
         return o;
     }
@@ -358,6 +429,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
         final javax.microedition.lcdui.Font font;
         int color;
         int align;
+        Rv textSizeModule;
+        Rv textSizeW;
+        Rv textSizeH;
         FontView(javax.microedition.lcdui.Font font, int align0, int color0) {
             this.font = font;
             this.align = align0;
@@ -406,7 +480,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
     }
 
     public Athena2ME() {
-        canvas = new AthenaCanvas(false);
+        canvas = new AthenaCanvas(false, this);
         canvas.addCommand(exitCmd);
         canvas.setCommandListener(this);
     }
@@ -534,6 +608,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
         Rv rv = new Rv(false, func, 0);
         rv.co = ri.initGlobalObject();
         final Rv callObj = rv.co;
+        final Athena2ME selfMidlet = this;
 
         Rv _os = ri.newModule();
         ri.addToObject(_os, "platform", new Rv("j2me"));
@@ -699,13 +774,22 @@ public class Athena2ME extends MIDlet implements CommandListener {
                         while (self.frameRunning) {
                             long deadline = System.currentTimeMillis() + frameMs;
                             try {
+                                long t0;
                                 cv.padUpdate();
                                 synchronized (frameJsLock) {
+                                    t0 = System.currentTimeMillis();
+                                    cv.beginFrameAutoBatch();
                                     self.dispatchPadListeners(interp, thisRef);
+                                    perfNsPadDispatch += System.currentTimeMillis() - t0;
                                     PromiseRuntime.drain(interp);
+                                    t0 = System.currentTimeMillis();
                                     interp.call(false, fn, fn.co, thisRef, null, 0, 0);
+                                    perfNsJsCallback += System.currentTimeMillis() - t0;
                                 }
+                                t0 = System.currentTimeMillis();
                                 cv.screenUpdate();
+                                perfNsScreenUpdate += System.currentTimeMillis() - t0;
+                                perfFramesRendered++;
                             } catch (Throwable t) {
                                 t.printStackTrace();
                                 break;
@@ -759,6 +843,12 @@ public class Athena2ME extends MIDlet implements CommandListener {
                         Runtime.getRuntime().gc();
                     }
                 }
+                if (num > 1) {
+                    Rv a1 = Rv.argAt(args, start, num, 1);
+                    if (a1 != Rv._undefined && a1 != Rv._null && a1.asBool()) {
+                        ri.trimInternalPools();
+                    }
+                }
                 long total = Runtime.getRuntime().totalMemory();
                 long free = Runtime.getRuntime().freeMemory();
                 long used = total - free;
@@ -766,7 +856,37 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 ri.addToObject(o, "heapTotal", new Rv((double) total));
                 ri.addToObject(o, "heapFree", new Rv((double) free));
                 ri.addToObject(o, "heapUsed", new Rv((double) used));
+                ri.addToObject(o, "imageCacheEntries", new Rv((double) selfMidlet.imageResourceCache.size));
+                ri.addToObject(o, "moduleCacheEntries", new Rv((double) selfMidlet.moduleCache.size()));
+                ri.addToObject(o, "padListenerCount", new Rv((double) selfMidlet.padListenerCount));
+                ri.addToObject(o, "rhashSlabRecycleDepth", new Rv((double) Rv.rhashEntryRecycleDepth()));
+                ri.addToObject(o, "rhashSlabCapacity", new Rv((double) Rv.rhashEntrySlabCapacity()));
+                ri.addToObject(o, "nativeBindings", new Rv((double) ri.getNativeFunctionCount()));
                 return o;
+            }
+        })));
+
+        ri.addToObject(_os, "getPerfStats",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.getPerfStats", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter useRi) {
+                Rv o = useRi.newModule();
+                long hint = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+                useRi.addToObject(o, "framesRendered", new Rv((double) perfFramesRendered));
+                useRi.addToObject(o, "msPadDispatch", new Rv((double) perfNsPadDispatch));
+                useRi.addToObject(o, "msJsCallback", new Rv((double) perfNsJsCallback));
+                useRi.addToObject(o, "msScreenUpdate", new Rv((double) perfNsScreenUpdate));
+                useRi.addToObject(o, "heapUsedHint", new Rv((double) hint));
+                return o;
+            }
+        })));
+
+        ri.addToObject(_os, "trimPools",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.trimPools", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter useRi) {
+                useRi.trimInternalPools();
+                return Rv._undefined;
             }
         })));
 
@@ -891,8 +1011,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
                             public void run(RocksInterpreter ri2) {
                                 RocksInterpreter use = ri2 != null ? ri2 : riCap;
                                 try {
-                                    Pack ap = new Pack(-1, 0);
-                                    Rv out = use.invokeJS(fnCap, Rv._undefined, ap, 0, 0);
+                                    Rv out = use.invokeJS(fnCap, Rv._undefined, RocksInterpreter.EMPTY_ARGS_PACK, 0, 0);
                                     PromiseRuntime.resolveViaCapability(use, promise, out != null ? out : Rv._undefined);
                                 } catch (Throwable t) {
                                     PromiseRuntime.reject(use, promise, Rv.error(t.getMessage() != null ? t.getMessage() : "spawn failed"));
@@ -1209,8 +1328,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
                             public void run(RocksInterpreter ri2) {
                                 RocksInterpreter use = ri2 != null ? ri2 : riCap;
                                 try {
-                                    Pack ap = new Pack(-1, 0);
-                                    Rv out = use.invokeJS(fnCap, Rv._undefined, ap, 0, 0);
+                                    Rv out = use.invokeJS(fnCap, Rv._undefined, RocksInterpreter.EMPTY_ARGS_PACK, 0, 0);
                                     PromiseRuntime.resolveViaCapability(use, promise, out != null ? out : Rv._undefined);
                                 } catch (Throwable t) {
                                     PromiseRuntime.reject(use, promise, Rv.error(t.getMessage() != null ? t.getMessage() : "Thread.start failed"));
@@ -1283,6 +1401,16 @@ public class Athena2ME extends MIDlet implements CommandListener {
             public final int length = 0;
             public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                 canvas.endSpriteBatch();
+                return Rv._undefined;
+            }
+        })));
+
+        ri.addToObject(_Screen, "setAutoBatch",
+            ri.addNativeFunction(new NativeFunctionListEntry("Screen.setAutoBatch", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                boolean on = num > 0 && Rv.argAt(args, start, num, 0).asBool();
+                canvas.setAutoSpriteBatchPerFrame(on);
                 return Rv._undefined;
             }
         })));
@@ -2169,6 +2297,21 @@ public class Athena2ME extends MIDlet implements CommandListener {
                         w = jf.stringWidth(text);
                         h = jf.getHeight();
                     }
+                    if (op instanceof FontView) {
+                        FontView fv = (FontView) op;
+                        if (fv.textSizeModule == null) {
+                            fv.textSizeModule = ri.newModule();
+                            fv.textSizeW = new Rv(0);
+                            fv.textSizeH = new Rv(0);
+                            ri.addToObject(fv.textSizeModule, "width", fv.textSizeW);
+                            ri.addToObject(fv.textSizeModule, "height", fv.textSizeH);
+                        }
+                        fv.textSizeW.num = w;
+                        fv.textSizeW.f = false;
+                        fv.textSizeH.num = h;
+                        fv.textSizeH.f = false;
+                        return fv.textSizeModule;
+                    }
                     Rv o = ri.newModule();
                     ri.addToObject(o, "width", Rv.smallInt(w));
                     ri.addToObject(o, "height", Rv.smallInt(h));
@@ -2249,7 +2392,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
                     if (++padListenerNextId < 0) {
                         padListenerNextId = 1;
                     }
-                    padListeners.addElement(new PadListener(id, mask, kind, cb));
+                    addPadListener(new PadListener(id, mask, kind, cb));
                     return new Rv((double) id);
                 }
             }
@@ -2264,12 +2407,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
                     return Rv._undefined;
                 }
                 synchronized (jsRuntimeLock) {
-                    for (int i = 0; i < padListeners.size(); i++) {
-                        if (((PadListener) padListeners.elementAt(i)).id == id) {
-                            padListeners.removeElementAt(i);
-                            break;
-                        }
-                    }
+                    removePadListenerById(id);
                 }
                 return Rv._undefined;
             }

@@ -393,6 +393,68 @@ line`, "multi\nline", "template newline");
         truthy(true, "Render3D profile + texture options");
     }
 
+    /**
+     * Fase 0 instrumentação: leitura de os.getPerfStats / getMemoryStats e micro-bancos
+     * (Draw.rect, Pad+listeners, Int32Array 10k, Promise.then em série). Falhas não abortam
+     * outros testes; usa apenas console.log para baseline.
+     */
+    function testPerfPlanMicrobenches() {
+        var i, t0, t1;
+        if (typeof os !== "undefined" && os.getPerfStats) {
+            console.log("os.getPerfStats keys: framesRendered, msPadDispatch, msJsCallback, msScreenUpdate, heapUsedHint");
+        }
+        if (typeof os !== "undefined" && os.getMemoryStats) {
+            var m = os.getMemoryStats(false, false);
+            if (m && m.heapUsed != null) {
+                console.log("os.getMemoryStats heapUsed sample ok");
+            }
+        }
+        if (typeof Draw !== "undefined" && typeof os !== "undefined" && os.uptimeMillis) {
+            t0 = os.uptimeMillis();
+            for (i = 0; i < 1000; i++) {
+                Draw.rect(i & 15, i & 7, 2, 2, 0xff00ff);
+            }
+            t1 = os.uptimeMillis();
+            console.log("bench Draw.rect x1000 ~" + (t1 - t0) + "ms");
+        }
+        if (typeof Pad !== "undefined" && typeof os !== "undefined" && os.uptimeMillis) {
+            var ids = [];
+            for (i = 0; i < 4; i++) {
+                ids.push(Pad.addListener(Pad.UP | Pad.FIRE, Pad.PRESSED, function () { return 0; }));
+            }
+            t0 = os.uptimeMillis();
+            for (i = 0; i < 2000; i++) {
+                Pad.update();
+            }
+            t1 = os.uptimeMillis();
+            for (i = 0; i < ids.length; i++) {
+                Pad.clearListener(ids[i]);
+            }
+            console.log("bench Pad.update x2000 (4 listeners) ~" + (t1 - t0) + "ms");
+        }
+        var a32 = new Int32Array(10000);
+        for (i = 0; i < a32.length; i++) {
+            a32[i] = i;
+        }
+        if (typeof os !== "undefined" && os.uptimeMillis) {
+            t0 = os.uptimeMillis();
+            var s = 0;
+            for (i = 0; i < a32.length; i++) {
+                s += a32[i];
+            }
+            t1 = os.uptimeMillis();
+            console.log("bench Int32Array sum 10k ~" + (t1 - t0) + "ms");
+        }
+        var p = Promise.resolve(1);
+        for (i = 0; i < 50; i++) {
+            p = p.then(function (x) { return x + 1; });
+        }
+        p.then(function (v) {
+            truthy(v === 51, "Promise.then chain x50");
+        });
+        console.log("perf plan microbenches done");
+    }
+
     // ------------------------------------------------------------------------
 
     function runAll() {
@@ -420,6 +482,7 @@ line`, "multi\nline", "template newline");
         try { testOsPool(); }         catch (e) { failed++; console.log("FAIL ospool: " + e.message); }
         try { testScreenBatchAndLayer(); } catch (e) { failed++; console.log("FAIL screen render: " + e.message); }
         try { testRender3DBench(); } catch (e) { failed++; console.log("FAIL render3d: " + e.message); }
+        try { testPerfPlanMicrobenches(); } catch (e) { failed++; console.log("FAIL perf micro: " + e.message); }
 
         console.log("----------");
         console.log("Tests run: " + total + ", failed: " + failed);

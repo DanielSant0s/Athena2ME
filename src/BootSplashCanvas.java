@@ -1,4 +1,3 @@
-import java.io.InputStream;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -142,7 +141,7 @@ public final class BootSplashCanvas extends Canvas {
                 if (im == null || im.path == null || im.path.length() == 0) {
                     continue;
                 }
-                Image src = loadImage(im.path);
+                Image src = midlet.loadResourceImage(im.path);
                 if (src != null) {
                     try {
                         int ix = resolveCoord(im.xSpec, im.x, w, h);
@@ -392,30 +391,4 @@ public final class BootSplashCanvas extends Canvas {
         return neg ? -v : v;
     }
 
-    private Image loadImage(String path) {
-        String p = path.trim();
-        if (p.length() == 0) {
-            return null;
-        }
-        if (p.charAt(0) != '/') {
-            p = "/" + p;
-        }
-        InputStream is = null;
-        try {
-            is = midlet.getClass().getResourceAsStream(p);
-            if (is == null) {
-                return null;
-            }
-            return Image.createImage(is);
-        } catch (Throwable t) {
-            return null;
-        } finally {
-            if (is != null) {
-                try {
-                    is.close();
-                } catch (Throwable t2) {
-                }
-            }
-        }
-    }
 }

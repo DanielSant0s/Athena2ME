@@ -127,15 +127,13 @@ public class Rv {
     }
 
     /** Fixed slab for {@link Rhash} entry nodes. These Rv cells are never JS values. */
-    private static final int RHASH_ENTRY_SLAB_CAP = 1024;
+    private static final int RHASH_ENTRY_SLAB_CAP = 4096;
     private static final Rv[] RHASH_ENTRY_SLAB = new Rv[RHASH_ENTRY_SLAB_CAP];
     private static int rhashEntryTop;
 
     static final Rv acquireRhashEntry() {
-        synchronized (RHASH_ENTRY_SLAB) {
-            if (rhashEntryTop > 0) {
-                return RHASH_ENTRY_SLAB[--rhashEntryTop];
-            }
+        if (rhashEntryTop > 0) {
+            return RHASH_ENTRY_SLAB[--rhashEntryTop];
         }
         return new Rv();
     }
@@ -145,11 +143,18 @@ public class Rv {
             return;
         }
         entry.clearRhashEntry();
-        synchronized (RHASH_ENTRY_SLAB) {
-            if (rhashEntryTop < RHASH_ENTRY_SLAB_CAP) {
-                RHASH_ENTRY_SLAB[rhashEntryTop++] = entry;
-            }
+        if (rhashEntryTop < RHASH_ENTRY_SLAB_CAP) {
+            RHASH_ENTRY_SLAB[rhashEntryTop++] = entry;
         }
+    }
+
+    /** Recycled {@link Rhash} entry nodes sitting in the slab freelist (diagnostic). */
+    public static int rhashEntryRecycleDepth() {
+        return rhashEntryTop;
+    }
+
+    public static int rhashEntrySlabCapacity() {
+        return RHASH_ENTRY_SLAB_CAP;
     }
 
     private final void clearRhashEntry() {
@@ -442,9 +447,15 @@ public class Rv {
         // required because Array.unshift/sort/reverse can replace the holder’s map.
         Rv holder = this.co;
         String key = this.str;
+        int hty = holder.type;
+        // Typed-array elements live in byte[] views; indexed writes bump
+        // holder.gen but not holder.prop.gen, so a PIC keyed only on Rhash.gen
+        // would stay hot forever and return stale values (see put() branches).
+        boolean skipLvaluePic =
+                hty == Rv.UINT8_ARRAY || hty == Rv.INT32_ARRAY || hty == Rv.FLOAT32_ARRAY;
         Rhash hp;
         LvalueInlineCache pic = this.icPic;
-        if (pic != null) {
+        if (!skipLvaluePic && pic != null) {
             for (int i = 0, n = LvalueInlineCache.SLOTS; i < n; i++) {
                 Rv h0 = pic.holder[i];
                 if (h0 == null) {
@@ -462,6 +473,9 @@ public class Rv {
             }
         }
         Rv v = holder.get(key);
+        if (skipLvaluePic) {
+            return v;
+        }
         if (pic == null) {
             this.icPic = pic = new LvalueInlineCache();
         }
@@ -511,18 +525,16 @@ public class Rv {
         // strings without a per-call typeof branch.
         if ((type = this.type) == Rv.STRING || type == Rv.STRING_OBJECT) {
             if ("length".equals(p)) {
-                return new Rv(this.str.length());
+                return Rv.smallInt(this.str.length());
             }
             int pl = p.length();
             if (pl > 0) {
                 char c0 = p.charAt(0);
                 if (c0 >= '0' && c0 <= '9') {
-                    try {
-                        int idx = Integer.parseInt(p);
-                        if (idx >= 0 && idx < this.str.length()) {
-                            return new Rv(String.valueOf(this.str.charAt(idx)));
-                        }
-                    } catch (NumberFormatException ex) { /* non-numeric, fall through */ }
+                    int idx = arrayIndexKey(p);
+                    if (idx >= 0 && idx < this.str.length()) {
+                        return Rv.asciiCharRv(this.str.charAt(idx));
+                    }
                 }
             }
             if (type == Rv.STRING) {
@@ -568,14 +580,14 @@ public class Rv {
             return this.ctorOrProt != null ? this.ctorOrProt : Rv._undefined;
         } else if ("length".equals(p)) { // array/arguments/function/native
             int num = type >= Rv.ARRAY ? this.num : -1;
-            if (num >= 0) return new Rv(num);
+            if (num >= 0) return Rv.smallInt(num);
         } else if (type == Rv.UINT8_ARRAY || type == Rv.INT32_ARRAY || type == Rv.FLOAT32_ARRAY) {
             int idx = arrayIndexKey(p);
             if (idx >= 0) {
                 if (type == Rv.UINT8_ARRAY) {
                     Uint8View uv = (Uint8View) this.opaque;
                     if (idx < uv.byteLength) {
-                        return new Rv(uv.data[uv.offset + idx] & 0xff);
+                        return Rv.smallInt(uv.data[uv.offset + idx] & 0xff);
                     }
                 } else if (type == Rv.INT32_ARRAY) {
                     Int32View iv = (Int32View) this.opaque;
@@ -684,6 +696,9 @@ public class Rv {
                         Rv n = val.toNum();
                         int b = toInt32(numValue(n));
                         uv.data[uv.offset + idx] = (byte) (b & 0xff);
+                        // Bump gen so the per-instance read PIC (symPic*) does not
+                        // return a stale value next time the same key Rv is used.
+                        ++obj.gen;
                     }
                 }
                 return this;
@@ -695,6 +710,7 @@ public class Rv {
                     if (idx < nel) {
                         Rv n = val.toNum();
                         int32StoreLE(iv.data, iv.offset + (idx << 2), toInt32(numValue(n)));
+                        ++obj.gen;
                     }
                 }
                 return this;
@@ -709,6 +725,7 @@ public class Rv {
                             float f = (float) numValue(n);
                             int32StoreLE(fv.data, fv.offset + (idx << 2), Float.floatToIntBits(f));
                         }
+                        ++obj.gen;
                     }
                 }
                 return this;
@@ -894,15 +911,15 @@ public class Rv {
             int num = type >= Rv.ARRAY ? this.num
                     : type == Rv.STRING || type == Rv.STRING_OBJECT ? this.str.length()
                     : -1;
-            if (num >= 0) return new Rv(num);
+            if (num >= 0) return Rv.smallInt(num);
         } else if (type == Rv.UINT8_ARRAY || type == Rv.INT32_ARRAY || type == Rv.FLOAT32_ARRAY) {
-            int idx = arrayIndexKey(p);
+            int idx = arrayIndexFromRvKey(key);
             if (idx >= 0) {
                 Rv tarr;
                 if (type == Rv.UINT8_ARRAY) {
                     Uint8View uv = (Uint8View) this.opaque;
                     if (idx < uv.byteLength) {
-                        tarr = new Rv(uv.data[uv.offset + idx] & 0xff);
+                        tarr = Rv.smallInt(uv.data[uv.offset + idx] & 0xff);
                         symPicKey = key;
                         symPicVal = tarr;
                         symPicGen = this.gen;
@@ -936,6 +953,9 @@ public class Rv {
                     }
                 }
             }
+        }
+        if (p == null) {
+            return Rv._undefined;
         }
         int ph = key.hash;
         if (ph == 0) ph = key.hash = p.hashCode();
@@ -1527,6 +1547,46 @@ public class Rv {
             }
         }
         return v;
+    }
+
+    /**
+     * Typed-array / string index from a key {@link Rv}: numeric keys avoid string
+     * parsing; string keys reuse {@link #arrayIndexKey(String)}.
+     */
+    static int arrayIndexFromRvKey(Rv key) {
+        if (key == null) {
+            return -1;
+        }
+        if (key.type == Rv.NUMBER) {
+            if (key.f) {
+                double d = key.d;
+                if (d < 0.0 || Double.isNaN(d)) {
+                    return -1;
+                }
+                int vi = (int) d;
+                if ((double) vi != d) {
+                    return -1;
+                }
+                return vi;
+            }
+            return key.num >= 0 ? key.num : -1;
+        }
+        return arrayIndexKey(key.str);
+    }
+
+    private static final Rv[] ASCII_CHAR_RV = new Rv[128];
+
+    /** One-character string values for ASCII (cached). */
+    public static Rv asciiCharRv(char c) {
+        if (c < 128) {
+            Rv r = ASCII_CHAR_RV[c];
+            if (r == null) {
+                r = new Rv(String.valueOf(c));
+                ASCII_CHAR_RV[c] = r;
+            }
+            return r;
+        }
+        return new Rv(String.valueOf(c));
     }
 
     /** Small non-negative integers & common negatives: use {@link #_SmallInt} when in range. */

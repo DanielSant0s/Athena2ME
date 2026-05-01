@@ -113,13 +113,27 @@ class RC {
     static final int TOK_SEP =          TOK_COM + RPN_START;
     static final int TOK_JSONCOL =      TOK_COL + RPN_START;
     static final int TOK_EMPTY =        TOK_RPR;
-    
+
+    /** Lexer token stream: {@code iSize == oSize * LEX_STRIDE} (3 ints + 1 object per token). */
+    static final int LEX_STRIDE = 3;
+
     static final String tokensText(Pack tt, int pos, int len) {
         StringBuffer buf = new StringBuffer();
+        boolean lex = tt != null && tt.oSize > 0 && tt.iSize == tt.oSize * LEX_STRIDE;
         for (int i = pos, n = pos + len; i < n; i++) {
             if (i > pos) buf.append(',');
-            int ttype = tt.getInt(i);
-            buf.append(tokenName(ttype, tt.getObject(i)));
+            int ttype = lex ? tt.getInt(i * LEX_STRIDE) : tt.getInt(i);
+            buf.append(tokenName(ttype, lex ? tt.getObject(i) : tt.getObject(i)));
+        }
+        return buf.toString();
+    }
+
+    /** Format parallel RPN bytecode {@code ops}/{@code consts} (debug). */
+    static final String tokensTextRpn(int[] ops, Object[] consts, int len) {
+        StringBuffer buf = new StringBuffer();
+        for (int i = 0; i < len; i++) {
+            if (i > 0) buf.append(',');
+            buf.append(tokenName(ops[i], consts[i]));
         }
         return buf.toString();
     }
@@ -176,8 +190,12 @@ class RC {
         } else {
             Object val = null;
             if (value != null) {
-                Object[] oo;
-                val = value instanceof Rv ? value : (oo = (Object[]) value).length > 1 ? oo[1] : null;
+                if (value instanceof Rv) {
+                    val = value;
+                } else if (value instanceof Object[]) {
+                    Object[] oo = (Object[]) value;
+                    val = oo.length > 1 ? oo[1] : null;
+                }
             }
             switch (type) {
             case RC.TOK_NUMBER:

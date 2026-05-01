@@ -8,7 +8,6 @@ import java.lang.InterruptedException;
 import java.lang.Runnable;
 import java.lang.System;
 
-import java.util.Hashtable;
 import java.util.Vector;
 
 import javax.microedition.lcdui.game.GameCanvas;
@@ -44,7 +43,7 @@ public class AthenaCanvas extends GameCanvas {
     /** Non-null when drawing to an offscreen layer. */
     private Layer currentLayer;
 
-    private static final int SPRITE_BATCH_INIT = 64;
+    private static final int SPRITE_BATCH_INIT = 256;
     private boolean spriteBatchActive;
     private Image[] spriteBatchImg = new Image[SPRITE_BATCH_INIT];
     private int[] spriteBatchX = new int[SPRITE_BATCH_INIT];
@@ -55,10 +54,13 @@ public class AthenaCanvas extends GameCanvas {
     private int[] spriteBatchH = new int[SPRITE_BATCH_INIT];
     private int spriteBatchCount;
 
-    /** Per-{@link Graphics} color cache + coalesced {@code fillRect} for consecutive same-color rects. */
+    /** When true, {@link #beginFrameAutoBatch()} / {@link #screenUpdate()} bracket each frame with sprite batching. */
+    private boolean autoSpriteBatchPerFrame;
+
+    private final Athena2ME hostMidlet;
     private static final int COLOR_UNSET = 0x80000000;
     private int lastDrawColor = COLOR_UNSET;
-    private static final int RECT_BATCH_INIT = 256;
+    private static final int RECT_BATCH_INIT = 512;
     private int[] rectBatch = new int[RECT_BATCH_INIT * 4];
     private int rectBatchCount;
     private int rectBatchColor = COLOR_UNSET;
@@ -147,12 +149,30 @@ public class AthenaCanvas extends GameCanvas {
         }
     }
 
-    public AthenaCanvas(boolean suppressKeyEvents) {
+    public AthenaCanvas(boolean suppressKeyEvents, Athena2ME host) {
         super(suppressKeyEvents);
 
+        this.hostMidlet = host;
         screenGraphics = getGraphics();
         currentGraphics = screenGraphics;
         currentLayer = null;
+    }
+
+    public void setAutoSpriteBatchPerFrame(boolean enabled) {
+        autoSpriteBatchPerFrame = enabled;
+    }
+
+    /** Called at the start of each native frame loop tick when auto-batch is enabled. */
+    public void beginFrameAutoBatch() {
+        if (autoSpriteBatchPerFrame) {
+            beginSpriteBatch();
+        }
+    }
+
+    private void endFrameAutoSpriteBatch() {
+        if (autoSpriteBatchPerFrame && spriteBatchActive) {
+            endSpriteBatch();
+        }
     }
 
     public final int ALIGN_TOP = Graphics.TOP;
@@ -432,26 +452,15 @@ public class AthenaCanvas extends GameCanvas {
         drawImageRegion(img, x, y, startx, starty, endx, endy);
     }
 
-    // Cache decoded Images by resource name. Loading a PNG on a feature phone can
-    // easily take tens of milliseconds, so per-frame `new Image(...)` calls in JS
-    // become a major stall. The cache is keyed by the exact name string passed in.
-    private final Hashtable imageCache = new Hashtable();
-
     public Image loadImage(String name) {
-        if (name == null) return null;
-        Image ret = (Image) imageCache.get(name);
-        if (ret != null) return ret;
-        try {
-            ret = Image.createImage(name);
-            if (ret != null) imageCache.put(name, ret);
-        } catch (Exception ex) {
-            ex.printStackTrace();
+        if (hostMidlet == null) {
+            return null;
         }
-
-        return ret;
+        return hostMidlet.loadResourceImage(name);
     }
 
     public void screenUpdate() {
+        endFrameAutoSpriteBatch();
         flushRectBatch();
         flushPendingSpriteBatch();
         flushGraphics();

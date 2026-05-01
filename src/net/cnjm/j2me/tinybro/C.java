@@ -1,5 +1,6 @@
 package net.cnjm.j2me.tinybro;
 
+import java.util.Enumeration;
 import java.util.Hashtable;
 
 class C {
@@ -105,9 +106,14 @@ class C {
     static final int FACE_PROPORTIONAL = 64;
     
     static final Hashtable ENUM_TO_STR;
+    /** Dense lookup table: enum code → name (no {@link Integer} boxing on hot path). */
+    static final String[] ENUM_STR_BY_INT;
 
     static final String enumToString(int n) {
-        return (String) ENUM_TO_STR.get(new Integer(n));
+        if (n < 0 || n >= ENUM_STR_BY_INT.length) {
+            return null;
+        }
+        return ENUM_STR_BY_INT[n];
     }
     
     static final Hashtable init(boolean output) {
@@ -147,6 +153,18 @@ class C {
     
     static {
         ENUM_TO_STR = init(false);
+        int max = 0;
+        for (Enumeration e = ENUM_TO_STR.keys(); e.hasMoreElements();) {
+            int k = ((Integer) e.nextElement()).intValue();
+            if (k > max) {
+                max = k;
+            }
+        }
+        ENUM_STR_BY_INT = new String[max + 1];
+        for (Enumeration e = ENUM_TO_STR.keys(); e.hasMoreElements();) {
+            Integer K = (Integer) e.nextElement();
+            ENUM_STR_BY_INT[K.intValue()] = (String) ENUM_TO_STR.get(K);
+        }
     }
 
     static final int E_UNDEFINED = 0;

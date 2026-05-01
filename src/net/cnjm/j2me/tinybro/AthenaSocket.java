@@ -26,9 +26,19 @@ public final class AthenaSocket {
     private DatagramConnection dgramConn;
     private String lastDatagramAddress;
 
+    private Datagram sendDatagram;
+    private Datagram recvDatagram;
+    private int recvDatagramCap;
+
     public AthenaSocket(int domain, int type) {
         this.domain = domain;
         this.type = type;
+    }
+
+    private void releaseDatagramBuffers() {
+        sendDatagram = null;
+        recvDatagram = null;
+        recvDatagramCap = 0;
     }
 
     public void connect(String host, int port) throws IOException {
@@ -88,7 +98,16 @@ public final class AthenaSocket {
         }
         if (type == SOCK_DGRAM) {
             if (dgramConn == null) throw new IOException("datagram not open");
-            Datagram d = dgramConn.newDatagram(len + 64);
+            int dgLen = len + 64;
+            if (sendDatagram == null) {
+                sendDatagram = dgramConn.newDatagram(dgLen);
+            } else {
+                byte[] db = sendDatagram.getData();
+                if (db == null || db.length < dgLen) {
+                    sendDatagram = dgramConn.newDatagram(dgLen);
+                }
+            }
+            Datagram d = sendDatagram;
             d.setData(data, off, len);
             if (lastDatagramAddress != null) {
                 d.setAddress(lastDatagramAddress);
@@ -108,7 +127,11 @@ public final class AthenaSocket {
         if (type == SOCK_DGRAM) {
             if (dgramConn == null) throw new IOException("datagram not open");
             int cap = maxLen < 256 ? 256 : (maxLen > 65496 ? 65496 : maxLen);
-            Datagram d = dgramConn.newDatagram(cap);
+            if (recvDatagram == null || recvDatagramCap < cap) {
+                recvDatagram = dgramConn.newDatagram(cap);
+                recvDatagramCap = cap;
+            }
+            Datagram d = recvDatagram;
             dgramConn.receive(d);
             int n = d.getLength();
             if (n > maxLen) n = maxLen;
@@ -135,5 +158,6 @@ public final class AthenaSocket {
         if (dgramConn != null) try { dgramConn.close(); } catch (IOException ignored) {}
         dgramConn = null;
         lastDatagramAddress = null;
+        releaseDatagramBuffers();
     }
 }
