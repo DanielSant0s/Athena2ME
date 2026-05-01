@@ -73,6 +73,8 @@ public final class Render3DSoftBackend implements Render3DBackend {
     private boolean texWrapRepeat = true;
     /** Reused row buffer for {@link AthenaCanvas#drawRgb} texturing. */
     private int[] texScanline;
+    /** Reused edge buffer for triangle scanlines (avoids per-triangle alloc). */
+    private final float[] edgeXsBuf = new float[8];
 
     public Render3DSoftBackend() {
         setIdentity4(mUser);
@@ -755,7 +757,7 @@ public final class Render3DSoftBackend implements Render3DBackend {
         if (tden * tden < 0.1f) {
             return;
         }
-        float[] edgeXs = new float[8];
+        float[] edgeXs = edgeXsBuf;
         for (int y = ymin; y <= ymax; y++) {
             float py = y + 0.5f;
             int en = collectTriangleScanlineXs(py, x0, y0, x1, y1, x2, y2, edgeXs);
@@ -763,8 +765,8 @@ public final class Render3DSoftBackend implements Render3DBackend {
                 continue;
             }
             sortFloats(edgeXs, en);
-            int xl = (int) Math.floor((double) edgeXs[0]);
-            int xr = (int) Math.ceil((double) edgeXs[en - 1]);
+            int xl = floorSigned(edgeXs[0]);
+            int xr = ceilSigned(edgeXs[en - 1]);
             if (xl < xmin) {
                 xl = xmin;
             }
@@ -947,9 +949,39 @@ public final class Render3DSoftBackend implements Render3DBackend {
         if (tden * tden < 0.1f) {
             return;
         }
+        float[] edgeXs = edgeXsBuf;
         for (int y = ymin; y <= ymax; y++) {
-            for (int x = xmin; x <= xmax; x++) {
-                float px = x + 0.5f, py = y + 0.5f;
+            float py = y + 0.5f;
+            int en = collectTriangleScanlineXs(py, x0, y0, x1, y1, x2, y2, edgeXs);
+            if (en < 2) {
+                continue;
+            }
+            sortFloats(edgeXs, en);
+            int xl = floorSigned(edgeXs[0]);
+            int xr = ceilSigned(edgeXs[en - 1]);
+            if (xl < xmin) {
+                xl = xmin;
+            }
+            if (xr > xmax) {
+                xr = xmax;
+            }
+            if (xl < 0) {
+                xl = 0;
+            }
+            if (xr >= scw) {
+                xr = scw - 1;
+            }
+            if (xl > xr) {
+                continue;
+            }
+            int span = xr - xl + 1;
+            if (texScanline == null || texScanline.length < span) {
+                int cap = span < 256 ? 256 : span;
+                texScanline = new int[cap];
+            }
+            for (int xi = 0; xi < span; xi++) {
+                int x = xl + xi;
+                float px = x + 0.5f;
                 float bba = triSignArea2(px, py, (float) x1, (float) y1, (float) x2, (float) y2) / tden;
                 float bbb = triSignArea2((float) x0, (float) y0, px, py, (float) x2, (float) y2) / tden;
                 float bbc = 1.0f - bba - bbb;
@@ -958,21 +990,41 @@ public final class Render3DSoftBackend implements Render3DBackend {
                     bbb = -bbb;
                     bbc = -bbc;
                 } else if (!(bba >= 0.0f && bbb >= 0.0f && bbc >= 0.0f)) {
+                    texScanline[xi] = 0;
                     continue;
                 }
                 float den = bba * in0 + bbb * in1 + bbc * in2;
                 if (den < 1.0e-20f) {
+                    texScanline[xi] = 0;
                     continue;
                 }
                 float ezW = 1.0f / den;
                 int zi = y * scw + x;
                 if (Float.intBitsToFloat(zb[zi]) <= ezW) {
+                    texScanline[xi] = 0;
                     continue;
                 }
                 zb[zi] = Float.floatToIntBits(ezW);
-                c.drawRect(x, y, 1, 1, col);
+                texScanline[xi] = col;
             }
+            c.drawRgb(texScanline, 0, span, xl, y, span, 1, true);
         }
+    }
+
+    private static int floorSigned(float f) {
+        int i = (int) f;
+        if (f < 0.0f && (float) i != f) {
+            return i - 1;
+        }
+        return i;
+    }
+
+    private static int ceilSigned(float f) {
+        int i = (int) f;
+        if (f > 0.0f && (float) i != f) {
+            return i + 1;
+        }
+        return i;
     }
 
     private float texUForSample(float u) {
@@ -1110,14 +1162,14 @@ public final class Render3DSoftBackend implements Render3DBackend {
         if (t != t) {
             return 0.0f;
         }
-        double x = t - Math.floor(t);
-        if (x < 0.0) {
-            x += 1.0;
+        float x = t - (float) (int) t;
+        if (x < 0.0f) {
+            x += 1.0f;
         }
-        if (x >= 0.999999) {
+        if (x >= 0.999999f) {
             return 0.0f;
         }
-        return (float) x;
+        return x;
     }
 
     private boolean toScreenWithEzv(

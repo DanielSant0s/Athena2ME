@@ -398,7 +398,7 @@ final class StdLib {
                 Rv out = newArray(len);
                 for (int i = 0; i < len; i++) {
                     Rv v = getIdx(thiz, i);
-                    Rv r = ri.invokeJS3(fn, thisArg, v, new Rv(i), thiz);
+                    Rv r = ri.invokeJS3(fn, thisArg, v, Rv.smallInt(i), thiz);
                     out.putl(i, r);
                 }
                 return out;
@@ -414,7 +414,7 @@ final class StdLib {
                 Rv out = newArray();
                 for (int i = 0; i < len; i++) {
                     Rv v = getIdx(thiz, i);
-                    if (ri.invokeJS3(fn, thisArg, v, new Rv(i), thiz).asBool()) pushItem(out, v);
+                    if (ri.invokeJS3(fn, thisArg, v, Rv.smallInt(i), thiz).asBool()) pushItem(out, v);
                 }
                 return out;
             }
@@ -427,7 +427,7 @@ final class StdLib {
                 Rv thisArg = arg(args, start, num, 1);
                 int len = thiz.num;
                 for (int i = 0; i < len; i++) {
-                    ri.invokeJS3(fn, thisArg, getIdx(thiz, i), new Rv(i), thiz);
+                    ri.invokeJS3(fn, thisArg, getIdx(thiz, i), Rv.smallInt(i), thiz);
                 }
                 return Rv._undefined;
             }
@@ -450,7 +450,7 @@ final class StdLib {
                 Pack p = new Pack(-1, 4);
                 for (; i < len; i++) {
                     p.iSize = 0; p.oSize = 0;
-                    p.add(acc); p.add(getIdx(thiz, i)); p.add(new Rv(i)); p.add(thiz);
+                    p.add(acc); p.add(getIdx(thiz, i)); p.add(Rv.smallInt(i)); p.add(thiz);
                     acc = ri.invokeJS(fn, Rv._undefined, p, 0, 4);
                 }
                 return acc;
@@ -474,7 +474,7 @@ final class StdLib {
                 Pack p = new Pack(-1, 4);
                 for (; i >= 0; i--) {
                     p.iSize = 0; p.oSize = 0;
-                    p.add(acc); p.add(getIdx(thiz, i)); p.add(new Rv(i)); p.add(thiz);
+                    p.add(acc); p.add(getIdx(thiz, i)); p.add(Rv.smallInt(i)); p.add(thiz);
                     acc = ri.invokeJS(fn, Rv._undefined, p, 0, 4);
                 }
                 return acc;
@@ -489,7 +489,7 @@ final class StdLib {
                 int len = thiz.num;
                 for (int i = 0; i < len; i++) {
                     Rv v = getIdx(thiz, i);
-                    if (ri.invokeJS3(fn, thisArg, v, new Rv(i), thiz).asBool()) return v;
+                    if (ri.invokeJS3(fn, thisArg, v, Rv.smallInt(i), thiz).asBool()) return v;
                 }
                 return Rv._undefined;
             }
@@ -502,7 +502,7 @@ final class StdLib {
                 Rv thisArg = arg(args, start, num, 1);
                 int len = thiz.num;
                 for (int i = 0; i < len; i++) {
-                    if (ri.invokeJS3(fn, thisArg, getIdx(thiz, i), new Rv(i), thiz).asBool()) return new Rv(i);
+                    if (ri.invokeJS3(fn, thisArg, getIdx(thiz, i), Rv.smallInt(i), thiz).asBool()) return Rv.smallInt(i);
                 }
                 return new Rv(-1);
             }
@@ -515,7 +515,7 @@ final class StdLib {
                 Rv thisArg = arg(args, start, num, 1);
                 int len = thiz.num;
                 for (int i = 0; i < len; i++) {
-                    if (ri.invokeJS3(fn, thisArg, getIdx(thiz, i), new Rv(i), thiz).asBool()) return Rv._true;
+                    if (ri.invokeJS3(fn, thisArg, getIdx(thiz, i), Rv.smallInt(i), thiz).asBool()) return Rv._true;
                 }
                 return Rv._false;
             }
@@ -528,7 +528,7 @@ final class StdLib {
                 Rv thisArg = arg(args, start, num, 1);
                 int len = thiz.num;
                 for (int i = 0; i < len; i++) {
-                    if (!ri.invokeJS3(fn, thisArg, getIdx(thiz, i), new Rv(i), thiz).asBool()) return Rv._false;
+                    if (!ri.invokeJS3(fn, thisArg, getIdx(thiz, i), Rv.smallInt(i), thiz).asBool()) return Rv._false;
                 }
                 return Rv._true;
             }
@@ -557,7 +557,7 @@ final class StdLib {
                 int len = thiz.num;
                 if (from < 0) from = Math.max(0, len + from);
                 for (int i = from; i < len; i++) {
-                    if (strictEq(getIdx(thiz, i), needle)) return new Rv(i);
+                    if (strictEq(getIdx(thiz, i), needle)) return Rv.smallInt(i);
                 }
                 return new Rv(-1);
             }
@@ -572,7 +572,7 @@ final class StdLib {
                 if (from < 0) from += len;
                 if (from >= len) from = len - 1;
                 for (int i = from; i >= 0; i--) {
-                    if (strictEq(getIdx(thiz, i), needle)) return new Rv(i);
+                    if (strictEq(getIdx(thiz, i), needle)) return Rv.smallInt(i);
                 }
                 return new Rv(-1);
             }
@@ -651,8 +651,8 @@ final class StdLib {
                 if (src.type == Rv.STRING || src.type == Rv.STRING_OBJECT) {
                     String s = src.toStr().str;
                     for (int i = 0, n = s.length(); i < n; i++) {
-                        Rv v = new Rv(String.valueOf(s.charAt(i)));
-                        if (hasMap) v = ri.invokeJS3(mapfn, Rv._undefined, v, new Rv(i), src);
+                        Rv v = Rv.asciiCharRv(s.charAt(i));
+                        if (hasMap) v = ri.invokeJS3(mapfn, Rv._undefined, v, Rv.smallInt(i), src);
                         out.putl(i, v);
                     }
                     return out;
@@ -660,7 +660,7 @@ final class StdLib {
                 int len = src.num;
                 for (int i = 0; i < len; i++) {
                     Rv v = getIdx(src, i);
-                    if (hasMap) v = ri.invokeJS3(mapfn, Rv._undefined, v, new Rv(i), src);
+                    if (hasMap) v = ri.invokeJS3(mapfn, Rv._undefined, v, Rv.smallInt(i), src);
                     out.putl(i, v);
                 }
                 return out;

@@ -11,6 +11,9 @@ public class Rhash {
     private Pack keys;
     private boolean updatekey;
 
+    /** Current insertion-shape (shared when key order matches); see {@link RhashShape}. */
+    public RhashShape shape;
+
     public int size;
 
     /** Structural change counter. Bumped whenever a key is inserted, replaced
@@ -28,6 +31,20 @@ public class Rhash {
         reset(initialCapacity);
     }
     
+    public final Rhash clearPreserveCapacity() {
+        releaseEntries();
+        size = 0;
+        gen = 0;
+        layoutFp = 0;
+        updatekey = true;
+        if (keys != null) {
+            keys.iSize = 0;
+            keys.oSize = 0;
+        }
+        shape = null;
+        return this;
+    }
+
     public final Rhash reset(int initialCapacity) {
         releaseEntries();
         table = new Rv[initialCapacity];
@@ -37,6 +54,7 @@ public class Rhash {
         keys = new Pack(-1, -1);
         gen = 0;
         layoutFp = 0;
+        shape = null;
         return this;
     }
 
@@ -70,6 +88,23 @@ public class Rhash {
         Rv entry = Rv.acquireRhashEntry();
         entry.co = value;
         return putEntry(0, key, entry);
+    }
+
+    /**
+     * Store a host/Java object (e.g. {@code javax.microedition.lcdui.Image}) keyed by string.
+     * Uses the entry's {@link Rv#opaque}; {@link Rv#co} stays {@code null}.
+     */
+    public final Rhash putNativeRef(String key, Object ref) {
+        Rv entry = Rv.acquireRhashEntry();
+        entry.co = null;
+        entry.opaque = ref;
+        return putEntry(0, key, entry);
+    }
+
+    /** @return opaque ref stored with {@link #putNativeRef}, or {@code null} */
+    public final Object getNativeRef(String key) {
+        Rv entry = getEntry(0, key);
+        return entry != null ? entry.opaque : null;
     }
     
     public final Rv getEntry(int iKey, String sKey) {
@@ -128,6 +163,9 @@ public class Rhash {
                 return this;
             }
         }
+        if (sKey != null) {
+            shape = RhashShape.refine(shape, sKey);
+        }
         layoutFp ^= layoutKeyMix(iKey, sKey);
         Rv next = tab[index];
         tab[index] = entry;
@@ -153,6 +191,7 @@ public class Rhash {
                 p.prev = null;
                 --size;
                 layoutFp ^= layoutKeyMix(iKey, sKey);
+                shape = null;
                 ++gen;
                 updatekey = true;
                 return p;

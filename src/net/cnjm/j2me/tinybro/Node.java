@@ -18,6 +18,16 @@ public class Node {
     public Node parent;
     
     public Pack children;
+
+    /**
+     * Compiled RPN for {@link RC#TOK_MUL} expression nodes
+     * ({@link RocksInterpreter#expression}): parallel {@code rpnOps[i]} (opcode;
+     * low 16 bits = token, high bits = jump offset for {@code &&}/{@code ||}) and
+     * {@code rpnConsts[i]} (operands / operator cells).
+     */
+    public int[] rpnOps;
+    public Object[] rpnConsts;
+    public int rpnLen;
     
     /**
      * properties = Pack(n, n) {
@@ -631,8 +641,8 @@ public class Node {
                     .append(" at (").append(l.iSize).append(',').append(l.oSize).append(')');
             if (tagType == RC.TOK_FUNCTION) {
                 buf.append(" <ID=").append(id).append('>');
-            } else if (tagType == RC.TOK_MUL && cc != null) {
-                buf.append(" <RPN> { ").append(RC.tokensText(cc, 0, cc.iSize)).append(" }");
+            } else if (tagType == RC.TOK_MUL && rpnLen > 0) {
+                buf.append(" <RPN> { ").append(RC.tokensTextRpn(rpnOps, rpnConsts, rpnLen)).append(" }");
             }
 
             int pos = display, len = state & 0x7FFFFFFF;

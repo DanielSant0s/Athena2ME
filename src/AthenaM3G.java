@@ -68,6 +68,10 @@ public final class AthenaM3G {
     private int oStackDep;
     /** M3G {@link Transform} uses row-major 4x4; JS passes column-major for {@link #setObjectTransformFromColumnMajor}. */
     private final float[] m3gFromColTmp = new float[16];
+    /** Reused row-major basis for directional head light (see {@link #setHeadLightTransformForDirection}). */
+    private final float[] headLightMatReuse = new float[16];
+    /** Reused view matrix for {@link #buildLookAtCameraTransform()}. */
+    private final float[] lookAtMatReuse = new float[16];
     private VertexBuffer meshVb;
     private TriangleStripArray meshIb;
     private Appearance meshAppearance;
@@ -855,7 +859,7 @@ public final class AthenaM3G {
      * Maps local -Z to world -L (direction toward light = L) so the fixed directional
      * in {@link #headLight} matches {@code setGlobalLightDirection} (WTK has no {@code Light#setDirection}).
      */
-    private static void setHeadLightTransformForDirection(float lx, float ly, float lz, Transform out) {
+    private void setHeadLightTransformForDirection(float lx, float ly, float lz, Transform out) {
         out.setIdentity();
         float uxx = 0.0f, uyy = 1.0f, uzz = 0.0f;
         float rx = uyy * lz - uzz * ly;
@@ -889,7 +893,7 @@ public final class AthenaM3G {
         uux /= uul;
         uuy /= uul;
         uuz /= uul;
-        float[] m = new float[16];
+        float[] m = headLightMatReuse;
         m[0] = rx;
         m[1] = uux;
         m[2] = lx;
@@ -946,7 +950,7 @@ public final class AthenaM3G {
         uux /= uul;
         uuy /= uul;
         uuz /= uul;
-        float[] m = new float[16];
+        float[] m = lookAtMatReuse;
         m[0] = rx;
         m[1] = uux;
         m[2] = -fx;

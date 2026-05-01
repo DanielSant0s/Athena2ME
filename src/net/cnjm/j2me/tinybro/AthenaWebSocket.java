@@ -18,6 +18,13 @@ public final class AthenaWebSocket {
     private boolean open;
     private String lastError = "";
 
+    private final byte[] wsHdr2 = new byte[2];
+    private final byte[] wsExt2 = new byte[2];
+    private final byte[] wsExt8 = new byte[8];
+    private final byte[] wsMaskKey = new byte[4];
+    private byte[] wsPayloadScratch;
+    private byte[] wsFrameScratch;
+
     public AthenaWebSocket(String url) throws IOException {
         final String[] host = new String[1];
         final int[] port = new int[1];
@@ -151,6 +158,28 @@ public final class AthenaWebSocket {
         }
     }
 
+    private byte[] ensureFrameBuf(int need) {
+        if (wsFrameScratch == null || wsFrameScratch.length < need) {
+            int n = wsFrameScratch == null ? need : wsFrameScratch.length * 2;
+            while (n < need) {
+                n *= 2;
+            }
+            wsFrameScratch = new byte[n];
+        }
+        return wsFrameScratch;
+    }
+
+    private byte[] ensurePayloadBuf(int need) {
+        if (wsPayloadScratch == null || wsPayloadScratch.length < need) {
+            int n = wsPayloadScratch == null ? need : wsPayloadScratch.length * 2;
+            while (n < need) {
+                n *= 2;
+            }
+            wsPayloadScratch = new byte[n];
+        }
+        return wsPayloadScratch;
+    }
+
     public void sendBinary(byte[] data, int off, int len) throws IOException {
         if (!open) throw new IOException("closed");
         if (data == null || len <= 0) return;
@@ -162,7 +191,8 @@ public final class AthenaWebSocket {
         } else {
             throw new IOException("frame too large");
         }
-        byte[] frame = new byte[headerLen + len + 4];
+        int frameTotal = headerLen + len + 4;
+        byte[] frame = ensureFrameBuf(frameTotal);
         int i = 0;
         frame[i++] = (byte) 0x82;
         if (len < 126) {
@@ -172,14 +202,13 @@ public final class AthenaWebSocket {
             frame[i++] = (byte) (len >> 8);
             frame[i++] = (byte) (len & 0xff);
         }
-        byte[] mask = new byte[4];
         for (int m = 0; m < 4; m++) {
-            mask[m] = (byte) ((System.currentTimeMillis() >> (m * 8)) & 0xff);
+            wsMaskKey[m] = (byte) ((System.currentTimeMillis() >> (m * 8)) & 0xff);
         }
-        System.arraycopy(mask, 0, frame, i, 4);
+        System.arraycopy(wsMaskKey, 0, frame, i, 4);
         i += 4;
         for (int j = 0; j < len; j++) {
-            frame[i + j] = (byte) (data[off + j] ^ mask[j & 3]);
+            frame[i + j] = (byte) (data[off + j] ^ wsMaskKey[j & 3]);
         }
         out.write(frame, 0, i + len);
         out.flush();
@@ -188,41 +217,36 @@ public final class AthenaWebSocket {
     public byte[] recvFrame() throws IOException {
         if (!open) throw new IOException("closed");
         while (true) {
-            byte[] h = new byte[2];
-            readFully(in, h, 0, 2);
-            int b0 = h[0] & 0xff;
-            int b1 = h[1] & 0xff;
+            readFully(in, wsHdr2, 0, 2);
+            int b0 = wsHdr2[0] & 0xff;
+            int b1 = wsHdr2[1] & 0xff;
             int opcode = b0 & 0x0f;
             boolean masked = (b1 & 0x80) != 0;
             long plen = b1 & 0x7f;
             if (plen == 126) {
-                byte[] e = new byte[2];
-                readFully(in, e, 0, 2);
-                plen = ((e[0] & 0xff) << 8) | (e[1] & 0xff);
+                readFully(in, wsExt2, 0, 2);
+                plen = ((wsExt2[0] & 0xff) << 8) | (wsExt2[1] & 0xff);
             } else if (plen == 127) {
-                byte[] e = new byte[8];
-                readFully(in, e, 0, 8);
+                readFully(in, wsExt8, 0, 8);
                 plen = 0;
                 for (int k = 0; k < 8; k++) {
-                    plen = (plen << 8) | (e[k] & 0xff);
+                    plen = (plen << 8) | (wsExt8[k] & 0xff);
                 }
                 if (plen > Integer.MAX_VALUE) {
                     throw new IOException("frame too large");
                 }
             }
             int payloadLen = (int) plen;
-            byte[] maskKey = null;
             if (masked) {
-                maskKey = new byte[4];
-                readFully(in, maskKey, 0, 4);
+                readFully(in, wsMaskKey, 0, 4);
             }
-            byte[] payload = payloadLen > 0 ? new byte[payloadLen] : new byte[0];
+            byte[] payload = ensurePayloadBuf(payloadLen);
             if (payloadLen > 0) {
                 readFully(in, payload, 0, payloadLen);
             }
-            if (masked && maskKey != null) {
+            if (masked) {
                 for (int j = 0; j < payloadLen; j++) {
-                    payload[j] ^= maskKey[j & 3];
+                    payload[j] ^= wsMaskKey[j & 3];
                 }
             }
             if (opcode == 0x8) {
@@ -230,14 +254,23 @@ public final class AthenaWebSocket {
                 return null;
             }
             if (opcode == 0x9) {
-                sendPong(payload);
+                byte[] pongCopy = payloadLen <= 0 ? new byte[0] : new byte[payloadLen];
+                if (payloadLen > 0) {
+                    System.arraycopy(payload, 0, pongCopy, 0, payloadLen);
+                }
+                sendPong(pongCopy);
                 continue;
             }
             if (opcode == 0xA) {
                 continue;
             }
             if (opcode == 0x1 || opcode == 0x2) {
-                return payload;
+                if (payloadLen <= 0) {
+                    return new byte[0];
+                }
+                byte[] out = new byte[payloadLen];
+                System.arraycopy(payload, 0, out, 0, payloadLen);
+                return out;
             }
         }
     }
@@ -246,7 +279,8 @@ public final class AthenaWebSocket {
         if (!open) return;
         int len = pingPayload != null ? pingPayload.length : 0;
         int headerLen = len < 126 ? 6 : 8;
-        byte[] frame = new byte[headerLen + len + 4];
+        int frameTotal = headerLen + len + 4;
+        byte[] frame = ensureFrameBuf(frameTotal);
         int i = 0;
         frame[i++] = (byte) 0x8A;
         if (len < 126) {
@@ -256,15 +290,14 @@ public final class AthenaWebSocket {
             frame[i++] = (byte) (len >> 8);
             frame[i++] = (byte) (len & 0xff);
         }
-        byte[] mask = new byte[4];
         for (int m = 0; m < 4; m++) {
-            mask[m] = (byte) ((System.currentTimeMillis() >> (m * 8)) & 0xff);
+            wsMaskKey[m] = (byte) ((System.currentTimeMillis() >> (m * 8)) & 0xff);
         }
-        System.arraycopy(mask, 0, frame, i, 4);
+        System.arraycopy(wsMaskKey, 0, frame, i, 4);
         i += 4;
         if (len > 0) {
             for (int j = 0; j < len; j++) {
-                frame[i + j] = (byte) (pingPayload[j] ^ mask[j & 3]);
+                frame[i + j] = (byte) (pingPayload[j] ^ wsMaskKey[j & 3]);
             }
         }
         out.write(frame, 0, i + len);

@@ -12,14 +12,62 @@ public final class PromiseRuntime {
 
     private PromiseRuntime() {}
 
-    private static int capSeq;
+    private static final Object QUEUE_LOCK = new Object();
+    private static Microtask[] MTQ = new Microtask[128];
+    private static int mtqHead;
+    private static int mtqTail;
+    private static int mtqSize;
 
-    private static synchronized int nextCapSeq() {
-        return ++capSeq;
+    private static void mtqGrow() {
+        Microtask[] old = MTQ;
+        int olen = old.length;
+        Microtask[] neu = new Microtask[olen * 2];
+        int k = 0;
+        for (int i = 0; i < mtqSize; i++) {
+            neu[k++] = old[(mtqHead + i) % olen];
+        }
+        MTQ = neu;
+        mtqHead = 0;
+        mtqTail = k;
     }
 
-    private static final Object QUEUE_LOCK = new Object();
-    private static final Vector TASKS = new Vector();
+    static final class CapResolveFn extends NativeFunctionFast {
+        final Rv promise;
+
+        CapResolveFn(Rv promise) {
+            this.promise = promise;
+        }
+
+        public final int length = 1;
+
+        public Rv callFast(boolean isNew, Rv thiz, Pack a, int s, int n, RocksInterpreter ri2) {
+            if (ri2 == null) {
+                return Rv._undefined;
+            }
+            Rv v = n > 0 ? StdLib.arg(a, s, n, 0) : Rv._undefined;
+            resolveViaCapability(ri2, promise, v);
+            return Rv._undefined;
+        }
+    }
+
+    static final class CapRejectFn extends NativeFunctionFast {
+        final Rv promise;
+
+        CapRejectFn(Rv promise) {
+            this.promise = promise;
+        }
+
+        public final int length = 1;
+
+        public Rv callFast(boolean isNew, Rv thiz, Pack a, int s, int n, RocksInterpreter ri2) {
+            if (ri2 == null) {
+                return Rv._undefined;
+            }
+            Rv e = n > 0 ? StdLib.arg(a, s, n, 0) : Rv._undefined;
+            reject(ri2, promise, e);
+            return Rv._undefined;
+        }
+    }
 
     /** Max microtasks processed per {@link #drain} call (avoids infinite starvation). */
     private static final int DRAIN_CAP = 8192;
@@ -57,13 +105,18 @@ public final class PromiseRuntime {
             return;
         }
         synchronized (QUEUE_LOCK) {
-            TASKS.addElement(job);
+            if (mtqSize >= MTQ.length) {
+                mtqGrow();
+            }
+            MTQ[mtqTail] = job;
+            mtqTail = (mtqTail + 1) % MTQ.length;
+            mtqSize++;
         }
     }
 
     public static boolean hasPending() {
         synchronized (QUEUE_LOCK) {
-            return TASKS.size() > 0;
+            return mtqSize > 0;
         }
     }
 
@@ -75,11 +128,13 @@ public final class PromiseRuntime {
         while (n++ < DRAIN_CAP) {
             Microtask job;
             synchronized (QUEUE_LOCK) {
-                if (TASKS.size() == 0) {
+                if (mtqSize == 0) {
                     break;
                 }
-                job = (Microtask) TASKS.firstElement();
-                TASKS.removeElementAt(0);
+                job = MTQ[mtqHead];
+                MTQ[mtqHead] = null;
+                mtqHead = (mtqHead + 1) % MTQ.length;
+                mtqSize--;
             }
             try {
                 job.run(ri);
@@ -130,7 +185,7 @@ public final class PromiseRuntime {
 
     public static void fulfill(RocksInterpreter ri, Rv promise, Rv value) {
         PromiseState st = stateOf(promise);
-        Vector pending;
+        Reaction[] pending;
         Rv settledVal;
         synchronized (st) {
             if (st.state != PromiseState.PENDING) {
@@ -147,7 +202,7 @@ public final class PromiseRuntime {
 
     public static void reject(RocksInterpreter ri, Rv promise, Rv reason) {
         PromiseState st = stateOf(promise);
-        Vector pending;
+        Reaction[] pending;
         Rv settledVal;
         synchronized (st) {
             if (st.state != PromiseState.PENDING) {
@@ -228,28 +283,12 @@ public final class PromiseRuntime {
         fulfill(ri, promise, x);
     }
 
-    static Rv newCapResolve(final RocksInterpreter ri, final Rv promise) {
-        return ri.addNativeFunction(new NativeFunctionListEntry("Promise.__cr" + nextCapSeq(), new NativeFunctionFast() {
-            public final int length = 1;
-            public Rv callFast(boolean isNew, Rv thiz, Pack a, int s, int n, RocksInterpreter ri2) {
-                RocksInterpreter use = ri2 != null ? ri2 : ri;
-                Rv v = n > 0 ? StdLib.arg(a, s, n, 0) : Rv._undefined;
-                resolveViaCapability(use, promise, v);
-                return Rv._undefined;
-            }
-        }));
+    static Rv newCapResolve(RocksInterpreter ri, Rv promise) {
+        return ri.newInlineCapability(new CapResolveFn(promise), 1);
     }
 
-    static Rv newCapReject(final RocksInterpreter ri, final Rv promise) {
-        return ri.addNativeFunction(new NativeFunctionListEntry("Promise.__cj" + nextCapSeq(), new NativeFunctionFast() {
-            public final int length = 1;
-            public Rv callFast(boolean isNew, Rv thiz, Pack a, int s, int n, RocksInterpreter ri2) {
-                RocksInterpreter use = ri2 != null ? ri2 : ri;
-                Rv e = n > 0 ? StdLib.arg(a, s, n, 0) : Rv._undefined;
-                reject(use, promise, e);
-                return Rv._undefined;
-            }
-        }));
+    static Rv newCapReject(RocksInterpreter ri, Rv promise) {
+        return ri.newInlineCapability(new CapRejectFn(promise), 1);
     }
 
     static final class ThenableInvokeJob implements Microtask {
@@ -270,7 +309,9 @@ public final class PromiseRuntime {
             Rv res = newCapResolve(use, targetPromise);
             Rv rej = newCapReject(use, targetPromise);
             try {
-                Pack ap = new Pack(-1, 2);
+                Pack ap = use.scratchTwoArgs;
+                ap.iSize = 0;
+                ap.oSize = 0;
                 ap.add(res);
                 ap.add(rej);
                 use.invokeJS(thenFn, thenable, ap, 0, 2);
@@ -290,17 +331,21 @@ public final class PromiseRuntime {
         return p;
     }
 
-    private static Vector copyReactions(PromiseState st) {
-        Vector out = new Vector();
-        for (int i = 0, n = st.reactions.size(); i < n; i++) {
-            out.addElement(st.reactions.elementAt(i));
+    private static Reaction[] copyReactions(PromiseState st) {
+        int n = st.reactions.size();
+        Reaction[] out = new Reaction[n];
+        for (int i = 0; i < n; i++) {
+            out[i] = (Reaction) st.reactions.elementAt(i);
         }
         return out;
     }
 
-    private static void scheduleReactions(RocksInterpreter ri, Vector pending, boolean fulfilledPath, Rv val) {
-        for (int i = 0, n = pending.size(); i < n; i++) {
-            Reaction rx = (Reaction) pending.elementAt(i);
+    private static void scheduleReactions(RocksInterpreter ri, Reaction[] pending, boolean fulfilledPath, Rv val) {
+        if (pending == null) {
+            return;
+        }
+        for (int i = 0, n = pending.length; i < n; i++) {
+            Reaction rx = pending[i];
             enqueue(new ReactionJob(ri, rx, fulfilledPath, val));
         }
     }
