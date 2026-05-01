@@ -905,7 +905,7 @@ mainloop:
         evalTempUsed[depth] = 0;
         evalDepth = depth + 1;
         try {
-        boolean isLocal = false;
+        int isLocalType = 0;
         int[] _optrType = optrType;
         for (int i = 0; i < n; i++) {
             int t = tt[i];
@@ -924,17 +924,20 @@ mainloop:
                 break;
             case 3: // assign
                 int next = i + 1 < n ? tt[i + 1] : RC.TOK_EOF;
-                if (!isLocal && (next == RC.TOK_VAR || next == RC.TOK_LET || next == RC.TOK_CONST)) {
-                    isLocal = true;
+                if (isLocalType == 0 && (next == RC.TOK_VAR || next == RC.TOK_LET || next == RC.TOK_CONST)) {
+                    isLocalType = next;
                     next = RC.TOK_COM;
                 }
                 o2 = ((Rv) opnd.oArray[--opnd.oSize]).evalVal(callObj);
                 o1 = ((Rv) opnd.oArray[opnd.oSize - 1]).evalRef(callObj, acquireEvalTemp(depth));
                 String symname = o1.str;
-                if (isLocal && next == RC.TOK_COM) {
+                if (isLocalType != 0 && next == RC.TOK_COM) {
                     callObj.putl(symname, Rv._undefined);
                 }
                 opnd.oArray[opnd.oSize - 1] = ((Rv) to[i]).assign(callObj, t, o1, o2);
+                if (isLocalType == RC.TOK_CONST) {
+                    callObj.putc(symname, o2);
+                }
                 break;
             default: // misc op
                 int num = 0;
@@ -956,12 +959,16 @@ mainloop:
                     break;
                 case RC.TOK_SYMBOL:
                     next = i + 1 < n ? tt[i + 1] : RC.TOK_EOF;
-                    if (!isLocal && (next == RC.TOK_VAR || next == RC.TOK_LET || next == RC.TOK_CONST)) {
-                        isLocal = true;
+                    if (isLocalType == 0 && (next == RC.TOK_VAR || next == RC.TOK_LET || next == RC.TOK_CONST)) {
+                        isLocalType = next;
                         next = RC.TOK_COM;
                     }
-                    if (isLocal && next == RC.TOK_COM) {
-                        callObj.putl(((Rv) to[i]).str, Rv._undefined);
+                    if (isLocalType != 0 && next == RC.TOK_COM) {
+                        if (isLocalType == RC.TOK_CONST) {
+                            callObj.putc(((Rv) to[i]).str, Rv._undefined);
+                        } else {
+                            callObj.putl(((Rv) to[i]).str, Rv._undefined);
+                        }
                     }
                     opnd.add(opnd.oSize, to[i]);
                     break;
@@ -2841,7 +2848,7 @@ mainloop:
         ",63," +                        // ?
         ",58," +                        // COLON
         ",1058," +                      // jsoncol
-        ",137," +                       // var
+        ",137,155,156," +               // var, let, const
         ",40," +                        // (
         ",1040,1141," +                 // invoke, init
         ",91," +                        // [

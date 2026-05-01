@@ -730,9 +730,12 @@ public class Rv {
                 }
                 return this;
             }
-            Rv ret;
-            for (; (ret = obj.prop.get(p)) == null && (prev = obj.prev) != null; obj = prev);
-            Rv target = ret == null ? o : obj;
+            Rv retEntry = null;
+            for (; (retEntry = obj.prop.getEntry(0, p)) == null && (prev = obj.prev) != null; obj = prev);
+            if (retEntry != null && retEntry.f) {
+                throw new RuntimeException("TypeError: Assignment to constant variable.");
+            }
+            Rv target = retEntry == null ? o : obj;
             target.prop.put(p, val);
             ++target.gen;
             Object op;
@@ -751,6 +754,19 @@ public class Rv {
      */
     final Rv putl(String p, Rv val) {
         this.prop.put(p, val);
+        ++this.gen;
+        Object op;
+        if ((op = this.opaque) instanceof OpaquePropertySink) {
+            ((OpaquePropertySink) op).onPropertyPut(p, val);
+        }
+        return this;
+    }
+
+    /**
+     * Identical to putl, but marks the entry as constant.
+     */
+    final Rv putc(String p, Rv val) {
+        this.prop.putConst(p, val);
         ++this.gen;
         Object op;
         if ((op = this.opaque) instanceof OpaquePropertySink) {
