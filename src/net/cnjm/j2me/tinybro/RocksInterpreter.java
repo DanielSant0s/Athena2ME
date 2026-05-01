@@ -229,12 +229,6 @@ mainswitch:
                     }
                     String symb = new String(cc, p, pos - p);
                     int iKey = keywordIndex(symb);
-                    // ES6 aliases: "let" and "const" behave as "var" at the token level.
-                    // Real block-scoping for let/const is layered on top in the parser.
-                    if (iKey < 0 && ("let".equals(symb) || "const".equals(symb))) {
-                        iKey = RC.TOK_VAR;
-                    }
-
                     if (afterDot) {
                         addToken(tt, RC.TOK_SYMBOL, p, pos - p, symb);
                     } else {
@@ -496,6 +490,9 @@ mainswitch:
                 t = eat(RC.TOK_EOL);
             }
             if (pos >= endpos) break;
+            if (t == RC.TOK_LET || t == RC.TOK_CONST) {
+                node.state |= 0x40000000;
+            }
             // `async function` — preprocessor normally removes `async`; accept it here too.
             if (t == RC.TOK_ASYNC && pos + 1 < endpos && tti[(pos + 1) * RC.LEX_STRIDE] == RC.TOK_FUNCTION) {
                 pos++;
@@ -537,6 +534,9 @@ mainswitch:
                 n = astNode(node, t, posmk, 0);
                 eat(RC.TOK_LPR);
                 int p = pos;
+                if (tti[p * RC.LEX_STRIDE] == RC.TOK_LET || tti[p * RC.LEX_STRIDE] == RC.TOK_CONST) {
+                    n.state |= 0x40000000;
+                }
                 eatUntil(RC.TOK_SEM, RC.TOK_RPR);
                 if ((t = tti[pos * RC.LEX_STRIDE]) == RC.TOK_RPR) { // ';' not found, this is a "for ... in"
                     pos = p; // go back
@@ -924,7 +924,7 @@ mainloop:
                 break;
             case 3: // assign
                 int next = i + 1 < n ? tt[i + 1] : RC.TOK_EOF;
-                if (!isLocal && next == RC.TOK_VAR) {
+                if (!isLocal && (next == RC.TOK_VAR || next == RC.TOK_LET || next == RC.TOK_CONST)) {
                     isLocal = true;
                     next = RC.TOK_COM;
                 }
@@ -956,7 +956,7 @@ mainloop:
                     break;
                 case RC.TOK_SYMBOL:
                     next = i + 1 < n ? tt[i + 1] : RC.TOK_EOF;
-                    if (!isLocal && next == RC.TOK_VAR) {
+                    if (!isLocal && (next == RC.TOK_VAR || next == RC.TOK_LET || next == RC.TOK_CONST)) {
                         isLocal = true;
                         next = RC.TOK_COM;
                     }
@@ -971,6 +971,8 @@ mainloop:
                     opnd.add(opnd.oSize, evalString ? rv : s);
                     break;
                 case RC.TOK_VAR:
+                case RC.TOK_LET:
+                case RC.TOK_CONST:
                     // skip
                     break;
                 case RC.TOK_COM:
@@ -1111,6 +1113,7 @@ mainloop:
      * @return
      */
     public final Rv call(boolean isInit, Rv function, Rv funCo, Rv thiz, Pack argSrc, int start, int num) {
+        Rv originalFunCo = funCo;
         if (function.type < Rv.FUNCTION) {
             return Rv.error("invalid function");
         }
@@ -1182,6 +1185,11 @@ mainloop:
             }
             boolean isbrk;
             if ((isbrk = t == RC.TOK_BREAK) || t == RC.TOK_CONTINUE) {
+                if ((node.state & 0x40000000) != 0) {
+                    Rv oldScope = funCo;
+                    funCo = funCo.prev;
+                    recycleCallObject(oldScope);
+                }
                 for (;;) {
                     if (stack.iSize == 0) {
                         throw new RuntimeException("syntax error: " + (isbrk ? "break" : "continue"));
@@ -1189,8 +1197,17 @@ mainloop:
                     idx = stack.removeInt(-1) + 1;
                     node = (Node) stack.removeObject(-1);
                     int ty = node.tagType;
-                    if (ty == RC.TOK_WHILE || ty == RC.TOK_FOR || ty == RC.TOK_IN || ty == RC.TOK_DO
-                            || isbrk && ty == RC.TOK_SWITCH) {
+                    
+                    boolean isTarget = (ty == RC.TOK_WHILE || ty == RC.TOK_FOR || ty == RC.TOK_IN || ty == RC.TOK_DO
+                            || isbrk && ty == RC.TOK_SWITCH);
+                    
+                    if ((node.state & 0x40000000) != 0 && !(isTarget && !isbrk)) {
+                        Rv oldScope = funCo;
+                        funCo = funCo.prev;
+                        recycleCallObject(oldScope);
+                    }
+                    
+                    if (isTarget) {
                         break;
                     }
                 }
@@ -1205,6 +1222,11 @@ mainloop:
             int startIdx = 0;
             switch (t) {
             case RC.TOK_LBR: // block
+                if (idx == 0 && (node.state & 0x40000000) != 0) {
+                    Rv blockScope = borrowCallObject();
+                    blockScope.prev = funCo;
+                    funCo = blockScope;
+                }
                 if (idx < children.oSize) {
                     next = cc[idx];
                 } // else pop
@@ -1221,17 +1243,34 @@ mainloop:
                 }
                 break;
             case RC.TOK_WHILE:
+                if (idx == 0 && (node.state & 0x40000000) != 0) {
+                    Rv blockScope = borrowCallObject();
+                    blockScope.prev = funCo;
+                    funCo = blockScope;
+                }
                 if ((evr = eval(funCo, cc[0])).type == Rv.ERROR) return evr;
                 if (evr.evalVal(funCo).asBool()) {
                     next = cc[1];
                 }
                 break;
             case RC.TOK_DO:
+                if (idx == 0 && (node.state & 0x40000000) != 0) {
+                    Rv blockScope = borrowCallObject();
+                    blockScope.prev = funCo;
+                    funCo = blockScope;
+                }
                 if (idx > 0 && (evr = eval(funCo, cc[1])).type == Rv.ERROR) return evr;
                 if (idx == 0 || evr.evalVal(funCo).asBool()) next = cc[0];
                 break;
             case RC.TOK_FOR:
-                if (idx == 0 && (evr = eval(funCo, cc[idx++])).type == Rv.ERROR) return evr;
+                if (idx == 0) {
+                    if ((node.state & 0x40000000) != 0) {
+                        Rv blockScope = borrowCallObject();
+                        blockScope.prev = funCo;
+                        funCo = blockScope;
+                    }
+                    if ((evr = eval(funCo, cc[idx++])).type == Rv.ERROR) return evr;
+                }
                 if (((idx - 1) & 0x1) == 0) {
                     if ((evr = eval(funCo, cc[1])).type == Rv.ERROR) return evr;
                     Rv cond = evr.evalVal(funCo);
@@ -1277,7 +1316,14 @@ mainloop:
                 }
                 break;
             case RC.TOK_IN:
-                if ((evr = eval(funCo, cc[1])).type == Rv.ERROR) return evr;
+                if (idx == 0) {
+                    if ((node.state & 0x40000000) != 0) {
+                        Rv blockScope = borrowCallObject();
+                        blockScope.prev = funCo;
+                        funCo = blockScope;
+                    }
+                    if ((evr = eval(funCo, cc[1])).type == Rv.ERROR) return evr;
+                }
                 Pack arr = evr.evalVal(funCo).keyArray();
                 if (idx < arr.oSize) {
                 	Rv ref;
@@ -1309,6 +1355,12 @@ mainloop:
                 }
                 Object[] blkoo = (block = (Node) cc[1]).children.oArray;
                 if (idx == 0) {
+                    if ((block.state & 0x40000000) != 0) {
+                        Rv blockScope = borrowCallObject();
+                        blockScope.prev = funCo;
+                        funCo = blockScope;
+                        node.state |= 0x40000000;
+                    }
                     if ((evr = eval(funCo, cc[0])).type == Rv.ERROR) return evr;
                     Rv rv = evr.evalVal(funCo);
                     if (node.className == null) { // first call
@@ -1344,7 +1396,19 @@ mainloop:
             }
             int nextty;
             if (next == null) {
-                if (stack.iSize == 0) break;
+                if (stack.iSize == 0) {
+                    if ((node.state & 0x40000000) != 0) {
+                        Rv oldScope = funCo;
+                        funCo = funCo.prev;
+                        recycleCallObject(oldScope);
+                    }
+                    break;
+                }
+                if ((node.state & 0x40000000) != 0) {
+                    Rv oldScope = funCo;
+                    funCo = funCo.prev;
+                    recycleCallObject(oldScope);
+                }
                 idx = stack.iArray[--stack.iSize] + 1;
                 node = (Node) stack.oArray[--stack.oSize];
             } else if ((nextty = ((Node) next).tagType) == '*') {
@@ -1361,6 +1425,11 @@ mainloop:
         }
         return Rv._undefined;
         } finally {
+            while (funCo != originalFunCo && funCo != null) {
+                Rv p = funCo.prev;
+                recycleCallObject(funCo);
+                funCo = p;
+            }
             callDepth = _cd0;
         }
     }
@@ -2745,6 +2814,8 @@ mainloop:
         "finally," + 
         "async," + 
         "await," + 
+        "let," +
+        "const," +
         "";
     
     static final Rhash htKeywords;
