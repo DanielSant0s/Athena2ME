@@ -610,37 +610,37 @@ public class Athena2ME extends MIDlet implements CommandListener {
         final Rv callObj = rv.co;
         final Athena2ME selfMidlet = this;
 
-        Rv ls = new Rv(Rv.OBJECT, null);
+        Rv ls = ri.newModule();
         ri.addToObject(callObj, "localStorage", ls);
         
         ri.addToObject(ls, "setItem", ri.addNativeFunction(new NativeFunctionListEntry("localStorage.setItem", new NativeFunctionFast() {
             public final int length = 2;
-            public Rv func(boolean isNew, Rv _this, Pack args) {
-                String k = args.oSize > 0 ? ((Rv) args.oArray[0]).toStr().str : "undefined";
-                String v = args.oSize > 1 ? ((Rv) args.oArray[1]).toStr().str : "undefined";
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                String k = num > 0 ? ((Rv) args.oArray[start]).toStr().str : "undefined";
+                String v = num > 1 ? ((Rv) args.oArray[start + 1]).toStr().str : "undefined";
                 AthenaStorage.setItem(k, v);
                 return Rv._undefined;
             }
         })));
         ri.addToObject(ls, "getItem", ri.addNativeFunction(new NativeFunctionListEntry("localStorage.getItem", new NativeFunctionFast() {
             public final int length = 1;
-            public Rv func(boolean isNew, Rv _this, Pack args) {
-                String k = args.oSize > 0 ? ((Rv) args.oArray[0]).toStr().str : "undefined";
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                String k = num > 0 ? ((Rv) args.oArray[start]).toStr().str : "undefined";
                 String val = AthenaStorage.getItem(k);
                 return val == null ? Rv._null : new Rv(val);
             }
         })));
         ri.addToObject(ls, "removeItem", ri.addNativeFunction(new NativeFunctionListEntry("localStorage.removeItem", new NativeFunctionFast() {
             public final int length = 1;
-            public Rv func(boolean isNew, Rv _this, Pack args) {
-                String k = args.oSize > 0 ? ((Rv) args.oArray[0]).toStr().str : "undefined";
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                String k = num > 0 ? ((Rv) args.oArray[start]).toStr().str : "undefined";
                 AthenaStorage.removeItem(k);
                 return Rv._undefined;
             }
         })));
         ri.addToObject(ls, "clear", ri.addNativeFunction(new NativeFunctionListEntry("localStorage.clear", new NativeFunctionFast() {
             public final int length = 0;
-            public Rv func(boolean isNew, Rv _this, Pack args) {
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                 AthenaStorage.clear();
                 return Rv._undefined;
             }
