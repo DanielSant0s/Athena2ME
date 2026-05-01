@@ -99,6 +99,8 @@ class RC {
     /** Keyword indices follow {@link RocksInterpreter#KEYWORDS} order (130 + index). */
     static final int TOK_ASYNC =        153;
     static final int TOK_AWAIT =        154;
+    static final int TOK_LET =          155;
+    static final int TOK_CONST =        156;
 
     static final int TOK_EOF =          999;
     

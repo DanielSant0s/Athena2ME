@@ -71,7 +71,6 @@ New types are always being added and this list can grow a lot over time, so stay
 - [x] Keypad functions
 - [x] Timer functions
 - [x] Sound: `Stream` (BGM) + `Sfx` (channels) via MMAPI — see [Sound module](#sound-module)
-- [x] `let` / `const` (tokenizer + parser aliases of `var`)
 - [x] Arrow functions with lexical `this`
 - [x] Template literals (`` `hi ${x}` ``)
 - [x] Default params / object shorthand / computed keys
@@ -93,7 +92,7 @@ New types are always being added and this list can grow a lot over time, so stay
 - [ ] Archive (zip, 7zip, tar, rar) system
 - [x] Add float support
 - [x] Add ArrayBuffer support (`ArrayBuffer`, `Uint8Array`, `Int32Array`, `Float32Array`, `DataView` subset — see standard library list)
-- [ ] Block-scoped `let`/`const` (currently hoisted like `var`)
+- [x] Block-scoped `let`/`const`
 - [x] **`Promise`** (`then` / `catch`, `Promise.resolve` / `Promise.reject`, `new Promise(executor)`, thenable assimilation); microtasks drain on `os.sleep`, `os.flushPromises`, `os.startFrameLoop`, and after the main script finishes
 - [x] Constant folding in the ES6 pre-processor (literal/const-folding in `Es6Preproc` before tokenize, incl. `Math`/`Number` constants; partial `const` propagation)
 - [x] **`async`/`await`** (linear `async function` bodies only — desugared before parse; see [Promise / async](#promise-minimal)); no `async`/`await` in the grammar itself
@@ -353,7 +352,7 @@ conservatively folds pure literal sub-expressions to reduce token count (enabled
 by default). Disable with `RocksInterpreter.setPreprocLiteralFold(false)`.
 
 ```js
-// let / const (hoisted like var today; const is a compile-time hint)
+// let / const (real block scope; const immutability is WIP)
 let hp = 100;
 const MAX = 255;
 
@@ -396,8 +395,8 @@ class Boss extends Enemy {
 }
 ```
 
-Known limitations versus full ES6: `let`/`const` do not yet introduce block
-scope (they behave like hoisted `var`); no regex literals, no generators; no
+Known limitations versus full ES6: `const` does not yet enforce immutability at
+runtime (but block scoping works); no regex literals, no generators; no
 `async`/`await` in the parser grammar—only **linear** `async function` bodies are
 rewritten to `Promise` chains before tokenize (see [Promise (minimal)](#promise-minimal));
 no tagged templates, no `Proxy`/`Reflect`, no symbols as
