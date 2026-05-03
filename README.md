@@ -102,6 +102,7 @@ New types are always being added and this list can grow a lot over time, so stay
 ### Built With
 
 * [WTK](https://www.oracle.com/java/technologies/sun-java-wireless-toolkit.html) (or your Java ME 3 / MSA SDK toolchain, depending on how you import this project)
+* [Apache Ant](https://ant.apache.org/) (for automated builds)
 * [RockScript](https://code.google.com/archive/p/javascript4me/)
 
 `project.properties` in this tree targets **MSA** with optional **JSR-184** (M3G / `Render3D`), **JSR-239**, and **SATSA-JCRMI** flags; adjust the platform line for your WTK or SDK profile.
@@ -864,15 +865,49 @@ SFX is loaded into memory **once** per `Sfx` object; each `play()` creates a new
 * **Frame (same thread as 2D / `os.startFrameLoop`):** `Render3D.begin()` (bind, viewport, clear, camera, lights) → `Render3D.render()` (one or more draws of the current mesh) → `Render3D.end()` (release) → e.g. **`Screen.update()`**. Draw 2D **after** `Render3D.end()` for a HUD, or keep 3D only and clear 2D first as needed.
 * **Helpers** — [res/lib/mesh3d.js](res/lib/mesh3d.js) (optional): `indexBufferToStrips(vertices, faceIndices)`, `computeIndexedNormals(vertices, indices)`, and `uvsToExpandedIndexed(uvs, indices)` for indexed draw paths.
 
-## CI and AthenaStudio API manifest
+## Build, CI and AthenaStudio manifest
 
-GitHub Actions workflow: [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+Athena2ME uses [Apache Ant](https://ant.apache.org/) for building and [GitHub Actions](https://github.com/features/actions) for CI/CD.
 
-- Generates **`build/j2me-api.json`** from `src/Athena2ME.java` via **`node scripts/export-j2me-api.mjs`** (same schema as the AthenaStudio VS Code extension’s `targets/j2me-api.json`).
-- Uploads the file as a **workflow artifact** on every run.
-- On **tags `v*`** , attaches **`j2me-api.json`** to the **GitHub Release** so the AthenaStudio repo (or other tools) can pin a runtime version and download the manifest without cloning Java sources.
+### Local Build
 
-Local run: `node scripts/export-j2me-api.mjs` (output under `build/`, gitignored).
+To build the project locally, you need **JDK 8** and **Apache Ant**.
+
+2.  **Compile and Package:** Run the default Ant task:
+    ```bash
+    ant
+    ```
+    This will compile the source, package the JAR/JAD, and perform **preverification** (required for CLDC).
+3.  **No Preverify:** If you don't have ProGuard installed locally for preverification, you can skip it:
+    ```bash
+    ant -Dskip.preverify=true
+    ```
+    The output artefacts will be in the `build/` directory.
+
+### Docker Build
+
+If you have Docker and Docker Compose installed, you can build the project without installing JDK 8 or Ant on your machine:
+
+1.  Run the build:
+    ```bash
+    docker-compose up --build
+    ```
+    The compiled `.jar` and `.jad` will appear in your local `build/` folder.
+
+### GitHub Actions (CI)
+
+The workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) automates the following on every push:
+
+- **Build J2ME JAR:** Compiles the Java source against J2ME stubs, packages it with resources, and preverifies the bytecode using [ProGuard](https://www.proguard.com/).
+- **API Manifest:** Generates **`build/j2me-api.json`** from `src/Athena2ME.java` via **`node scripts/export-j2me-api.mjs`** (same schema as the **AthenaStudio** VS Code extension’s `targets/j2me-api.json`).
+- **Releases:** On **tags `v*`**, the JAR, JAD, and API manifest are automatically attached to the **GitHub Release** so the AthenaStudio repo (or other tools) can pin a runtime version and download the manifest without cloning Java sources.
+
+### Local Manifest Generation
+
+You can generate the API manifest manually without building the Java code:
+```bash
+node scripts/export-j2me-api.mjs
+```
 
 ## Contributing
 

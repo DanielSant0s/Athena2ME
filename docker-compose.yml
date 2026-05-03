@@ -1,0 +1,10 @@
+services:
+  athena-build:
+    build: .
+    volumes:
+      - .:/app
+      # We mount the whole dir so it has src, res, lib, etc.
+      # The build artifacts will appear in ./build/ on the host
+    container_name: athena2me-compiler
+    # To run a specific ant target, you can override the command:
+    # command: ant clean all
