@@ -6,6 +6,9 @@ import javax.microedition.io.file.*;
 
 public class AthenaFile {
     private FileConnection fc = null;
+    private boolean isResource = false;
+    private String resourcePath = null;
+    private byte[] resourceData = null;
     private InputStream is = null;
     private OutputStream os = null;
     private int pos = 0;
@@ -59,6 +62,37 @@ public class AthenaFile {
     }
 
     public static AthenaFile fopen(String filename, String mode) {
+        if (filename == null) return null;
+        if (!filename.startsWith("file://")) {
+            // Resource mode (read-only)
+            if (!mode.equals(MODE_READ)) return null;
+            String path = filename.startsWith("/") ? filename : ("/" + filename);
+            InputStream resIn = "".getClass().getResourceAsStream(path);
+            if (resIn == null) {
+                resIn = "".getClass().getResourceAsStream(filename);
+                if (resIn == null) return null;
+                path = filename;
+            }
+            try {
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                byte[] buf = new byte[1024];
+                int n;
+                while ((n = resIn.read(buf)) > 0) {
+                    bos.write(buf, 0, n);
+                }
+                resIn.close();
+                AthenaFile af = new AthenaFile(null, O_RDONLY);
+                af.isResource = true;
+                af.resourcePath = path;
+                af.resourceData = bos.toByteArray();
+                af.size = af.resourceData.length;
+                af.is = new ByteArrayInputStream(af.resourceData);
+                return af;
+            } catch (IOException e) {
+                return null;
+            }
+        }
+
         int flags = 0;
         
         if (mode.equals(MODE_READ)) {
@@ -110,20 +144,29 @@ public class AthenaFile {
         }
         
         try {
-            if (is == null) {
-                is = fc.openInputStream();
-            }
-            
-            is.close();
-            is = fc.openInputStream();
-            
-            long skipped = 0;
-            while (skipped < pos) {
-                long s = is.skip(pos - skipped);
-                if (s <= 0) {
-                    break;
+            if (isResource) {
+                if (is == null) {
+                    is = new ByteArrayInputStream(resourceData);
                 }
-                skipped += s;
+                is.close();
+                is = new ByteArrayInputStream(resourceData);
+                is.skip(pos);
+            } else {
+                if (is == null) {
+                    is = fc.openInputStream();
+                }
+                
+                is.close();
+                is = fc.openInputStream();
+                
+                long skipped = 0;
+                while (skipped < pos) {
+                    long s = is.skip(pos - skipped);
+                    if (s <= 0) {
+                        break;
+                    }
+                    skipped += s;
+                }
             }
             
             int bytesToRead = size * count;
@@ -137,7 +180,7 @@ public class AthenaFile {
                 isEOF = true;
             }
             
-            return bytesRead / size; 
+            return bytesRead > 0 ? (bytesRead / size) : 0; 
         } catch (IOException ioe) {
             ioe.printStackTrace();
             return -1;
@@ -145,6 +188,7 @@ public class AthenaFile {
     }
 
     public int fwrite(byte[] buffer, int size, int count) {
+        if (isResource) return -1; // Read-only
         if ((flags & O_WRONLY) == 0 && (flags & O_RDWR) == 0) {
             return -1; 
         }
@@ -255,7 +299,7 @@ public class AthenaFile {
     public int fclose() {
         try {
             closeStreams();
-            fc.close();
+            if (fc != null) fc.close();
             return 0;
         } catch (IOException ioe) {
             ioe.printStackTrace();
@@ -403,6 +447,23 @@ public class AthenaFile {
     }
 
     static public int open(String name, int flags) {
+        if (name == null) return -1;
+        if (!name.startsWith("file://")) {
+            // Resource mode
+            if ((flags & O_WRONLY) != 0 || (flags & O_RDWR) != 0) return -1;
+            AthenaFile af = fopen(name, MODE_READ);
+            if (af == null) return -1;
+            for (int i = 0; i < NUM_DESCRIPTORS; i++) {
+                if (descriptors[i] == null) {
+                    descriptors[i] = af;
+                    af.flags = flags;
+                    return i;
+                }
+            }
+            af.fclose();
+            return -1;
+        }
+
         FileConnection conn = null;
         try {
             conn = (FileConnection)Connector.open(name);
@@ -447,7 +508,7 @@ public class AthenaFile {
         
         try {
             descriptors[fd].closeStreams();
-            descriptors[fd].fc.close();
+            if (descriptors[fd].fc != null) descriptors[fd].fc.close();
         } catch (IOException ioe) {
             System.out.println("Error in close: " + ioe.getMessage());
         } finally {
@@ -467,20 +528,29 @@ public class AthenaFile {
         }
 
         try {
-            if (file.is == null) {
-                file.is = file.fc.openInputStream();
-            }
-
-            file.is.close();
-            file.is = file.fc.openInputStream();
-
-            long skipped = 0;
-            while (skipped < file.pos) {
-                long s = file.is.skip(file.pos - skipped);
-                if (s <= 0) {
-                    break; 
+            if (file.isResource) {
+                if (file.is == null) {
+                    file.is = new ByteArrayInputStream(file.resourceData);
                 }
-                skipped += s;
+                file.is.close();
+                file.is = new ByteArrayInputStream(file.resourceData);
+                file.is.skip(file.pos);
+            } else {
+                if (file.is == null) {
+                    file.is = file.fc.openInputStream();
+                }
+
+                file.is.close();
+                file.is = file.fc.openInputStream();
+
+                long skipped = 0;
+                while (skipped < file.pos) {
+                    long s = file.is.skip(file.pos - skipped);
+                    if (s <= 0) {
+                        break; 
+                    }
+                    skipped += s;
+                }
             }
 
             int bytesRead = file.is.read(buffer, 0, count);
@@ -623,9 +693,15 @@ public class AthenaFile {
         
         try {
             long[] stats = new long[3];
-            stats[0] = file.fc.fileSize();
-            stats[1] = file.fc.isDirectory() ? 1 : 0;
-            stats[2] = file.fc.lastModified();
+            if (file.isResource) {
+                stats[0] = file.size;
+                stats[1] = 0;
+                stats[2] = 0;
+            } else {
+                stats[0] = file.fc.fileSize();
+                stats[1] = file.fc.isDirectory() ? 1 : 0;
+                stats[2] = file.fc.lastModified();
+            }
             return stats;
         } catch (IOException ioe) {
            ioe.printStackTrace();

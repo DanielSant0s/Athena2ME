@@ -152,6 +152,29 @@ public class Athena2ME extends MIDlet implements CommandListener {
         if (path.length() == 0) {
             return null;
         }
+        
+        if (path.startsWith("file://")) {
+            Object hit = imageResourceCache.getNativeRef(path);
+            if (hit instanceof Image) {
+                return (Image) hit;
+            }
+            try {
+                FileConnection fc = (FileConnection)Connector.open(path);
+                if (fc.exists()) {
+                    InputStream in = fc.openInputStream();
+                    Image img = Image.createImage(in);
+                    in.close();
+                    fc.close();
+                    imageResourceCache.putNativeRef(path, img);
+                    return img;
+                }
+                fc.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            return null;
+        }
+
         if (path.charAt(0) != '/') {
             path = "/" + path;
         }
@@ -570,12 +593,32 @@ public class Athena2ME extends MIDlet implements CommandListener {
     }
 
     private void performColdStartPrepareJsThread(BootIniConfig bootCfg) {
-        InputStream is = "".getClass().getResourceAsStream("/main.js");
+        String mainPath = bootCfg.mainScript;
+        if ("ask".equalsIgnoreCase(mainPath)) {
+            AthenaFilePicker picker = new AthenaFilePicker(this);
+            String picked = picker.pick(Display.getDisplay(this), bootCanvas);
+            if (picked != null) {
+                mainPath = picked;
+            } else {
+                mainPath = "/main.js"; // Fallback to default if cancelled
+            }
+        }
+        InputStream is = null;
         String src = "";
 
         try {
-            src = readUTF(readData(is));
-            is.close();
+            if (mainPath.startsWith("file://")) {
+                FileConnection fc = (FileConnection)Connector.open(mainPath);
+                if (fc.exists()) {
+                    is = fc.openInputStream();
+                }
+            } else {
+                is = "".getClass().getResourceAsStream(mainPath);
+            }
+            if (is != null) {
+                src = readUTF(readData(is));
+                is.close();
+            }
         } catch (Exception ex) {
             ex.printStackTrace();
         }
@@ -739,6 +782,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
         Rv _os = ri.newModule();
         ri.addToObject(_os, "platform", new Rv("j2me"));
+        ri.addToObject(_os, "bootPath", new Rv(mainPath));
         ri.addToObject(_os, "O_RDONLY", new Rv(AthenaFile.O_RDONLY));
         ri.addToObject(_os, "O_WRONLY", new Rv(AthenaFile.O_WRONLY));
         ri.addToObject(_os, "O_RDWR", new Rv(AthenaFile.O_RDWR));
@@ -3409,6 +3453,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
         if (path == null) {
             return "/";
         }
+        if (path.indexOf("://") != -1) {
+            return path;
+        }
         int n = path.length();
         StringBuffer sb = new StringBuffer(n);
         for (int i = 0; i < n; i++) {
@@ -3430,8 +3477,16 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
     private static String readResourceUtf8(String absPath) {
         InputStream is = null;
+        FileConnection fc = null;
         try {
-            is = "".getClass().getResourceAsStream(absPath);
+            if (absPath.startsWith("file://")) {
+                fc = (FileConnection) Connector.open(absPath);
+                if (fc.exists()) {
+                    is = fc.openInputStream();
+                }
+            } else {
+                is = "".getClass().getResourceAsStream(absPath);
+            }
             if (is == null) {
                 return null;
             }
@@ -3443,6 +3498,12 @@ public class Athena2ME extends MIDlet implements CommandListener {
             if (is != null) {
                 try {
                     is.close();
+                } catch (IOException e) {
+                }
+            }
+            if (fc != null) {
+                try {
+                    fc.close();
                 } catch (IOException e) {
                 }
             }

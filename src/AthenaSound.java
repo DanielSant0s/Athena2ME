@@ -1,7 +1,6 @@
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
+import javax.microedition.io.*;
+import javax.microedition.io.file.*;
 
 import javax.microedition.media.Manager;
 import javax.microedition.media.Player;
@@ -87,16 +86,27 @@ public final class AthenaSound {
         if (path == null || path.length() == 0) {
             return null;
         }
-        String a = path.charAt(0) == '/' ? path : ("/" + path);
+
         InputStream in = null;
+        FileConnection fc = null;
         try {
-            in = "".getClass().getResourceAsStream(a);
-            if (in == null) {
-                in = "".getClass().getResourceAsStream(path);
+            if (path.startsWith("file://")) {
+                fc = (FileConnection) Connector.open(path);
+                if (fc.exists()) {
+                    in = fc.openInputStream();
+                }
+            } else {
+                String a = path.charAt(0) == '/' ? path : ("/" + path);
+                in = "".getClass().getResourceAsStream(a);
+                if (in == null) {
+                    in = "".getClass().getResourceAsStream(path);
+                }
             }
+
             if (in == null) {
                 return null;
             }
+
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             byte[] buf = new byte[1024];
             int n;
@@ -109,7 +119,16 @@ public final class AthenaSound {
             return null;
         } finally {
             if (in != null) {
-                try { in.close(); } catch (IOException ignored) { }
+                try {
+                    in.close();
+                } catch (IOException ignored) {
+                }
+            }
+            if (fc != null) {
+                try {
+                    fc.close();
+                } catch (IOException ignored) {
+                }
             }
         }
     }

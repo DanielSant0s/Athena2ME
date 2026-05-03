@@ -132,6 +132,7 @@ On cold start, the MIDlet shows a **boot splash** canvas while a background thre
 | `[tick]` | `ms` | Period in **milliseconds** between splash canvas repaints (default **50**). Drives a `java.util.Timer`; must be &gt; 0 to override the default. |
 | `[boot]` | `slides` | **Optional.** Non-negative integer: how many slides to allocate. If set, it defines slide count; otherwise the count is derived from the highest `[splash.N]` index + 1. |
 | `[boot]` | `handoff` | When the game canvas replaces the splash after the interpreter is ready: **`immediate`** — hand off as soon as cold start finishes (may cut the current slide), or **`after_slide`** (default) — wait until the **current** slide’s `holdMs` has elapsed, then hand off. |
+| `[boot]` | `main` | **Optional.** Path to the main script to load. Default is **`/main.js`** (loaded from the JAR). Supports **`file://`** URLs and the special value **`ask`**, which opens a file picker at startup. |
 | `[boot]` | `es6` | **Optional.** If **`true`** (default), the **ES6 preprocessor** runs on the script pipeline (faster *after* the first run thanks to the RMS cache of preprocessed `main.js`, but a cold cache pays preprocessing cost). If **`false`**, preprocessing is **disabled for the whole session** (faster cold start when the cache is empty; use **legacy/ES5-style** scripts only, since features desugared by the preprocessor are unavailable). Recognized falsy tokens: `false`, `0`, `no`, `off`, `legacy` (case-insensitive). |
 | `[splash.N]` | see below | One slide per index `N` (0, 1, …). |
 
@@ -459,6 +460,7 @@ P.S.: *Italic* parameters refer to optional parameters
 ### os module
 * os.setExitHandler(func) - Set *func* to be called when the device run any action to exit Athena2ME.
 * os.platform - Return a string representing the platform: "j2me".
+* os.bootPath - Return the path (from the JAR or filesystem) used to load the current main script.
 * **File descriptor flags (numbers)** — `os.O_RDONLY`, `os.O_WRONLY`, `os.O_RDWR`, `os.O_NDELAY`, `os.O_APPEND`, `os.O_CREAT`, `os.O_TRUNC`, `os.O_EXCL` (same values as `AthenaFile`); **`os.SEEK_SET`**, **`os.SEEK_CUR`**, **`os.SEEK_END`** for `os.seek`.
 * os.open(path, flags) / os.close(fd) / os.seek(fd, offset, whence) — Open a `file://…` path with bitmask *flags*, close a descriptor, or reposition; `seek` returns the new position or `-1` on error.
 * os.read(fd, maxBytes) — Read up to *maxBytes* bytes (clamped to `[1, 1048576]`; if *maxBytes* is below 1, defaults to 1024). Returns a **`Uint8Array`** (empty if EOF, error, or nothing read). Same underlying behaviour as `AthenaFile.read`.

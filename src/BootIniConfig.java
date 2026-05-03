@@ -20,16 +20,20 @@ public final class BootIniConfig {
      * Default is true. Set in {@code [boot]} with {@code es6=false} (or 0, no, off, legacy).
      */
     public boolean es6 = true;
+    public String mainScript = "/main.js";
 
     public final SplashSlide[] slides;
 
-    private BootIniConfig(SplashSlide[] slides0, int tick0, int handoff0, boolean es60) {
+    private BootIniConfig(SplashSlide[] slides0, int tick0, int handoff0, boolean es60, String main0) {
         slides = slides0;
         if (tick0 > 0) {
             tickMs = tick0;
         }
         handoffPolicy = handoff0;
         es6 = es60;
+        if (main0 != null) {
+            mainScript = main0;
+        }
     }
 
     /** One line of text on a splash slide (from {@code text.N} or legacy single {@code text}). */
@@ -79,7 +83,7 @@ public final class BootIniConfig {
         try {
             is = anchor.getResourceAsStream("/boot.ini");
             if (is == null) {
-                return new BootIniConfig(new SplashSlide[0], 50, HANDOFF_AFTER_SLIDE, true);
+                return new BootIniConfig(new SplashSlide[0], 50, HANDOFF_AFTER_SLIDE, true, null);
             }
             byte[] raw = readAll(is);
             is.close();
@@ -88,7 +92,7 @@ public final class BootIniConfig {
             return parseIni(s);
         } catch (Throwable t) {
             t.printStackTrace();
-            return new BootIniConfig(new SplashSlide[0], 50, HANDOFF_AFTER_SLIDE, true);
+            return new BootIniConfig(new SplashSlide[0], 50, HANDOFF_AFTER_SLIDE, true, null);
         } finally {
             if (is != null) {
                 try {
@@ -177,6 +181,7 @@ public final class BootIniConfig {
 
         int handoff = HANDOFF_AFTER_SLIDE;
         boolean es6 = true;
+        String mainPath = "/main.js";
         Hashtable bootSec = (Hashtable) sections.get("boot");
         if (bootSec != null) {
             String h = (String) bootSec.get("handoff");
@@ -195,6 +200,10 @@ public final class BootIniConfig {
                 } else {
                     es6 = true;
                 }
+            }
+            String m = (String) bootSec.get("main");
+            if (m != null) {
+                mainPath = m;
             }
         }
 
@@ -221,7 +230,7 @@ public final class BootIniConfig {
         }
 
         if (count <= 0) {
-            return new BootIniConfig(new SplashSlide[0], tick, handoff, es6);
+            return new BootIniConfig(new SplashSlide[0], tick, handoff, es6, mainPath);
         }
 
         SplashSlide[] slides = new SplashSlide[count];
@@ -232,7 +241,7 @@ public final class BootIniConfig {
                 applySlideKeys(slides[k], sec);
             }
         }
-        return new BootIniConfig(slides, tick, handoff, es6);
+        return new BootIniConfig(slides, tick, handoff, es6, mainPath);
     }
 
     private static void applySlideKeys(SplashSlide sl, Hashtable sec) {

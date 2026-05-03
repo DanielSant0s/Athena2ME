@@ -1,3 +1,6 @@
+import java.io.*;
+import javax.microedition.io.*;
+import javax.microedition.io.file.*;
 import javax.microedition.lcdui.Graphics;
 import javax.microedition.m3g.AnimationController;
 import javax.microedition.m3g.AnimationTrack;
@@ -707,23 +710,39 @@ public final class AthenaM3G {
         if (p0 == null || p0.length() == 0) {
             return null;
         }
-        String pWithLead = p0.charAt(0) == '/' ? p0 : ("/" + p0);
-        String pNoLead = p0.charAt(0) == '/' ? p0.substring(1) : p0;
-        String[] tryNames = { p0, pWithLead, pNoLead };
+
         Image im = null;
-        for (int t = 0; t < tryNames.length; t++) {
-            if (tryNames[t] == null) {
-                continue;
-            }
+        if (p0.startsWith("file://")) {
             try {
-                im = Image.createImage(tryNames[t]);
+                FileConnection fc = (FileConnection) javax.microedition.io.Connector.open(p0);
+                if (fc.exists()) {
+                    InputStream in = fc.openInputStream();
+                    im = Image.createImage(in);
+                    in.close();
+                }
+                fc.close();
             } catch (Throwable e) {
-                im = null;
+                e.printStackTrace();
             }
-            if (im != null) {
-                break;
+        } else {
+            String pWithLead = p0.charAt(0) == '/' ? p0 : ("/" + p0);
+            String pNoLead = p0.charAt(0) == '/' ? p0.substring(1) : p0;
+            String[] tryNames = { p0, pWithLead, pNoLead };
+            for (int t = 0; t < tryNames.length; t++) {
+                if (tryNames[t] == null) {
+                    continue;
+                }
+                try {
+                    im = Image.createImage(tryNames[t]);
+                } catch (Throwable e) {
+                    im = null;
+                }
+                if (im != null) {
+                    break;
+                }
             }
         }
+
         if (im == null) {
             return null;
         }
@@ -756,26 +775,46 @@ public final class AthenaM3G {
             if (resPath == null) {
                 return "null path";
             }
-            String p = resPath;
-            if (p.length() == 0) {
+            if (resPath.length() == 0) {
                 return "empty path";
             }
-            String pNoLead = p.charAt(0) == '/' ? p.substring(1) : p;
-            String pWithLead = p.charAt(0) == '/' ? p : ("/" + p);
 
             Object3D[] roots = null;
-            String[] tryNames = { pWithLead, pNoLead, p };
-            for (int t = 0; t < tryNames.length; t++) {
-                if (tryNames[t] == null) {
-                    continue;
-                }
+            if (resPath.startsWith("file://")) {
                 try {
-                    roots = Loader.load(tryNames[t]);
-                } catch (Throwable ex) {
-                    roots = null;
+                    javax.microedition.io.file.FileConnection fc = (javax.microedition.io.file.FileConnection) javax.microedition.io.Connector.open(resPath);
+                    if (fc.exists()) {
+                        InputStream in = fc.openInputStream();
+                        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                        byte[] bb = new byte[1024];
+                        int n;
+                        while ((n = in.read(bb)) > 0) {
+                            bos.write(bb, 0, n);
+                        }
+                        in.close();
+                        byte[] data = bos.toByteArray();
+                        roots = Loader.load(data, 0);
+                    }
+                    fc.close();
+                } catch (Throwable e) {
+                    e.printStackTrace();
                 }
-                if (roots != null && roots.length > 0) {
-                    break;
+            } else {
+                String pWithLead = resPath.charAt(0) == '/' ? resPath : ("/" + resPath);
+                String pNoLead = resPath.charAt(0) == '/' ? resPath.substring(1) : resPath;
+                String[] tryNames = { pWithLead, pNoLead, resPath };
+                for (int t = 0; t < tryNames.length; t++) {
+                    if (tryNames[t] == null) {
+                        continue;
+                    }
+                    try {
+                        roots = Loader.load(tryNames[t]);
+                    } catch (Throwable ex) {
+                        roots = null;
+                    }
+                    if (roots != null && roots.length > 0) {
+                        break;
+                    }
                 }
             }
             if (roots == null || roots.length == 0) {
