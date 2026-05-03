@@ -873,12 +873,12 @@ Athena2ME uses [Apache Ant](https://ant.apache.org/) for building and [GitHub Ac
 
 To build the project locally, you need **JDK 8** and **Apache Ant**.
 
-2.  **Compile and Package:** Run the default Ant task:
+1.  **Compile and Package:** Run the default Ant task:
     ```bash
     ant
     ```
-    This will compile the source, package the JAR/JAD, and perform **preverification** (required for CLDC).
-3.  **No Preverify:** If you don't have ProGuard installed locally for preverification, you can skip it:
+    This will compile the source (using the bundled J2ME API stubs in `lib/`), package the JAR/JAD, and perform **preverification** (required for CLDC).
+2.  **No Preverify:** If you don't have ProGuard installed locally for preverification, you can skip it:
     ```bash
     ant -Dskip.preverify=true
     ```

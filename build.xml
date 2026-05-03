@@ -7,7 +7,7 @@
     ant clean     → remove build artefacts
     ant jar       → package only (assumes compile already ran)
 
-  Required JARs in lib/ (WTK stubs — compile-time only, not bundled):
+  Required JARs in lib/ (WTK stubs — now bundled in the repo):
     cldcapi11.jar  midpapi20.jar  mmapi.jar  jsr75.jar  jsr184.jar  nokiaui.jar
 
   ProGuard is downloaded automatically by the CI workflow (see .github/workflows/ci.yml).
@@ -19,7 +19,7 @@
   <!-- ── Paths ────────────────────────────────────────────────────────── -->
   <property name="src.dir"        value="src"/>
   <property name="res.dir"        value="res"/>
-  <property name="lib.dir"        value="lib-stubs"/>
+  <property name="lib.dir"        value="lib"/>
   <property name="classes.dir"    value="classes"/>
   <property name="build.dir"      value="build"/>
   <property name="preverify.dir"  value="tmpclasses"/>
