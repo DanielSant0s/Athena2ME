@@ -50,6 +50,8 @@
     <pathelement location="${lib.dir}/jsr75.jar"/>
     <pathelement location="${lib.dir}/jsr184.jar"/>
     <pathelement location="${lib.dir}/nokiaui.jar"/>
+    <pathelement location="${lib.dir}/jsr82.jar"/>       <!-- javax.bluetooth.* -->
+    <pathelement location="${lib.dir}/jsr177_crypto.jar"/> <!-- MessageDigest / SATSA crypto -->
   </path>
 
   <!-- ── Targets ──────────────────────────────────────────────────────── -->
