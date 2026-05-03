@@ -12,6 +12,7 @@
 
 # Package Files #
 *.jar
+!lib/*.jar
 *.war
 *.nar
 *.ear
@@ -25,6 +26,9 @@ replay_pid*
 
 # CI / local: API manifest from scripts/export-j2me-api.mjs
 build/
+
+# CI: ProGuard downloaded by the build-jar workflow step
+tools/
 
 # AthenaStudio (VS Code extension)
 athenastudio/node_modules/
