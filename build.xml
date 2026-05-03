@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  build.xml — Athena2ME J2ME build
+  Usage:
+    ant           → compile + package (build/Athena2ME.jar + build/Athena2ME.jad)
+    ant compile   → compile only
+    ant clean     → remove build artefacts
+    ant jar       → package only (assumes compile already ran)
+
+  Required JARs in lib/ (WTK stubs — compile-time only, not bundled):
+    cldcapi11.jar  midpapi20.jar  mmapi.jar  jsr75.jar  jsr184.jar  nokiaui.jar
+
+  ProGuard is downloaded automatically by the CI workflow (see .github/workflows/ci.yml).
+  For local builds without ProGuard, set -Dskip.preverify=true:
+    ant -Dskip.preverify=true
+-->
+<project name="Athena2ME" default="all" basedir=".">
+
+  <!-- ── Paths ────────────────────────────────────────────────────────── -->
+  <property name="src.dir"        value="src"/>
+  <property name="res.dir"        value="res"/>
+  <property name="lib.dir"        value="lib"/>
+  <property name="classes.dir"    value="classes"/>
+  <property name="build.dir"      value="build"/>
+  <property name="preverify.dir"  value="tmpclasses"/>
+
+  <!-- Output artefacts -->
+  <property name="jar.name"       value="Athena2ME.jar"/>
+  <property name="jad.name"       value="Athena2ME.jad"/>
+
+  <!-- MIDlet metadata (mirrors the existing manifest) -->
+  <property name="midlet.name"    value="Athena2ME"/>
+  <property name="midlet.vendor"  value="DanielSantos"/>
+  <property name="midlet.version" value="1.0"/>
+  <property name="midlet.class"   value="Athena2ME"/>
+  <property name="midlet.icon"    value="Athena2ME.png"/>
+  <property name="midlet.config"  value="CLDC-1.1"/>
+  <property name="midlet.profile" value="MIDP-2.0"/>
+  <property name="midlet.perms"   value="javax.microedition.io.Connector.http, javax.microedition.io.Connector.https, javax.microedition.io.Connector.socket, javax.microedition.io.Connector.datagram"/>
+
+  <!-- ProGuard jar location (CI downloads it; local: set -Dproguard.jar=...) -->
+  <property name="proguard.jar"   value="tools/proguard.jar"/>
+  <property name="skip.preverify" value="false"/>
+
+  <!-- ── Classpath for compilation ────────────────────────────────────── -->
+  <path id="j2me.classpath">
+    <pathelement location="${lib.dir}/cldcapi11.jar"/>
+    <pathelement location="${lib.dir}/midpapi20.jar"/>
+    <pathelement location="${lib.dir}/mmapi.jar"/>
+    <pathelement location="${lib.dir}/jsr75.jar"/>
+    <pathelement location="${lib.dir}/jsr184.jar"/>
+    <pathelement location="${lib.dir}/nokiaui.jar"/>
+  </path>
+
+  <!-- ── Targets ──────────────────────────────────────────────────────── -->
+
+  <target name="clean" description="Remove all build artefacts">
+    <delete dir="${classes.dir}"/>
+    <delete dir="${preverify.dir}"/>
+    <delete file="${build.dir}/${jar.name}"/>
+    <delete file="${build.dir}/${jad.name}"/>
+  </target>
+
+  <target name="init">
+    <mkdir dir="${classes.dir}"/>
+    <mkdir dir="${build.dir}"/>
+  </target>
+
+  <target name="compile" depends="init" description="Compile J2ME sources">
+    <javac
+      srcdir="${src.dir}"
+      destdir="${classes.dir}"
+      source="1.3"
+      target="1.1"
+      encoding="UTF-8"
+      debug="false"
+      optimize="true"
+      nowarn="true"
+      includeantruntime="false"
+      bootclasspathref="j2me.classpath"
+      classpathref="j2me.classpath"
+    />
+  </target>
+
+  <!-- ── JAR (no preverify) ───────────────────────────────────────────── -->
+  <target name="jar-only" depends="compile" description="Package classes + resources into a JAR (no preverify)">
+    <jar destfile="${build.dir}/${jar.name}" duplicate="preserve">
+      <!-- MIDlet manifest -->
+      <manifest>
+        <attribute name="Manifest-Version"         value="1.0"/>
+        <attribute name="MIDlet-1"                 value="${midlet.name}, ${midlet.icon}, ${midlet.class}"/>
+        <attribute name="MIDlet-Name"              value="${midlet.name}"/>
+        <attribute name="MIDlet-Vendor"            value="${midlet.vendor}"/>
+        <attribute name="MIDlet-Version"           value="${midlet.version}"/>
+        <attribute name="MIDlet-Permissions"       value="${midlet.perms}"/>
+        <attribute name="MicroEdition-Configuration" value="${midlet.config}"/>
+        <attribute name="MicroEdition-Profile"     value="${midlet.profile}"/>
+      </manifest>
+      <!-- Compiled classes -->
+      <fileset dir="${classes.dir}"/>
+      <!-- Resources (everything in res/, flat at JAR root) -->
+      <fileset dir="${res.dir}">
+        <exclude name=".athenastudio/**"/>
+        <exclude name="jsconfig.json"/>
+        <exclude name="demos/**"/>
+      </fileset>
+    </jar>
+  </target>
+
+  <!-- ── Preverify via ProGuard ───────────────────────────────────────── -->
+  <target name="preverify" depends="jar-only" unless="${skip.preverify}"
+          description="Preverify the JAR using ProGuard -microedition">
+    <fail message="ProGuard not found at ${proguard.jar}. Run with -Dskip.preverify=true or place proguard.jar at ${proguard.jar}.">
+      <condition><not><available file="${proguard.jar}"/></not></condition>
+    </fail>
+
+    <property name="j2me.bootjars" refid="j2me.classpath"/>
+
+    <java jar="${proguard.jar}" fork="true" failonerror="true">
+      <arg value="-injars"/>       <arg value="${build.dir}/${jar.name}"/>
+      <arg value="-outjars"/>      <arg value="${build.dir}/${jar.name}.preverified.jar"/>
+      <arg value="-libraryjars"/>  <arg value="${j2me.bootjars}"/>
+      <arg value="-microedition"/>
+      <arg value="-dontobfuscate"/>
+      <arg value="-dontoptimize"/>
+      <arg value="-dontshrink"/>
+      <arg value="-dontwarn"/>
+      <arg value="-keep"/>         <arg value="public class * extends javax.microedition.midlet.MIDlet"/>
+    </java>
+
+    <!-- Replace the un-preverified JAR with the output -->
+    <move file="${build.dir}/${jar.name}.preverified.jar"
+          tofile="${build.dir}/${jar.name}"
+          overwrite="true"/>
+  </target>
+
+  <!-- ── JAD descriptor ───────────────────────────────────────────────── -->
+  <target name="jad" depends="preverify" description="Write the .jad descriptor">
+    <length file="${build.dir}/${jar.name}" property="jar.size"/>
+    <echo file="${build.dir}/${jad.name}" append="false">MIDlet-Name: ${midlet.name}
+MIDlet-Version: ${midlet.version}
+MIDlet-Vendor: ${midlet.vendor}
+MIDlet-1: ${midlet.name}, ${midlet.icon}, ${midlet.class}
+MIDlet-Jar-URL: ${jar.name}
+MIDlet-Jar-Size: ${jar.size}
+MIDlet-Permissions: ${midlet.perms}
+MicroEdition-Configuration: ${midlet.config}
+MicroEdition-Profile: ${midlet.profile}
+</echo>
+  </target>
+
+  <target name="all" depends="jad" description="Full build: compile → jar → preverify → jad"/>
+
+</project>
