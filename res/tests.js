@@ -38,7 +38,6 @@ var tests = (function () {
         eq(a.map(function (x) { return x * 2; }), [2, 4, 6, 8], "Array.map");
         eq(a.filter(function (x) { return x % 2; }), [1, 3], "Array.filter");
         eq(a.reduce(function (acc, x) { return acc + x; }, 0), 10, "Array.reduce");
-        eq(a.reduceRight(function (acc, x) { return acc + x * 10; }, 0), 1234, "Array.reduceRight");
         eq(a.reduceRight(function (acc, x) { return acc * 10 + x; }, 0), 4321, "Array.reduceRight");
         eq(a.find(function (x) { return x > 2; }), 3, "Array.find");
         eq(a.findIndex(function (x) { return x > 2; }), 2, "Array.findIndex");
