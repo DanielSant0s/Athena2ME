@@ -6,6 +6,9 @@
     ant compile   → compile only
     ant clean     → remove build artefacts
     ant jar       → package only (assumes compile already ran)
+    ant release   → optional strip-features + slim resources + ProGuard shrink + jad (see docs/PERFORMANCE.md)
+                    Ship demos/tests in release JAR: -Drelease.include.demos=true -Drelease.include.tests=true
+    ant all-preproc → like ant all, but package JS/assets from build/res/ after preproc (full res tree incl. demos)
 
   Required JARs in lib/ (WTK stubs — now bundled in the repo):
     cldcapi11.jar  midpapi20.jar  mmapi.jar  jsr75.jar  jsr184.jar  nokiaui.jar
@@ -14,7 +17,9 @@
   For local builds without ProGuard, set -Dskip.preverify=true:
     ant -Dskip.preverify=true
 -->
-<project name="Athena2ME" default="all" basedir=".">
+<project name="Athena2ME" default="all" basedir="."
+         xmlns:if="ant:if"
+         xmlns:unless="ant:unless">
 
   <!-- ── Paths ────────────────────────────────────────────────────────── -->
   <property name="src.dir"        value="src"/>
@@ -41,6 +46,7 @@
   <!-- ProGuard jar location (CI downloads it; local: set -Dproguard.jar=...) -->
   <property name="proguard.jar"   value="tools/proguard.jar"/>
   <property name="skip.preverify" value="false"/>
+  <property name="build.profile" value="dev"/>
 
   <!-- ── Classpath for compilation ────────────────────────────────────── -->
   <path id="j2me.classpath">
@@ -152,5 +158,165 @@ MicroEdition-Profile: ${midlet.profile}
   </target>
 
   <target name="all" depends="jad" description="Full build: compile → jar → preverify → jad"/>
+
+  <!-- ── Dev JAR from prebaked build/res (same resource set as jar-only, not jar-release excludes) ── -->
+  <target name="jar-only-preproc" depends="compile,preproc"
+          description="Package JAR using preproc output in build/res/ (full tree like res/, incl. demos/tests)">
+    <jar destfile="${build.dir}/${jar.name}" duplicate="preserve">
+      <manifest>
+        <attribute name="Manifest-Version"         value="1.0"/>
+        <attribute name="MIDlet-1"                 value="${midlet.name}, ${midlet.icon}, ${midlet.class}"/>
+        <attribute name="MIDlet-Name"              value="${midlet.name}"/>
+        <attribute name="MIDlet-Vendor"            value="${midlet.vendor}"/>
+        <attribute name="MIDlet-Version"           value="${midlet.version}"/>
+        <attribute name="MIDlet-Permissions"       value="${midlet.perms}"/>
+        <attribute name="MicroEdition-Configuration" value="${midlet.config}"/>
+        <attribute name="MicroEdition-Profile"     value="${midlet.profile}"/>
+      </manifest>
+      <fileset dir="${classes.dir}"/>
+      <fileset dir="${build.dir}/res">
+        <exclude name=".athenastudio/**"/>
+        <exclude name="jsconfig.json"/>
+      </fileset>
+    </jar>
+  </target>
+
+  <target name="preverify-preproc" depends="jar-only-preproc" unless="${skip.preverify}"
+          description="Preverify JAR built from build/res/ (after preproc)">
+    <fail message="ProGuard not found at ${proguard.jar}. Run with -Dskip.preverify=true or place proguard.jar at ${proguard.jar}.">
+      <condition><not><available file="${proguard.jar}"/></not></condition>
+    </fail>
+    <property name="j2me.bootjars" refid="j2me.classpath"/>
+    <java jar="${proguard.jar}" fork="true" failonerror="true">
+      <arg value="-injars"/>       <arg value="${build.dir}/${jar.name}"/>
+      <arg value="-outjars"/>      <arg value="${build.dir}/${jar.name}.preverified.jar"/>
+      <arg value="-libraryjars"/>  <arg value="${j2me.bootjars}"/>
+      <arg value="-microedition"/>
+      <arg value="-dontobfuscate"/>
+      <arg value="-dontoptimize"/>
+      <arg value="-dontshrink"/>
+      <arg value="-dontwarn"/>
+      <arg value="-keep"/>         <arg value="public class * extends javax.microedition.midlet.MIDlet"/>
+    </java>
+    <move file="${build.dir}/${jar.name}.preverified.jar"
+          tofile="${build.dir}/${jar.name}"
+          overwrite="true"/>
+  </target>
+
+  <target name="jad-preproc" depends="jar-only-preproc,preverify-preproc"
+          description="Write .jad after preproc JAR (mirrors jad for all-preproc)">
+    <length file="${build.dir}/${jar.name}" property="jar.size"/>
+    <echo file="${build.dir}/${jad.name}" append="false">MIDlet-Name: ${midlet.name}
+MIDlet-Version: ${midlet.version}
+MIDlet-Vendor: ${midlet.vendor}
+MIDlet-1: ${midlet.name}, ${midlet.icon}, ${midlet.class}
+MIDlet-Jar-URL: ${jar.name}
+MIDlet-Jar-Size: ${jar.size}
+MIDlet-Permissions: ${midlet.perms}
+MicroEdition-Configuration: ${midlet.config}
+MicroEdition-Profile: ${midlet.profile}
+</echo>
+  </target>
+
+  <target name="all-preproc" depends="jad-preproc"
+          description="Like ant all, but resources from preproc (build/res/): compile → preproc → jar → preverify → jad"/>
+
+  <!-- ── Optional: strip //@feature blocks (Node + ATHENA_FEATURES) ───── -->
+  <target name="strip-features" description="Optional Node step; see scripts/strip-features.mjs">
+    <exec executable="node" failonerror="false" dir="${basedir}">
+      <arg value="scripts/strip-features.mjs"/>
+    </exec>
+  </target>
+
+  <!-- ── JS pre-processor / bundler (Node) ───────────────────────────── -->
+  <target name="preproc-npm" description="npm install for tools/preproc">
+    <exec executable="npm" failonerror="true" dir="${basedir}">
+      <arg value="install"/>
+      <arg value="--prefix"/>
+      <arg value="tools/preproc"/>
+    </exec>
+  </target>
+
+  <target name="preproc" depends="preproc-npm"
+          description="ES6→ES5 prebake + optional bundle into build/res (see tools/preproc/README.md)">
+    <exec executable="node" failonerror="true" dir="${basedir}">
+      <arg value="tools/preproc/bin/a2m-preproc.mjs"/>
+      <arg value="--config"/>
+      <arg value="preproc.config.json"/>
+      <arg value="--mode"/>
+      <arg value="${build.profile}"/>
+    </exec>
+  </target>
+
+  <!-- ── JAR (release profile: fewer resources) ─────────────────────── -->
+  <!-- Default: omit tests.js and res/demos/** for size. Dynamic demo loaders need:
+       ant -Drelease.include.demos=true -Drelease.include.tests=true release
+       (Ant 1.10+ unless:true on excludes.) -->
+  <target name="jar-release" depends="init,compile,preproc" description="Package JAR excluding dev-only resources">
+    <delete file="${build.dir}/${jar.name}"/>
+    <jar destfile="${build.dir}/${jar.name}" duplicate="preserve">
+      <manifest>
+        <attribute name="Manifest-Version"         value="1.0"/>
+        <attribute name="MIDlet-1"                 value="${midlet.name}, ${midlet.icon}, ${midlet.class}"/>
+        <attribute name="MIDlet-Name"              value="${midlet.name}"/>
+        <attribute name="MIDlet-Vendor"            value="${midlet.vendor}"/>
+        <attribute name="MIDlet-Version"           value="${midlet.version}"/>
+        <attribute name="MIDlet-Permissions"       value="${midlet.perms}"/>
+        <attribute name="MicroEdition-Configuration" value="${midlet.config}"/>
+        <attribute name="MicroEdition-Profile"     value="${midlet.profile}"/>
+      </manifest>
+      <fileset dir="${classes.dir}"/>
+      <fileset dir="${build.dir}/res">
+        <exclude name=".athenastudio/**"/>
+        <exclude name="jsconfig.json"/>
+        <exclude name="tests.js" unless:true="release.include.tests"/>
+        <exclude name="demos/**" unless:true="release.include.demos"/>
+      </fileset>
+    </jar>
+  </target>
+
+  <!-- ── ProGuard shrink (release) ───────────────────────────────────── -->
+  <target name="proguard-shrink" depends="jar-release" unless="${skip.preverify}"
+          description="Shrink+optimize MIDlet JAR (requires tools/proguard.jar)">
+    <fail message="ProGuard not found at ${proguard.jar}.">
+      <condition><not><available file="${proguard.jar}"/></not></condition>
+    </fail>
+    <property name="j2me.bootjars" refid="j2me.classpath"/>
+    <java jar="${proguard.jar}" fork="true" failonerror="true">
+      <arg value="-injars"/>       <arg value="${build.dir}/${jar.name}"/>
+      <arg value="-outjars"/>      <arg value="${build.dir}/${jar.name}.shrunk.jar"/>
+      <arg value="-libraryjars"/>  <arg value="${j2me.bootjars}"/>
+      <arg value="-microedition"/>
+      <arg value="-dontobfuscate"/>
+      <arg value="-optimizationpasses"/><arg value="3"/>
+      <arg value="-allowaccessmodification"/>
+      <arg value="-dontwarn"/>
+      <arg value="-keep"/>         <arg value="public class Athena2ME extends javax.microedition.midlet.MIDlet { *; }"/>
+      <arg value="-keep"/>         <arg value="class net.cnjm.j2me.tinybro.NativeFunctionFast { *; }"/>
+      <arg value="-keep"/>         <arg value="class * extends net.cnjm.j2me.tinybro.NativeFunctionFast { *; }"/>
+      <arg value="-keep"/>         <arg value="class * extends javax.microedition.lcdui.Canvas { *; }"/>
+      <arg value="-keep"/>         <arg value="class net.cnjm.j2me.tinybro.RocksInterpreter { public *; }"/>
+    </java>
+    <move file="${build.dir}/${jar.name}.shrunk.jar"
+          tofile="${build.dir}/${jar.name}"
+          overwrite="true"/>
+  </target>
+
+  <target name="jad-release" depends="proguard-shrink" description="Write .jad after release shrink">
+    <length file="${build.dir}/${jar.name}" property="jar.size.release"/>
+    <echo file="${build.dir}/${jad.name}" append="false">MIDlet-Name: ${midlet.name}
+MIDlet-Version: ${midlet.version}
+MIDlet-Vendor: ${midlet.vendor}
+MIDlet-1: ${midlet.name}, ${midlet.icon}, ${midlet.class}
+MIDlet-Jar-URL: ${jar.name}
+MIDlet-Jar-Size: ${jar.size.release}
+MIDlet-Permissions: ${midlet.perms}
+MicroEdition-Configuration: ${midlet.config}
+MicroEdition-Profile: ${midlet.profile}
+</echo>
+  </target>
+
+  <target name="release" depends="strip-features,jad-release"
+          description="Node strip (optional) → JS preproc → slim JAR → ProGuard shrink → jad"/>
 
 </project>

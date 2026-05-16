@@ -1,5 +1,7 @@
 import javax.microedition.lcdui.Image;
 
+import net.cnjm.j2me.tinybro.Rv;
+
 /**
  * Software immediate 3D: triangle strips or indexed lists, 4x4 math, look-at, optional back-face
  * culling, matrix stack, shell-sorted draw order, flat or textured (UV + classpath {@link Image} path).
@@ -42,10 +44,14 @@ public final class Render3DSoftBackend implements Render3DBackend {
     private boolean inited;
     private AthenaCanvas lastCanvas;
     private float[] meshPos;
+    /** When non-null, positions are read from this view (zero-copy); {@link #meshPos} is null. */
+    private Rv.Float32View meshPosView;
     private int[] meshStrip;
     private int[] meshIndex;
     private int meshMode;
     private float[] meshNrm;
+    /** Optional normals as a {@link Rv.Float32View} (zero-copy); {@link #meshNrm} may be null. */
+    private Rv.Float32View meshNrmView;
     private boolean useLookAt;
     private boolean cullBack = true;
     private float lDirX, lDirY = 1.0f, lDirZ;
@@ -54,6 +60,8 @@ public final class Render3DSoftBackend implements Render3DBackend {
     private String textureLoadKey;
     private boolean prepForTex;
     private float[] meshUv;
+    /** When non-null, UVs are read from this view (zero-copy); {@link #meshUv} is null. */
+    private Rv.Float32View meshUvView;
     private int[] texArgb;
     private int texW;
     private int texH;
@@ -227,16 +235,44 @@ public final class Render3DSoftBackend implements Render3DBackend {
         meshMode = 0;
         meshIndex = null;
         meshPos = pos;
+        meshPosView = null;
         meshStrip = stripLen;
         meshNrm = normals;
+        meshNrmView = null;
+    }
+
+    /**
+     * Software path: keep positions/normals in the JS {@link Rv.Float32View} backing store
+     * (no per-upload {@code float[]} copy).
+     */
+    public void setTriangleStripMeshFloatView(Rv.Float32View pos, int[] stripLen, Rv.Float32View normals) {
+        meshMode = 0;
+        meshIndex = null;
+        meshPos = null;
+        meshPosView = pos;
+        meshStrip = stripLen;
+        meshNrm = null;
+        meshNrmView = normals;
     }
 
     public void setIndexedTriangleMesh(float[] pos, int[] indices, float[] normals) {
         meshMode = 1;
         meshStrip = null;
         meshPos = pos;
+        meshPosView = null;
         meshIndex = indices;
         meshNrm = normals;
+        meshNrmView = null;
+    }
+
+    public void setIndexedTriangleMeshFloatView(Rv.Float32View pos, int[] indices, Rv.Float32View normals) {
+        meshMode = 1;
+        meshStrip = null;
+        meshPos = null;
+        meshPosView = pos;
+        meshIndex = indices;
+        meshNrm = null;
+        meshNrmView = normals;
     }
 
     public void setBackfaceCulling(boolean on) {
@@ -275,17 +311,27 @@ public final class Render3DSoftBackend implements Render3DBackend {
 
     public void setTexCoords(float[] uvs) {
         meshUv = uvs;
+        meshUvView = null;
+    }
+
+    /** Software path: bind UVs without copying a {@link Rv.Float32View}. */
+    public void setTexCoordsFloatView(Rv.Float32View uv) {
+        meshUv = null;
+        meshUvView = uv;
     }
 
     public void clearImmediateMesh() {
         meshPos = null;
+        meshPosView = null;
         meshStrip = null;
         meshIndex = null;
         meshNrm = null;
+        meshNrmView = null;
         meshMode = 0;
         texture2dPath = null;
         textureLoadKey = null;
         meshUv = null;
+        meshUvView = null;
         texArgb = null;
         texW = 0;
         texH = 0;
@@ -318,7 +364,7 @@ public final class Render3DSoftBackend implements Render3DBackend {
         if (c == null) {
             return;
         }
-        if (meshPos == null) {
+        if (meshPos == null && meshPosView == null) {
             return;
         }
         if (meshMode == 0) {
@@ -330,12 +376,18 @@ public final class Render3DSoftBackend implements Render3DBackend {
                 return;
             }
         }
-        int nFloat = meshPos.length;
+        int nFloat = meshPos != null ? meshPos.length : (meshPosView.byteLength >> 2);
         if (nFloat < 9) {
             return;
         }
         int nv = nFloat / 3;
-        prepForTex = texture2dPath != null && texture2dPath.length() > 0 && meshUv != null && meshUv.length == nv * 2;
+        int uvCount = 0;
+        if (meshUv != null) {
+            uvCount = meshUv.length >> 1;
+        } else if (meshUvView != null) {
+            uvCount = (meshUvView.byteLength >> 2) >> 1;
+        }
+        prepForTex = texture2dPath != null && texture2dPath.length() > 0 && uvCount == nv;
         if (prepForTex) {
             ensureTextureLoaded(c);
         } else {
@@ -375,18 +427,18 @@ public final class Render3DSoftBackend implements Render3DBackend {
             int i0 = tIA[o];
             int i1 = tIB[o];
             int i2 = tIC[o];
-            mulModel(meshPos, i0, w0);
-            mulModel(meshPos, i1, w1);
-            mulModel(meshPos, i2, w2);
+            mulModelVertex(i0, w0);
+            mulModelVertex(i1, w1);
+            mulModelVertex(i2, w2);
             if (useTex) {
                 if (!toScreenWithEzv(tHalf, a, tw, th, w0, pScr, 0, ezv3, 0)
                         || !toScreenWithEzv(tHalf, a, tw, th, w1, pScr, 2, ezv3, 1)
                         || !toScreenWithEzv(tHalf, a, tw, th, w2, pScr, 4, ezv3, 2)) {
                     continue;
                 }
-                float u0 = meshUv[i0 * 2], v0u = meshUv[i0 * 2 + 1];
-                float u1 = meshUv[i1 * 2], v1u = meshUv[i1 * 2 + 1];
-                float u2 = meshUv[i2 * 2], v2u = meshUv[i2 * 2 + 1];
+                float u0 = readUvComp(i0 * 2), v0u = readUvComp(i0 * 2 + 1);
+                float u1 = readUvComp(i1 * 2), v1u = readUvComp(i1 * 2 + 1);
+                float u2 = readUvComp(i2 * 2), v2u = readUvComp(i2 * 2 + 1);
                 drawTexturedTriangle(
                         c, tw, th,
                         (int) pScr[0], (int) pScr[1], (int) pScr[2], (int) pScr[3], (int) pScr[4], (int) pScr[5],
@@ -489,9 +541,9 @@ public final class Render3DSoftBackend implements Render3DBackend {
     }
 
     private int addTriangle(int nTri, int i0, int i1, int i2, int cap) {
-        mulModel(meshPos, i0, w0);
-        mulModel(meshPos, i1, w1);
-        mulModel(meshPos, i2, w2);
+        mulModelVertex(i0, w0);
+        mulModelVertex(i1, w1);
+        mulModelVertex(i2, w2);
         if (cullBack) {
             float ax = w1[0] - w0[0], ay = w1[1] - w0[1], az = w1[2] - w0[2];
             float bx = w2[0] - w0[0], byy = w2[1] - w0[1], bz = w2[2] - w0[2];
@@ -539,12 +591,12 @@ public final class Render3DSoftBackend implements Render3DBackend {
         }
         float aR = (float) matAr / 255.0f, aG = (float) matAg / 255.0f, aB = (float) matAb / 255.0f;
         float dR = (float) matDr / 255.0f, dG = (float) matDg / 255.0f, dB = (float) matDb / 255.0f;
-        if (meshNrm != null) {
-            readN3(meshNrm, i0, wTmp);
+        if (meshNrm != null || meshNrmView != null) {
+            readN3Vertex(i0, wTmp);
             nrm3(mWorld, wTmp, n0);
-            readN3(meshNrm, i1, wTmp);
+            readN3Vertex(i1, wTmp);
             nrm3(mWorld, wTmp, n1);
-            readN3(meshNrm, i2, wTmp);
+            readN3Vertex(i2, wTmp);
             nrm3(mWorld, wTmp, n2);
             float mx = n0[0] + n1[0] + n2[0];
             float my = n0[1] + n1[1] + n2[1];
@@ -602,8 +654,8 @@ public final class Render3DSoftBackend implements Render3DBackend {
         }
         float aR = (float) matAr / 255.0f, aG = (float) matAg / 255.0f, aB = (float) matAb / 255.0f;
         float dR = (float) matDr / 255.0f, dG = (float) matDg / 255.0f, dB = (float) matDb / 255.0f;
-        if (meshNrm != null) {
-            readN3(meshNrm, vi, wTmp);
+        if (meshNrm != null || meshNrmView != null) {
+            readN3Vertex(vi, wTmp);
             nrm3(mWorld, wTmp, wTmp);
             float nd = wTmp[0] * lnx + wTmp[1] * lny + wTmp[2] * lnz;
             if (nd < 0.0f) {
@@ -1248,7 +1300,7 @@ public final class Render3DSoftBackend implements Render3DBackend {
     }
 
     public String getSceneInfo() {
-        return "soft im=" + (meshPos != null) + " cull=" + cullBack + " tris<=" + maxTris
+        return "soft im=" + (meshPos != null || meshPosView != null) + " cull=" + cullBack + " tris<=" + maxTris
                 + (depthBufferEnabled ? " zbuf=1" : " zbuf=0")
                 + (texW > 0 ? (" tex=" + texW + "x" + texH) : "")
                 + (texFilterNearest ? " samp=near" : " samp=linear")
@@ -1298,14 +1350,68 @@ public final class Render3DSoftBackend implements Render3DBackend {
         mul4(mRot, mUser, mWorld);
     }
 
-    private void mulModel(float[] pos, int vi, float[] out) {
-        int p = vi * 3;
-        float x = pos[p];
-        float y = pos[p + 1];
-        float z = pos[p + 2];
-        out[0] = mWorld[0] * x + mWorld[4] * y + mWorld[8] * z + mWorld[12];
-        out[1] = mWorld[1] * x + mWorld[5] * y + mWorld[9] * z + mWorld[13];
-        out[2] = mWorld[2] * x + mWorld[6] * y + mWorld[10] * z + mWorld[14];
+    private void mulModelVertex(int vi, float[] out) {
+        if (meshPosView != null) {
+            int p = meshPosView.offset + vi * 12;
+            byte[] d = meshPosView.data;
+            if (p + 11 >= d.length) {
+                out[0] = out[1] = out[2] = 0.0f;
+                return;
+            }
+            float x = Float.intBitsToFloat(int32le(d, p));
+            float y = Float.intBitsToFloat(int32le(d, p + 4));
+            float z = Float.intBitsToFloat(int32le(d, p + 8));
+            out[0] = mWorld[0] * x + mWorld[4] * y + mWorld[8] * z + mWorld[12];
+            out[1] = mWorld[1] * x + mWorld[5] * y + mWorld[9] * z + mWorld[13];
+            out[2] = mWorld[2] * x + mWorld[6] * y + mWorld[10] * z + mWorld[14];
+            return;
+        }
+        if (meshPos != null) {
+            int p = vi * 3;
+            float x = meshPos[p];
+            float y = meshPos[p + 1];
+            float z = meshPos[p + 2];
+            out[0] = mWorld[0] * x + mWorld[4] * y + mWorld[8] * z + mWorld[12];
+            out[1] = mWorld[1] * x + mWorld[5] * y + mWorld[9] * z + mWorld[13];
+            out[2] = mWorld[2] * x + mWorld[6] * y + mWorld[10] * z + mWorld[14];
+            return;
+        }
+        out[0] = out[1] = out[2] = 0.0f;
+    }
+
+    private void readN3Vertex(int vi, float[] o) {
+        if (meshNrmView != null) {
+            int p = meshNrmView.offset + vi * 12;
+            byte[] d = meshNrmView.data;
+            if (p + 11 >= d.length) {
+                readN3(null, vi, o);
+                return;
+            }
+            o[0] = Float.intBitsToFloat(int32le(d, p));
+            o[1] = Float.intBitsToFloat(int32le(d, p + 4));
+            o[2] = Float.intBitsToFloat(int32le(d, p + 8));
+            return;
+        }
+        readN3(meshNrm, vi, o);
+    }
+
+    private static int int32le(byte[] b, int o) {
+        return (b[o] & 0xff) | ((b[o + 1] & 0xff) << 8) | ((b[o + 2] & 0xff) << 16) | (b[o + 3] << 24);
+    }
+
+    private float readUvComp(int compIdx) {
+        if (meshUv != null) {
+            return compIdx >= 0 && compIdx < meshUv.length ? meshUv[compIdx] : 0.0f;
+        }
+        if (meshUvView != null) {
+            int p = meshUvView.offset + compIdx * 4;
+            byte[] d = meshUvView.data;
+            if (p + 3 >= d.length) {
+                return 0.0f;
+            }
+            return Float.intBitsToFloat(int32le(d, p));
+        }
+        return 0.0f;
     }
 
     private static void readN3(float[] nbuf, int vi, float[] o) {

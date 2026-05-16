@@ -101,6 +101,7 @@ class RC {
     static final int TOK_AWAIT =        154;
     static final int TOK_LET =          155;
     static final int TOK_CONST =        156;
+    static final int TOK_YIELD =        157;
 
     static final int TOK_EOF =          999;
     
@@ -217,6 +218,11 @@ class RC {
     }
     
     static final Rhash htKeywordNames;
+
+    /** Hot-path property names shared across interpreter + PIC sites. */
+    static final String S_LENGTH = "length";
+    static final String S_PROTOTYPE = "prototype";
+    static final String S_THIS = "this";
     
     static {
         Rhash ht = htKeywordNames = new Rhash(41);

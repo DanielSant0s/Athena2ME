@@ -22,6 +22,26 @@ final class StdLib {
 
     private StdLib() {}
 
+    /** Ring cache for array index keys with {@code i >= 512} (avoids hot {@code Integer#toString}). */
+    private static final int IDX_STR_RING_LEN = 256;
+    private static final String[] IDX_STR_RING = new String[IDX_STR_RING_LEN];
+    private static final int[] IDX_STR_RING_K = new int[IDX_STR_RING_LEN];
+
+    static final String indexKeyForArrayGet(int i) {
+        if (i >= 0 && i < Rv.INT_STR_CACHE_SIZE) {
+            return Rv.INT_STR[i];
+        }
+        if (i >= 0) {
+            int slot = i & (IDX_STR_RING_LEN - 1);
+            if (IDX_STR_RING_K[slot] != i || IDX_STR_RING[slot] == null) {
+                IDX_STR_RING[slot] = Integer.toString(i);
+                IDX_STR_RING_K[slot] = i;
+            }
+            return IDX_STR_RING[slot];
+        }
+        return Rv.intStr(i);
+    }
+
     // ------------------------------------------------------------------
     //  Shared helpers
     // ------------------------------------------------------------------
@@ -75,7 +95,7 @@ final class StdLib {
     }
 
     static final Rv getIdx(Rv arr, int i) {
-        Rv v = arr.get(Rv.intStr(i));
+        Rv v = arr.get(indexKeyForArrayGet(i));
         return v != null ? v : Rv._undefined;
     }
 
@@ -246,6 +266,7 @@ final class StdLib {
         // ---- String ----
         Rv strProto = Rv._String.ctorOrProt;
         strProto.putl("trim",         ri.addNativeFunction(entryOf("String.trim")));
+        strProto.putl("strip",        ri.addNativeFunction(entryOf("String.trim")));
         strProto.putl("trimStart",    ri.addNativeFunction(entryOf("String.trimStart")));
         strProto.putl("trimEnd",      ri.addNativeFunction(entryOf("String.trimEnd")));
         strProto.putl("includes",     ri.addNativeFunction(entryOf("String.includes")));
@@ -330,6 +351,8 @@ final class StdLib {
                 .putl("setUint8", ri.addNativeFunction(entryOf("DataView.setUint8")))
                 .putl("getUint16", ri.addNativeFunction(entryOf("DataView.getUint16")))
                 .putl("setUint16", ri.addNativeFunction(entryOf("DataView.setUint16")))
+                .putl("getUint32", ri.addNativeFunction(entryOf("DataView.getUint32")))
+                .putl("setUint32", ri.addNativeFunction(entryOf("DataView.setUint32")))
                 .putl("getInt32", ri.addNativeFunction(entryOf("DataView.getInt32")))
                 .putl("setInt32", ri.addNativeFunction(entryOf("DataView.setInt32")));
         go.putl("DataView", Rv._DataView);
@@ -370,6 +393,13 @@ final class StdLib {
         Rv._Promise.putl("reject", ri.addNativeFunction(entryOf("Promise.reject")));
         go.putl("Promise", Rv._Promise);
         go.putl("__awaitStep", ri.addNativeFunction(entryOf("__awaitStep")));
+
+        Rv genIterCtor = new Rv();
+        genIterCtor.type = Rv.FUNCTION | Rv.CTOR_MASK;
+        genIterCtor.ctorOrProt = new Rv(Rv.OBJECT, Rv._Object);
+        genIterCtor.prop = new Rhash(3);
+        Rv._GeneratorIterProto = genIterCtor.ctorOrProt;
+        Rv._GeneratorIterProto.putl("next", ri.addNativeFunction(entryOf("Generator.prototype.next")));
     }
 
     static NativeFunctionListEntry entryOf(String name) {
@@ -399,7 +429,7 @@ final class StdLib {
                 for (int i = 0; i < len; i++) {
                     Rv v = getIdx(thiz, i);
                     Rv r = ri.invokeJS3(fn, thisArg, v, Rv.smallInt(i), thiz);
-                    out.putl(i, r);
+                    out.putl(i, r.pv());
                 }
                 return out;
             }
@@ -447,10 +477,14 @@ final class StdLib {
                     acc = getIdx(thiz, 0);
                     i = 1;
                 }
-                Pack p = new Pack(-1, 4);
+                Pack p = ri.reduceReusePack;
                 for (; i < len; i++) {
-                    p.iSize = 0; p.oSize = 0;
-                    p.add(acc); p.add(getIdx(thiz, i)); p.add(Rv.smallInt(i)); p.add(thiz);
+                    p.iSize = 0;
+                    p.oSize = 0;
+                    p.add(acc);
+                    p.add(getIdx(thiz, i));
+                    p.add(Rv.smallInt(i));
+                    p.add(thiz);
                     acc = ri.invokeJS(fn, Rv._undefined, p, 0, 4);
                 }
                 return acc;
@@ -471,10 +505,14 @@ final class StdLib {
                     acc = getIdx(thiz, i);
                     i--;
                 }
-                Pack p = new Pack(-1, 4);
+                Pack p = ri.reduceReusePack;
                 for (; i >= 0; i--) {
-                    p.iSize = 0; p.oSize = 0;
-                    p.add(acc); p.add(getIdx(thiz, i)); p.add(Rv.smallInt(i)); p.add(thiz);
+                    p.iSize = 0;
+                    p.oSize = 0;
+                    p.add(acc);
+                    p.add(getIdx(thiz, i));
+                    p.add(Rv.smallInt(i));
+                    p.add(thiz);
                     acc = ri.invokeJS(fn, Rv._undefined, p, 0, 4);
                 }
                 return acc;
@@ -678,6 +716,7 @@ final class StdLib {
                 Rv out = newArray();
                 if (src == null || src.prop == null) return out;
                 Pack keys = src.prop.keys();
+                sortStringPack(keys);
                 for (int i = 0, n = keys.oSize; i < n; i++) {
                     out.putl(i, new Rv((String) keys.oArray[i]));
                 }
@@ -692,6 +731,7 @@ final class StdLib {
                 Rv out = newArray();
                 if (src == null || src.prop == null) return out;
                 Pack keys = src.prop.keys();
+                sortStringPack(keys);
                 for (int i = 0, n = keys.oSize; i < n; i++) {
                     out.putl(i, src.prop.get((String) keys.oArray[i]));
                 }
@@ -706,6 +746,7 @@ final class StdLib {
                 Rv out = newArray();
                 if (src == null || src.prop == null) return out;
                 Pack keys = src.prop.keys();
+                sortStringPack(keys);
                 for (int i = 0, n = keys.oSize; i < n; i++) {
                     String k = (String) keys.oArray[i];
                     Rv pair = newArray();
@@ -1655,6 +1696,35 @@ final class StdLib {
             }
         }),
 
+        new NativeFunctionListEntry("DataView.getUint32", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv.DataViewState dv = dataViewOf(thiz);
+                if (dv == null) return Rv._undefined;
+                int rel = toInt(arg(args, start, num, 0), 0);
+                boolean le = littleEndianArg(args, start, num, 1);
+                if (rel < 0 || rel + 4 > dv.byteLength) return Rv._undefined;
+                long v = readInt32(dv.data, dv.offset + rel, le) & 0xffffffffL;
+                return new Rv((double) v);
+            }
+        }),
+
+        new NativeFunctionListEntry("DataView.setUint32", new NativeFunctionFast() {
+            public final int length = 3;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv.DataViewState dv = dataViewOf(thiz);
+                if (dv == null) return Rv._undefined;
+                int rel = toInt(arg(args, start, num, 0), 0);
+                boolean le = littleEndianArg(args, start, num, 2);
+                if (rel < 0 || rel + 4 > dv.byteLength) return Rv._undefined;
+                Rv av = arg(args, start, num, 1);
+                if (av == null || av == Rv._undefined) return Rv._undefined;
+                int v = Rv.toInt32(Rv.numValue(av.toNum()));
+                writeInt32(dv.data, dv.offset + rel, v, le);
+                return Rv._undefined;
+            }
+        }),
+
         new NativeFunctionListEntry("DataView.getInt32", new NativeFunctionFast() {
             public final int length = 2;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
@@ -1948,6 +2018,13 @@ final class StdLib {
             public final int length = 1;
             public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
                 return PromiseRuntime.nativeReject(isNew, thiz, args, start, num, ri);
+            }
+        }),
+
+        new NativeFunctionListEntry("Generator.prototype.next", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                return GeneratorRuntime.nativeNext(isNew, thiz, args, start, num, ri);
             }
         }),
 
@@ -2276,10 +2353,10 @@ final class StdLib {
         void set(Rv k, Rv v) {
             int i = indexOf(k);
             if (i >= 0) {
-                values.oArray[i] = v;
+                values.oArray[i] = v.pv();
             } else {
-                keys.add(k);
-                values.add(v);
+                keys.add(k.pv());
+                values.add(v.pv());
             }
         }
 
@@ -2333,6 +2410,19 @@ final class StdLib {
     static final void setAdd(Rv s, Rv v) {
         SetBacking sb = setOf(s);
         if (sb == null) { sb = new SetBacking(); s.opaque = sb; }
-        if (sb.indexOf(v) < 0) sb.items.add(v);
+        if (sb.indexOf(v) < 0) sb.items.add(v.pv());
+    }
+
+    static final void sortStringPack(Pack p) {
+        for (int i = 1; i < p.oSize; i++) {
+            Object v = p.oArray[i];
+            String sv = (String) v;
+            int j = i - 1;
+            while (j >= 0 && ((String) p.oArray[j]).compareTo(sv) > 0) {
+                p.oArray[j + 1] = p.oArray[j];
+                j--;
+            }
+            p.oArray[j + 1] = v;
+        }
     }
 }

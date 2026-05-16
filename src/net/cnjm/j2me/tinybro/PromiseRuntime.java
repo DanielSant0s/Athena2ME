@@ -13,22 +13,18 @@ public final class PromiseRuntime {
     private PromiseRuntime() {}
 
     private static final Object QUEUE_LOCK = new Object();
-    private static Microtask[] MTQ = new Microtask[128];
+    /** Fixed ring buffer; oldest entries are dropped when full (see {@link #enqueue}). */
+    private static final int MTQ_CAP = 256;
+    private static Microtask[] MTQ = new Microtask[MTQ_CAP];
     private static int mtqHead;
     private static int mtqTail;
     private static int mtqSize;
 
-    private static void mtqGrow() {
-        Microtask[] old = MTQ;
-        int olen = old.length;
-        Microtask[] neu = new Microtask[olen * 2];
-        int k = 0;
-        for (int i = 0; i < mtqSize; i++) {
-            neu[k++] = old[(mtqHead + i) % olen];
-        }
-        MTQ = neu;
-        mtqHead = 0;
-        mtqTail = k;
+    private static void mtqDropOldest() {
+        System.out.println("[PromiseRuntime] microtask queue full (" + MTQ_CAP + "); dropping oldest");
+        MTQ[mtqHead] = null;
+        mtqHead = (mtqHead + 1) % MTQ_CAP;
+        mtqSize--;
     }
 
     static final class CapResolveFn extends NativeFunctionFast {
@@ -105,11 +101,11 @@ public final class PromiseRuntime {
             return;
         }
         synchronized (QUEUE_LOCK) {
-            if (mtqSize >= MTQ.length) {
-                mtqGrow();
+            if (mtqSize >= MTQ_CAP) {
+                mtqDropOldest();
             }
             MTQ[mtqTail] = job;
-            mtqTail = (mtqTail + 1) % MTQ.length;
+            mtqTail = (mtqTail + 1) % MTQ_CAP;
             mtqSize++;
         }
     }

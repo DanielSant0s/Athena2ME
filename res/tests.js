@@ -39,6 +39,7 @@ var tests = (function () {
         eq(a.filter(function (x) { return x % 2; }), [1, 3], "Array.filter");
         eq(a.reduce(function (acc, x) { return acc + x; }, 0), 10, "Array.reduce");
         eq(a.reduceRight(function (acc, x) { return acc + x * 10; }, 0), 1234, "Array.reduceRight");
+        eq(a.reduceRight(function (acc, x) { return acc * 10 + x; }, 0), 4321, "Array.reduceRight");
         eq(a.find(function (x) { return x > 2; }), 3, "Array.find");
         eq(a.findIndex(function (x) { return x > 2; }), 2, "Array.findIndex");
         eq(a.some(function (x) { return x > 3; }), true, "Array.some");
@@ -52,6 +53,33 @@ var tests = (function () {
         eq(Array.isArray("x"), false, "Array.isArray on non-array");
         eq(Array.of(9, 8, 7), [9, 8, 7], "Array.of");
         eq(Array.from("abc"), ["a", "b", "c"], "Array.from string");
+
+        function freshArrayFromCall(tag) {
+            var x = [];
+            x.push(tag + "-a");
+            x.push(tag + "-b");
+            return x;
+        }
+        var first = freshArrayFromCall("one");
+        var second = freshArrayFromCall("two");
+        eq(first, ["one-a", "one-b"], "function call fresh local array #1");
+        eq(second, ["two-a", "two-b"], "function call fresh local array #2");
+
+        var iifeRan = (function () { return 7; }());
+        eq(iifeRan, 7, "function expression IIFE call");
+
+        var escaped = (function () {
+            var hidden = 11;
+            function readHidden() { return hidden; }
+            return { readHidden: readHidden };
+        }());
+        eq(escaped.readHidden(), 11, "escaped declaration keeps IIFE scope");
+
+        var multilineOr = false
+            || true;
+        eq(multilineOr, true, "multiline logical OR expression");
+        eq(!!"x", true, "double-bang unary expression");
+        eq((2 * 3), 6, "grouped expression as first call arg");
     }
 
     function testObject() {
@@ -92,6 +120,8 @@ var tests = (function () {
         eq(Number.isInteger(3), true, "Number.isInteger(3)");
         eq(Number.isNaN(0 / 0), true, "Number.isNaN(0/0)");
         eq(Number.parseInt("42"), 42, "Number.parseInt");
+        function twoArg(a, b) { return a + b; }
+        eq(twoArg(2, 10), 12, "nested two-arg call as first arg");
         eq(Math.abs(-7), 7, "Math.abs");
         eq(Math.sqrt(16), 4, "Math.sqrt(16)");
         eq(Math.pow(2, 10), 1024, "Math.pow(2,10)");
@@ -345,6 +375,8 @@ line`, "multi\nline", "template newline");
         Screen.endBatch();
         Screen.clearLayer(L, 0x00ff00);
         Screen.freeLayer(L);
+        truthy(typeof Screen.setFullScreen === "function", "Screen.setFullScreen");
+        truthy(typeof Screen.isFullScreen === "function", "Screen.isFullScreen");
         truthy(true, "Screen batch/layer smoke");
     }
 
@@ -452,7 +484,74 @@ line`, "multi\nline", "template newline");
         p.then(function (v) {
             truthy(v === 51, "Promise.then chain x50");
         });
+        if (typeof os !== "undefined" && os.uptimeMillis) {
+            var j, k, tA, tB, ents;
+            ents = new Array(200);
+            for (j = 0; j < ents.length; j++) {
+                ents[j] = { x: j & 31, y: (j >> 3) & 15, vx: 1, vy: 0 };
+            }
+            tA = os.uptimeMillis();
+            for (k = 0; k < 400; k++) {
+                for (j = 0; j < ents.length; j++) {
+                    var e = ents[j];
+                    e.x = (e.x + e.vx) & 31;
+                    e.y = (e.y + e.vy) & 15;
+                }
+            }
+            tB = os.uptimeMillis();
+            console.log("bench scene asteroids-like x400 ~" + (tB - tA) + "ms");
+            var parts = new Float32Array(3000);
+            for (j = 0; j < parts.length; j++) {
+                parts[j] = (j * 0.031415) % 6.28;
+            }
+            tA = os.uptimeMillis();
+            var s = 0;
+            for (k = 0; k < 80; k++) {
+                for (j = 0; j < parts.length; j++) {
+                    s += parts[j] * 0.001;
+                }
+            }
+            tB = os.uptimeMillis();
+            console.log("bench scene particles float32 x80 ~" + (tB - tA) + "ms s=" + s);
+            var phys = 0;
+            tA = os.uptimeMillis();
+            for (k = 0; k < 6000; k++) {
+                phys += ((k * 1103515245 + 12345) & 0x7fffffff) % 17;
+            }
+            tB = os.uptimeMillis();
+            console.log("bench scene pogoroo-ish rng x6000 ~" + (tB - tA) + "ms acc=" + phys);
+            console.log("bench scene render3d_cube: covered by testRender3DBench when enabled");
+        }
         console.log("perf plan microbenches done");
+    }
+
+    function testGenerators() {
+        function* g() {
+            yield 1;
+            yield 2;
+            return 9;
+        }
+        var it = g();
+        var a = it.next();
+        eq(a.done, false, "gen a.done");
+        eq(a.value, 1, "gen a.value");
+        var b = it.next();
+        eq(b.done, false, "gen b.done");
+        eq(b.value, 2, "gen b.value");
+        var c = it.next();
+        eq(c.done, true, "gen c.done");
+        eq(c.value, 9, "gen c.value");
+        var d = it.next();
+        eq(d.done, true, "gen d.done after complete");
+
+        var h = function* () {
+            var x = (function () { return 4; })();
+            yield x;
+        }();
+        var e = h.next();
+        eq(e.value, 4, "gen expr nested call");
+        eq(e.done, false, "gen expr done");
+        eq(h.next().done, true, "gen expr finished");
     }
 
     // ------------------------------------------------------------------------
@@ -483,13 +582,18 @@ line`, "multi\nline", "template newline");
         try { testScreenBatchAndLayer(); } catch (e) { failed++; console.log("FAIL screen render: " + e.message); }
         try { testRender3DBench(); } catch (e) { failed++; console.log("FAIL render3d: " + e.message); }
         try { testPerfPlanMicrobenches(); } catch (e) { failed++; console.log("FAIL perf micro: " + e.message); }
+        try { testGenerators(); } catch (e) { failed++; console.log("FAIL generators: " + e.message); }
 
         console.log("----------");
         console.log("Tests run: " + total + ", failed: " + failed);
         return failed === 0;
     }
 
+    //old call
+    //runAll();
+
     return { runAll: runAll };
 }());
 
+// new call
 tests.runAll();

@@ -118,6 +118,21 @@ final class CldcMath {
             return ((ei & 1L) != 0) ? -p : p;
         }
 
+        double ef = Math.floor(e);
+        if (ef == e && e >= -31.0 && e <= 31.0) {
+            int exp = (int) e;
+            boolean neg = exp < 0;
+            if (neg) exp = -exp;
+            double result = 1.0;
+            double base = b;
+            while (exp > 0) {
+                if ((exp & 1) != 0) result *= base;
+                base *= base;
+                exp >>= 1;
+            }
+            return neg ? 1.0 / result : result;
+        }
+
         return exp(e * log(b));
     }
 }

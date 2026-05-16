@@ -2,6 +2,8 @@ import java.io.*;
 import javax.microedition.io.*;
 import javax.microedition.io.file.*;
 
+import net.cnjm.j2me.util.IoByteBufferPool;
+
 import javax.microedition.media.Manager;
 import javax.microedition.media.Player;
 import javax.microedition.media.PlayerListener;
@@ -20,6 +22,8 @@ public final class AthenaSound {
 
     private static final Object channelsLock = new Object();
     private static final Player[] channelPlayer = new Player[MAX_CHANNELS];
+    /** WAV byte identity last bound to each SFX channel (for player reuse). */
+    private static final byte[][] channelSfxSrc = new byte[MAX_CHANNELS][];
 
     public static final String MIME_WAV = "audio/x-wav";
     public static final String MIME_MIDI = "audio/midi";
@@ -80,6 +84,7 @@ public final class AthenaSound {
             }
         }
         channelPlayer[c] = null;
+        channelSfxSrc[c] = null;
     }
 
     public static byte[] loadResource(String path) {
@@ -108,12 +113,16 @@ public final class AthenaSound {
             }
 
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            byte[] buf = new byte[1024];
-            int n;
-            while ((n = in.read(buf)) > 0) {
-                bos.write(buf, 0, n);
+            byte[] buf = IoByteBufferPool.borrow(1024);
+            try {
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    bos.write(buf, 0, n);
+                }
+                return bos.toByteArray();
+            } finally {
+                IoByteBufferPool.release(buf);
             }
-            return bos.toByteArray();
         } catch (IOException e) {
             e.printStackTrace();
             return null;
@@ -354,6 +363,19 @@ public final class AthenaSound {
         }
 
         synchronized (channelsLock) {
+            Player existing = channelPlayer[ch];
+            if (existing != null && channelSfxSrc[ch] == data.wav) {
+                try {
+                    existing.stop();
+                    existing.setMediaTime(0L);
+                    applySfxLevel(existing, localVol, pan, pitch);
+                    existing.start();
+                    return ch;
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    releaseChannel(ch);
+                }
+            }
             releaseChannel(ch);
             try {
                 Player p = Manager.createPlayer(new ByteArrayInputStream(data.wav), MIME_WAV);
@@ -363,6 +385,7 @@ public final class AthenaSound {
                 applySfxLevel(p, localVol, pan, pitch);
                 p.start();
                 channelPlayer[ch] = p;
+                channelSfxSrc[ch] = data.wav;
                 return ch;
             } catch (Exception e) {
                 e.printStackTrace();

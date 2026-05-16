@@ -13,7 +13,7 @@ import java.util.Vector;
  *
  * <ul>
  *   <li>Template literals {@code `hello ${name}!`} →
- *       {@code ("hello " + (name) + "!")}.</li>
+ *       {@code "hello " + (name) + "!"}.</li>
  *   <li>Arrow functions {@code (a, b) => a + b} →
  *       {@code function(a, b){return a + b;}}. Expression-bodied arrows get
  *       wrapped with {@code {return ...;}}; block-bodied arrows are left as-is
@@ -26,6 +26,8 @@ import java.util.Vector;
  *   <li>{@code async function} with a <strong>linear</strong> body (semicolon-separated
  *       statements, no {@code if}/{@code for}/{@code while}/{@code switch}/{@code try})
  *       → desugaring with {@code __awaitStep} and {@code Promise.resolve} (see README).</li>
+ *   <li><strong>Generators</strong> ({@code function*}, {@code yield}) are parsed and executed
+ *       natively in {@link RocksInterpreter} — not desugared here.</li>
  * </ul>
  *
  * <p>This preprocessor runs once per script-source, so it is O(n) and does not
@@ -40,6 +42,13 @@ final class Es6Preproc {
      * is skipped. Set to true for smaller token streams and less RPN at runtime.
      */
     public static boolean ENABLE_LITERAL_FOLD = true;
+
+    /**
+     * When true, {@link #rewriteTemplate} copies long static template runs via
+     * {@code substring} instead of per-character appends (see
+     * {@link RocksInterpreter#escapeOptForLiterals}).
+     */
+    public static boolean ESCAPE_OPT_FOR_LITERALS = false;
 
     static String process(String src) {
         if (src == null || src.length() == 0) return src;
@@ -137,6 +146,29 @@ final class Es6Preproc {
     //  Template literals
     // ==================================================================
 
+    /**
+     * Append a static template span that is safe to inject into the generated
+     * {@code "..."} segment without per-char escaping (no {@code "`"}, escapes,
+     * quotes, newlines, or start of {@code ${}).
+     */
+    static int appendTemplatePlainRun(String src, int i, int n, StringBuffer piece) {
+        int j = i;
+        while (j < n) {
+            char c = src.charAt(j);
+            if (c == '$' && j + 1 < n && src.charAt(j + 1) == '{') {
+                break;
+            }
+            if (c == '`' || c == '\\' || c == '"' || c == '\n' || c == '\r') {
+                break;
+            }
+            j++;
+        }
+        if (j > i) {
+            piece.append(src.substring(i, j));
+        }
+        return j;
+    }
+
     static String preprocessTemplates(String src) {
         int n = src.length();
         if (src.indexOf('`') < 0) return src;
@@ -158,14 +190,21 @@ final class Es6Preproc {
         return out.toString();
     }
 
-    /** Rewrite a single {@code `...`} literal into a parenthesised concatenation. */
+    /** Rewrite a single {@code `...`} literal into a string concatenation. */
     static int rewriteTemplate(String src, int start, StringBuffer out) {
         int n = src.length();
         int i = start + 1;
-        out.append("(\"");
+        out.append("\"");
         boolean anyPart = false;
         StringBuffer piece = new StringBuffer();
         while (i < n) {
+            if (ESCAPE_OPT_FOR_LITERALS) {
+                int jn = appendTemplatePlainRun(src, i, n, piece);
+                if (jn > i) {
+                    i = jn;
+                    continue;
+                }
+            }
             char c = src.charAt(i);
             if (c == '`') { i++; break; }
             if (c == '\\' && i + 1 < n) {
@@ -219,8 +258,8 @@ final class Es6Preproc {
             piece.append(c);
             i++;
         }
-        out.append(piece.toString()).append("\")");
-        // anyPart suppression: if we never added an expr, keeping the parens is fine.
+        out.append(piece.toString()).append("\"");
+        // anyPart suppression: retained for future diagnostics.
         // Compiler silence — 'anyPart' is retained for future diagnostics.
         if (anyPart) { /* no-op */ }
         return i;
@@ -577,7 +616,7 @@ final class Es6Preproc {
                         String decl;
                         if (loopPattern != null) {
                             StringBuffer db = new StringBuffer();
-                            db.append("var ").append(elHolder).append("=").append(elemExpr).append(";");
+                            db.append("var ").append(elHolder).append("=").append(elemExpr).append(";\n");
                             emitDestructDecl(db, loopPattern, elHolder);
                             decl = db.toString();
                         } else {
@@ -970,7 +1009,7 @@ final class Es6Preproc {
                         }
                         String expr = src.substring(exprStart, q).trim();
                         String tmp = "__d" + out.length();
-                        out.append("var ").append(tmp).append("=").append(expr).append(";");
+                        out.append("var ").append(tmp).append("=").append(expr).append(";\n");
                         expandPattern(out, pattern, open == '[', tmp);
                         i = q;
                         continue;
@@ -1034,7 +1073,7 @@ final class Es6Preproc {
                 if (name != null) {
                     i += name.length();
                     if (isArray) {
-                        out.append("var ").append(name).append("=").append(tmp).append(".slice(").append(idx).append(");");
+                        out.append("var ").append(name).append("=").append(tmp).append(".slice(").append(idx).append(");\n");
                     }
                 }
                 continue;
@@ -1073,10 +1112,10 @@ final class Es6Preproc {
             }
             if (defExpr != null) {
                 // Paren-wrap to avoid `= {}` / `= {x:1}` being parsed as a block.
-                out.append("; if(").append(renamed).append("===undefined)").append(renamed)
+                out.append(";\nif(").append(renamed).append("===undefined)").append(renamed)
                         .append("=(").append(defExpr).append(")");
             }
-            out.append(";");
+            out.append(";\n");
             idx++;
         }
     }
@@ -1870,6 +1909,31 @@ final class Es6Preproc {
                 StringBuffer t = new StringBuffer();
                 int j = copyLiteral(src, i, t);
                 if (j > i) { i = j; continue; }
+            }
+            if (c == 'c' && i + 5 <= n && matchKw(src, i, "const") && (i + 5 >= n || !isIdentPart(src.charAt(i + 5)))) {
+                int p = i + 5;
+                int dparen = 0, dbr = 0, dbrace = 0;
+                while (p < n) {
+                    char cc = src.charAt(p);
+                    if (cc == '"' || cc == '\'' || cc == '`' || (cc == '/' && p + 1 < n && (src.charAt(p + 1) == '/' || src.charAt(p + 1) == '*'))) {
+                        StringBuffer t = new StringBuffer();
+                        int j = copyLiteral(src, p, t);
+                        if (j > p) { p = j; continue; }
+                    }
+                    if (cc == '(') dparen++;
+                    else if (cc == ')') dparen--;
+                    else if (cc == '[') dbr++;
+                    else if (cc == ']') dbr--;
+                    else if (cc == '{') dbrace++;
+                    else if (cc == '}') dbrace--;
+                    else if (cc == ';' && dparen == 0 && dbr == 0 && dbrace == 0) {
+                        p++;
+                        break;
+                    }
+                    p++;
+                }
+                i = p;
+                continue;
             }
             if (c == 'f' && i + 8 <= n && matchKw(src, i, "function") && (i + 8 >= n || !isIdentPart(src.charAt(i + 8)))) {
                 int j = i + 8;

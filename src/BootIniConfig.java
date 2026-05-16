@@ -2,6 +2,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.util.Hashtable;
 
+import net.cnjm.j2me.util.IoByteBufferPool;
+
 /**
  * Loads {@code /boot.ini} (UTF-8) for the configurable boot splash sequence.
  */
@@ -20,17 +22,23 @@ public final class BootIniConfig {
      * Default is true. Set in {@code [boot]} with {@code es6=false} (or 0, no, off, legacy).
      */
     public boolean es6 = true;
+    /**
+     * When true, the main {@link AthenaCanvas} starts in MIDP fullscreen (no title / soft bar).
+     * Set in {@code [boot]} with {@code fullscreen=true} (or 1, yes, on).
+     */
+    public boolean fullscreen = false;
     public String mainScript = "/main.js";
 
     public final SplashSlide[] slides;
 
-    private BootIniConfig(SplashSlide[] slides0, int tick0, int handoff0, boolean es60, String main0) {
+    private BootIniConfig(SplashSlide[] slides0, int tick0, int handoff0, boolean es60, boolean fullscreen0, String main0) {
         slides = slides0;
         if (tick0 > 0) {
             tickMs = tick0;
         }
         handoffPolicy = handoff0;
         es6 = es60;
+        fullscreen = fullscreen0;
         if (main0 != null) {
             mainScript = main0;
         }
@@ -83,7 +91,7 @@ public final class BootIniConfig {
         try {
             is = anchor.getResourceAsStream("/boot.ini");
             if (is == null) {
-                return new BootIniConfig(new SplashSlide[0], 50, HANDOFF_AFTER_SLIDE, true, null);
+                return new BootIniConfig(new SplashSlide[0], 50, HANDOFF_AFTER_SLIDE, true, false, null);
             }
             byte[] raw = readAll(is);
             is.close();
@@ -92,7 +100,7 @@ public final class BootIniConfig {
             return parseIni(s);
         } catch (Throwable t) {
             t.printStackTrace();
-            return new BootIniConfig(new SplashSlide[0], 50, HANDOFF_AFTER_SLIDE, true, null);
+            return new BootIniConfig(new SplashSlide[0], 50, HANDOFF_AFTER_SLIDE, true, false, null);
         } finally {
             if (is != null) {
                 try {
@@ -105,12 +113,16 @@ public final class BootIniConfig {
 
     private static byte[] readAll(InputStream is) throws java.io.IOException {
         ByteArrayOutputStream bo = new ByteArrayOutputStream();
-        byte[] buf = new byte[4096];
-        int n;
-        while ((n = is.read(buf)) >= 0) {
-            bo.write(buf, 0, n);
+        byte[] buf = IoByteBufferPool.borrow(4096);
+        try {
+            int n;
+            while ((n = is.read(buf)) >= 0) {
+                bo.write(buf, 0, n);
+            }
+            return bo.toByteArray();
+        } finally {
+            IoByteBufferPool.release(buf);
         }
-        return bo.toByteArray();
     }
 
     private static String decodeUtf8(byte[] raw) {
@@ -181,6 +193,7 @@ public final class BootIniConfig {
 
         int handoff = HANDOFF_AFTER_SLIDE;
         boolean es6 = true;
+        boolean fullscreen = false;
         String mainPath = "/main.js";
         Hashtable bootSec = (Hashtable) sections.get("boot");
         if (bootSec != null) {
@@ -199,6 +212,15 @@ public final class BootIniConfig {
                     es6 = false;
                 } else {
                     es6 = true;
+                }
+            }
+            String fss = (String) bootSec.get("fullscreen");
+            if (fss != null) {
+                String u = lc(trim(fss));
+                if ("1".equals(u) || "true".equals(u) || "yes".equals(u) || "on".equals(u)) {
+                    fullscreen = true;
+                } else {
+                    fullscreen = false;
                 }
             }
             String m = (String) bootSec.get("main");
@@ -230,7 +252,7 @@ public final class BootIniConfig {
         }
 
         if (count <= 0) {
-            return new BootIniConfig(new SplashSlide[0], tick, handoff, es6, mainPath);
+            return new BootIniConfig(new SplashSlide[0], tick, handoff, es6, fullscreen, mainPath);
         }
 
         SplashSlide[] slides = new SplashSlide[count];
@@ -241,7 +263,7 @@ public final class BootIniConfig {
                 applySlideKeys(slides[k], sec);
             }
         }
-        return new BootIniConfig(slides, tick, handoff, es6, mainPath);
+        return new BootIniConfig(slides, tick, handoff, es6, fullscreen, mainPath);
     }
 
     private static void applySlideKeys(SplashSlide sl, Hashtable sec) {

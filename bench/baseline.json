@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "jarMaxBytes": 1200000,
+  "heapUsedSoftMax": 3500000,
+  "notes": "jarMaxBytes is enforced in CI via scripts/check-baseline.mjs. heapUsedSoftMax is advisory (device-dependent)."
+}

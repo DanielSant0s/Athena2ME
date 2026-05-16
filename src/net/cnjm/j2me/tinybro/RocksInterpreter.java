@@ -18,6 +18,46 @@ public class RocksInterpreter {
         Es6Preproc.ENABLE_LITERAL_FOLD = on;
     }
 
+    /**
+     * When {@code true} (default), {@code NativeFunctionFast} call sites avoid
+     * {@link Rv#pv()} allocations by materialising primitive arguments into
+     * per-eval-depth scratch cells. Disable if a binding relied on primitive
+     * {@code Rv} identity (should not happen).
+     */
+    public static boolean fastNativeArgPooling = true;
+
+    public static void setFastNativeArgPooling(boolean on) {
+        fastNativeArgPooling = on;
+    }
+
+    /**
+     * Experimental: {@code new} at the same bytecode site reuses one of eight
+     * pre-allocated {@code this} shells (cleared between calls). Only safe if
+     * fewer than nine constructed objects from that site are live at once.
+     */
+    public static boolean ctorPoolEnabled = false;
+
+    public static void setCtorPoolEnabled(boolean on) {
+        ctorPoolEnabled = on;
+    }
+
+    /** When {@code true}, object/array literal sites cache the final {@link RhashShape}. */
+    public static boolean literalShapeCacheEnabled = true;
+
+    public static void setLiteralShapeCacheEnabled(boolean on) {
+        literalShapeCacheEnabled = on;
+    }
+
+    /**
+     * When {@code true}, {@link Es6PreprocFacade} enables {@link Es6Preproc#ESCAPE_OPT_FOR_LITERALS}
+     * for ES6 preprocessing so template static spans copy via {@link String#substring} where safe.
+     */
+    public static boolean escapeOptForLiterals = false;
+
+    public static void setEscapeOptForLiterals(boolean on) {
+        escapeOptForLiterals = on;
+    }
+
     /** whether to evaluate in-string expressions in language level */
     public boolean evalString = false;
     
@@ -36,6 +76,8 @@ public class RocksInterpreter {
     private final Object[] errTokPairBuf = new Object[2];
     private final Pack invokeOneArgPack = new Pack(-1, 4);
     private final Pack invokeThreeArgPack = new Pack(-1, 8);
+    /** Reused by {@code Array.reduce} / {@code reduceRight} (see {@link StdLib}). */
+    public final Pack reduceReusePack = new Pack(-1, 8);
 
     /** Package-visible: reused 2-argument pack ({@link PromiseRuntime} thenable path). */
     final Pack scratchTwoArgs = new Pack(-1, 4);
@@ -71,10 +113,12 @@ public class RocksInterpreter {
             // ES6 desugaring runs only on top-level script sources, not on cached
             // sub-token ranges (where pos/len already reference a preprocessed buffer).
             if (!skipEs6PreprocessForNextReset && es6PreprocessEnabled) {
-                String pp = Es6Preproc.process(src);
-                if (pp != src) {
-                    src = pp;
-                    len = pp.length();
+                if (!Es6PreprocFacade.isPrebaked(src)) {
+                    String pp = Es6PreprocFacade.process(src);
+                    if (pp != src) {
+                        src = pp;
+                        len = pp.length();
+                    }
                 }
             } else {
                 skipEs6PreprocessForNextReset = false;
@@ -152,13 +196,15 @@ public class RocksInterpreter {
 
         boolean afterDot = false;
         
+        tokenLoop:
         while (pos < endpos) {
 mainswitch:
             switch (state) {
             case 0: 
                 char c = cc[pos];
-                // skip white spaces { ' ', '\t', '\r' }
-                for (; c == ' ' || c == '\t' || c == '\r';) {
+                // Horizontal whitespace only — '\r' must emit TOK_EOL so eatUntil(EOL,';')
+                // splits statements on Classic-Mac (\r) and normalizes CRLF without swallowing breaks.
+                for (; c == ' ' || c == '\t';) {
                     ++pos;
                     if (pos < endpos) {
                         c = cc[pos];
@@ -166,10 +212,35 @@ mainswitch:
                         break mainswitch;
                     }
                 }
-                if (continueline && c == RC.TOK_EOL) {
-                    ++pos;
+                // Backslash line continuation accepts LF, CR, CRLF, LS, or PS before the continued line.
+                if (continueline && (c == RC.TOK_EOL || c == '\r' || c == '\u2028' || c == '\u2029')) {
+                    if (c == '\r') {
+                        ++pos;
+                        if (pos < endpos && cc[pos] == '\n') {
+                            ++pos;
+                        }
+                    } else {
+                        ++pos;
+                    }
                     continueline = false;
-                } else if (c >= '0' && c <= '9'
+                    continue tokenLoop;
+                }
+                if (c == '\r') {
+                    int lineBrk = pos++;
+                    if (pos < endpos && cc[pos] == '\n') {
+                        ++pos;
+                    }
+                    addToken(tt, RC.TOK_EOL, lineBrk, pos - lineBrk, null);
+                    afterDot = false;
+                    continue tokenLoop;
+                }
+                // ECMA-262 LineTerminator: LS / PS (Unicode line & paragraph separators).
+                if (c == '\u2028' || c == '\u2029') {
+                    addToken(tt, RC.TOK_EOL, pos++, 1, null);
+                    afterDot = false;
+                    continue tokenLoop;
+                }
+                if (c >= '0' && c <= '9'
                         || c == '.' && pos + 1 < endpos && cc[pos + 1] >= '0' && cc[pos + 1] <= '9') { // number
                     int next, p = pos;
                     if (c == '0' && pos + 1 < endpos && ((next = cc[pos + 1]) == 'x' || next == 'X')) {
@@ -328,7 +399,7 @@ mainswitch:
                                     tokinc = RC.DBL_START;
                                     ++posinc;
                                 }
-                            } else if (c != '%' && c != '^') {
+                            } else if (c != '%' && c != '^' && c != '!') {
                                 tokinc = RC.DBL_START;
                                 ++posinc;
                             }
@@ -396,11 +467,19 @@ mainswitch:
                     ++pos;
                 }
                 break;
-            case '/': // single-line comment
-                c = cc[pos++];
-                if (c == RC.TOK_EOL) {
+            case '/': // single-line comment (// ...)
+                if (pos >= endpos) {
                     state = 0;
+                    break;
                 }
+                c = cc[pos];
+                if (c == RC.TOK_EOL || c == '\r' || c == '\u2028' || c == '\u2029') {
+                    state = 0;
+                    // Do not consume the line terminator; state 0 emits TOK_EOL so eatUntil(EOL,';')
+                    // splits statements after //-comments (matches ECMA LineTerminator).
+                    break;
+                }
+                ++pos;
                 break;
             case '*': // multi-line comment
                 c = cc[pos++];
@@ -442,6 +521,78 @@ mainswitch:
                lastToken == RC.TOK_EOL;   // \n
     }
 
+    private boolean shouldContinueExpressionAcrossEol(int eolTokIdx) {
+        int[] tti = tt.iArray;
+        int prev = -1;
+        for (int i = eolTokIdx - 1; i >= pos; i--) {
+            int t = tti[i * RC.LEX_STRIDE];
+            if (t != RC.TOK_EOL) {
+                prev = t;
+                break;
+            }
+        }
+        if (prev < 0) {
+            return false;
+        }
+        int next = -1;
+        for (int i = eolTokIdx + 1; i < endpos; i++) {
+            int t = tti[i * RC.LEX_STRIDE];
+            if (t != RC.TOK_EOL) {
+                next = t;
+                break;
+            }
+        }
+        if (next < 0) {
+            return false;
+        }
+        return tokenExpectsRightOperand(prev)
+                || (tokenCanEndExpression(prev) && tokenContinuesExpressionFromLeft(next));
+    }
+
+    private static boolean tokenCanEndExpression(int t) {
+        return t > 0 && t <= RC.TOK_SYMBOL
+                || t == RC.TOK_RPR || t == RC.TOK_RBK || t == RC.TOK_RBR
+                || t == RC.TOK_INVOKE || t == RC.TOK_INIT
+                || t == RC.TOK_INC || t == RC.TOK_DEC;
+    }
+
+    private static boolean tokenExpectsRightOperand(int t) {
+        return t == RC.TOK_DOT || t == RC.TOK_QMK || t == RC.TOK_COL
+                || t == RC.TOK_ASS || t == RC.TOK_ADA || t == RC.TOK_MIA
+                || t == RC.TOK_MUA || t == RC.TOK_DIA || t == RC.TOK_MOA
+                || t == RC.TOK_BAA || t == RC.TOK_BXA || t == RC.TOK_BOA
+                || t == RC.TOK_OR || t == RC.TOK_AND
+                || t == RC.TOK_EQ || t == RC.TOK_NE || t == RC.TOK_IDN || t == RC.TOK_NID
+                || t == RC.TOK_GRT || t == RC.TOK_LES || t == RC.TOK_GE || t == RC.TOK_LE
+                || t == RC.TOK_ADD || t == RC.TOK_MIN || t == RC.TOK_MUL
+                || t == RC.TOK_DIV || t == RC.TOK_MOD || t == RC.TOK_POW
+                || t == RC.TOK_BAN || t == RC.TOK_BOR || t == RC.TOK_BXO
+                || t == RC.TOK_LSH || t == RC.TOK_RSH || t == RC.TOK_RSZ
+                || t == RC.TOK_INSTANCEOF || t == RC.TOK_IN
+                || t == RC.TOK_NOT || t == RC.TOK_BNO
+                || t == RC.TOK_TYPEOF || t == RC.TOK_DELETE || t == RC.TOK_NEW;
+    }
+
+    private static boolean tokenContinuesExpressionFromLeft(int t) {
+        return t == RC.TOK_DOT || t == RC.TOK_LBK || t == RC.TOK_LPR || t == RC.TOK_QMK
+                || t == RC.TOK_ASS || t == RC.TOK_ADA || t == RC.TOK_MIA
+                || t == RC.TOK_MUA || t == RC.TOK_DIA || t == RC.TOK_MOA
+                || t == RC.TOK_BAA || t == RC.TOK_BXA || t == RC.TOK_BOA
+                || t == RC.TOK_OR || t == RC.TOK_AND
+                || t == RC.TOK_EQ || t == RC.TOK_NE || t == RC.TOK_IDN || t == RC.TOK_NID
+                || t == RC.TOK_GRT || t == RC.TOK_LES || t == RC.TOK_GE || t == RC.TOK_LE
+                || t == RC.TOK_ADD || t == RC.TOK_MIN || t == RC.TOK_MUL
+                || t == RC.TOK_DIV || t == RC.TOK_MOD || t == RC.TOK_POW
+                || t == RC.TOK_BAN || t == RC.TOK_BOR || t == RC.TOK_BXO
+                || t == RC.TOK_LSH || t == RC.TOK_RSH || t == RC.TOK_RSZ
+                || t == RC.TOK_INSTANCEOF || t == RC.TOK_IN;
+    }
+
+    private static boolean isPrefixUnaryToken(int t) {
+        return t == RC.TOK_NOT || t == RC.TOK_BNO || t == RC.TOK_POS || t == RC.TOK_NEG
+                || t == RC.TOK_TYPEOF || t == RC.TOK_DELETE || t == RC.TOK_NEW;
+    }
+
     /** Error context for lexer token at index {@code tokIdx} (reuses internal buffers). */
     final Object[] makeErrTokPair(int tokIdx) {
         int b = tokIdx * RC.LEX_STRIDE;
@@ -481,7 +632,7 @@ mainswitch:
     
 ////////////////////////////// Parser Methods ///////////////////////////
     
-    final void statements(Rv callObj, Node node, int loop) {
+    final void statements(Rv callObj, Node node, int loop, boolean genBody) {
         int[] tti = tt.iArray;
         int endpos = this.endpos;
         while (pos < endpos && loop-- != 0) {
@@ -498,6 +649,9 @@ mainswitch:
                 pos++;
                 t = RC.TOK_FUNCTION;
             }
+            if (t == RC.TOK_YIELD && !genBody) {
+                throw ex(t, makeErrTokPair(pos), "yield outside generator function");
+            }
             int posmk = pos++;
             switch (t) {
 //            case RC.TOK_SEM: // blank statement
@@ -507,11 +661,11 @@ mainswitch:
                 eat(RC.TOK_LPR);
                 astNode(n, RC.TOK_MUL, pos, eatUntil(RC.TOK_RPR, 0)); // * = exp
                 eat(RC.TOK_RPR);
-                statements(callObj, n, 1);
+                statements(callObj, n, 1, genBody);
                 if (pos < endpos && tti[pos * RC.LEX_STRIDE] == RC.TOK_ELSE) {
                     ++pos;
                     n.tagType = RC.TOK_ELSE;
-                    statements(callObj, n, 1);
+                    statements(callObj, n, 1, genBody);
                 }
                 break;
             case RC.TOK_WHILE:
@@ -520,11 +674,11 @@ mainswitch:
                 eat(RC.TOK_LPR);
                 astNode(n, RC.TOK_MUL, pos, eatUntil(RC.TOK_RPR, 0)); // * = exp
                 eat(RC.TOK_RPR);
-                statements(callObj, n, 1);
+                statements(callObj, n, 1, genBody);
                 break;
             case RC.TOK_DO:
                 n = astNode(node, t, posmk, 0);
-                statements(callObj, n, 1);
+                statements(callObj, n, 1, genBody);
                 eat(RC.TOK_WHILE);
                 eat(RC.TOK_LPR);
                 astNode(n, RC.TOK_MUL, pos, eatUntil(RC.TOK_RPR, 0)); // * = exp
@@ -551,7 +705,7 @@ mainswitch:
                 }
                 astNode(n, RC.TOK_MUL, pos, eatUntil(RC.TOK_RPR, 0));
                 eat(RC.TOK_RPR);
-                statements(callObj, n, 1);
+                statements(callObj, n, 1, genBody);
                 break;
             case RC.TOK_SWITCH:
                 n = astNode(node, t, posmk, 0);
@@ -572,7 +726,11 @@ mainswitch:
                 eat(RC.TOK_COL);
                 break;
             case RC.TOK_FUNCTION:
-                n = astNode(null, t, posmk, 0);
+                n = astNode(node, t, posmk, 0);
+                if (pos < endpos && tti[pos * RC.LEX_STRIDE] == RC.TOK_MUL) {
+                    n.generatorFunction = true;
+                    pos++;
+                }
                 int pp = pos;
                 eatUntil(RC.TOK_LPR, 0);
                 boolean findname = false;
@@ -582,7 +740,7 @@ mainswitch:
                     if (tti[ii * RC.LEX_STRIDE] == RC.TOK_SYMBOL) {
                         funcId = n.id = tokenSymbolName(tt, ii);
                         func = new Rv(false, n, 0);
-                        func.co.prev = callObj;
+                        func.co.prev = captureScopeChain(callObj);
                         callObj.putl(funcId, func);
                         findname = true;
                         break;
@@ -593,6 +751,9 @@ mainswitch:
                 func.num = n.children.oSize - 1;
                 break;
             case RC.TOK_TRY:
+                if (genBody) {
+                    throw ex(tti[pos * RC.LEX_STRIDE], makeErrTokPair(pos), "try with yield not supported in generator");
+                }
                 n = astNode(node, t, posmk, 0);
                 eat(RC.TOK_LBR);
                 Node fn = astNode(n, RC.TOK_FUNCTION, pos, 0);
@@ -632,7 +793,16 @@ mainswitch:
                 }
                 break;
             case RC.TOK_RETURN:
+                n = astNode(node, t, posmk, 0);
+                astNode(n, RC.TOK_MUL, pos, eatUntil(RC.TOK_EOL, RC.TOK_SEM));
+                if (pos < endpos) eat(tti[pos * RC.LEX_STRIDE]); // skip eol or ';'
+                break;
             case RC.TOK_THROW:
+                n = astNode(node, t, posmk, 0);
+                astNode(n, RC.TOK_MUL, pos, eatUntil(RC.TOK_EOL, RC.TOK_SEM));
+                if (pos < endpos) eat(tti[pos * RC.LEX_STRIDE]); // skip eol or ';'
+                break;
+            case RC.TOK_YIELD:
                 n = astNode(node, t, posmk, 0);
                 astNode(n, RC.TOK_MUL, pos, eatUntil(RC.TOK_EOL, RC.TOK_SEM));
                 if (pos < endpos) eat(tti[pos * RC.LEX_STRIDE]); // skip eol or ';'
@@ -732,7 +902,9 @@ mainloop:
             case RC.TOK_MIN:
             case RC.TOK_ADD:
                 boolean prevSym = prev > 0 && prev <= RC.TOK_SYMBOL // NUMBER, STRING or SYMBOL
-                        || prev == RC.TOK_RPR || prev == RC.TOK_RBK || prev == RC.TOK_RBR;
+                        || prev == RC.TOK_RPR || prev == RC.TOK_RBK || prev == RC.TOK_RBR
+                        || (t != RC.TOK_MIN && t != RC.TOK_ADD
+                                && prev == RC.TOK_INIT && t != RC.TOK_LBK);
                 boolean isBkOrMin = t == RC.TOK_LBK || t == RC.TOK_MIN || t == RC.TOK_ADD;
                 if (prevSym && !isBkOrMin // foo(), a++  
                         || !prevSym && isBkOrMin) { // a = [1, 2], 12 + -5
@@ -746,6 +918,10 @@ mainloop:
             case RC.TOK_FUNCTION:
                 Node n = astNode(null, t, pos, 0);
                 eat(RC.TOK_FUNCTION); // skip "function"
+                if (tti[pos * RC.LEX_STRIDE] == RC.TOK_MUL) {
+                    n.generatorFunction = true;
+                    pos++;
+                }
                 String id = null;
                 if (tti[pos * RC.LEX_STRIDE] == RC.TOK_SYMBOL) { // named function
                     id = tokenSymbolName(tt, pos++);
@@ -773,8 +949,23 @@ mainloop:
                 int top = op.iSize > 0 ? op.iArray[op.iSize - 1] : RC.TOK_EMPTY;
                 int offset = top >>> 16;
                 top &= 0xffff;
+                if (isPrefixUnaryToken(t) && isPrefixUnaryToken(top)) {
+                    op.add(t).add(new Integer(pos));
+                    prev = t;
+                    t = 0;
+                    continue;
+                }
                 int row = t < OPTR_TABLE_SIZE ? opidx[t] : -1;
                 int col = top < OPTR_TABLE_SIZE ? opidx[top] : -1;
+                // Closing ] must only finish array/object literals — never swallow the pending
+                // call/new paren. Otherwise `new Foo([3])` reduces TOK_INIT on the same ] token,
+                // leaves '=' stranded on the op stack, and mis-counts ctor args (e.g. var x =
+                // new Int32Array([3]) resolves the declarator name as the callee).
+                if (t == RC.TOK_RBK && (top == RC.TOK_INIT || top == RC.TOK_INVOKE)) {
+                    prev = RC.TOK_RBK;
+                    t = 0;
+                    break;
+                }
                 if (row == -1 || col == -1) {
                     throw ex(t, makeErrTokPair(pos), "stack top: " + RC.tokenName(top, null));
                 }
@@ -808,7 +999,9 @@ mainloop:
                     op.removeInt(-1);
                     op.removeObject(-1);
                     exprRpnPush(top,
-                            (top == RC.TOK_INVOKE || top == RC.TOK_INIT) ? new InvokeOpRv() : new Rv(0)); // operator cell
+                            (top == RC.TOK_INVOKE || top == RC.TOK_INIT) ? new InvokeOpRv()
+                                    : ((top == RC.TOK_LBR || top == RC.TOK_JSONARR) ? new Rv.LiteralOpRv()
+                                            : new Rv(0))); // operator cell
                     break;
                 case 6: // >
                     int newt = t;
@@ -893,6 +1086,9 @@ mainloop:
             int[] usedGrown = new int[grown.length];
             System.arraycopy(evalTempUsed, 0, usedGrown, 0, evalTempUsed.length);
             evalTempUsed = usedGrown;
+            Rv[][] argGrown = new Rv[grown.length][];
+            System.arraycopy(evalArgScratch, 0, argGrown, 0, evalArgScratch.length);
+            evalArgScratch = argGrown;
         }
         Pack opnd = pool[depth];
         if (opnd == null) {
@@ -914,10 +1110,18 @@ mainloop:
             int cat = t < OPTR_TABLE_SIZE ? _optrType[t] : 0;
             switch (cat) {
             case 1: // unary op
+                if (opnd.oSize < 1) {
+                    throw new RuntimeException("eval underflow: unary op "
+                            + RC.tokenName(t, null) + " at rpn=" + i + " (stack empty)");
+                }
                 Rv o = (Rv) opnd.oArray[opnd.oSize - 1];
                 opnd.oArray[opnd.oSize - 1] = ((Rv) to[i]).unary(callObj, t, o, acquireEvalTemp(depth));
                 break;
             case 2: // binary op
+                if (opnd.oSize < 2) {
+                    throw new RuntimeException("eval underflow: binary op "
+                            + RC.tokenName(t, null) + " at rpn=" + i + " (oSize=" + opnd.oSize + ")");
+                }
                 Rv o2 = ((Rv) opnd.oArray[--opnd.oSize]).evalVal(callObj);
                 Rv o1 = ((Rv) opnd.oArray[opnd.oSize - 1]).evalVal(callObj);
                 opnd.oArray[opnd.oSize - 1] = ((Rv) to[i]).binary(t, o1, o2);
@@ -927,6 +1131,10 @@ mainloop:
                 if (isLocalType == 0 && (next == RC.TOK_VAR || next == RC.TOK_LET || next == RC.TOK_CONST)) {
                     isLocalType = next;
                     next = RC.TOK_COM;
+                }
+                if (opnd.oSize < 2) {
+                    throw new RuntimeException("eval underflow: assign op "
+                            + RC.tokenName(t, null) + " at rpn=" + i + " (oSize=" + opnd.oSize + ")");
                 }
                 o2 = ((Rv) opnd.oArray[--opnd.oSize]).evalVal(callObj);
                 o1 = ((Rv) opnd.oArray[opnd.oSize - 1]).evalRef(callObj, acquireEvalTemp(depth));
@@ -945,6 +1153,10 @@ mainloop:
                 case RC.TOK_AND:
                 case RC.TOK_OR:
                     if (offset > 0) {
+                        if (opnd.oSize < 1) {
+                            throw new RuntimeException("eval underflow: "
+                                    + RC.tokenName(t, null) + " short-circuit at rpn=" + i);
+                        }
                         o = ((Rv) opnd.oArray[opnd.oSize - 1]).evalVal(callObj);
                         boolean b, or = t == RC.TOK_OR;
                         if ((b = o.asBool()) && or || !b && !or) {
@@ -983,12 +1195,21 @@ mainloop:
                     // skip
                     break;
                 case RC.TOK_COM:
+                    if (opnd.oSize < 2) {
+                        throw new RuntimeException("eval underflow: comma at rpn="
+                                + i + " (oSize=" + opnd.oSize + ")");
+                    }
                     o2 = ((Rv) opnd.oArray[--opnd.oSize]).evalVal(callObj);
                     o1 = ((Rv) opnd.oArray[opnd.oSize - 1]).evalVal(callObj);
                     opnd.oArray[opnd.oSize - 1] = o2;
                     break;
                 case RC.TOK_DOT:
                 case RC.TOK_LBK:
+                    if (opnd.oSize < 2) {
+                        throw new RuntimeException("eval underflow: "
+                                + (t == RC.TOK_DOT ? "." : "[]")
+                                + " at rpn=" + i + " (oSize=" + opnd.oSize + ")");
+                    }
                     o2 = (Rv) opnd.oArray[--opnd.oSize];
                     if (t == RC.TOK_DOT && o2.type != Rv.SYMBOL) {
                         return Rv.error("syntax error");
@@ -1013,8 +1234,19 @@ mainloop:
                     break;
                 case RC.TOK_INIT:
                 case RC.TOK_INVOKE:
+                    if (opnd.oSize < 1) {
+                        throw new RuntimeException("eval underflow: "
+                                + (t == RC.TOK_INIT ? "new" : "call")
+                                + " arg-count marker missing at rpn=" + i);
+                    }
                     num = ((Rv) opnd.oArray[opnd.oSize - 1]).num;
                     int idx = opnd.oSize - num - 2;
+                    if (idx < 0) {
+                        throw new RuntimeException("eval underflow: "
+                                + (t == RC.TOK_INIT ? "new" : "call")
+                                + " expects function + " + num + " args, oSize=" + opnd.oSize
+                                + " (rpn=" + i + ") ops=" + rpnDebug(tt, to, n));
+                    }
                     Rv fun = (Rv) opnd.oArray[idx];
                     Rv funRef;
                     Rv funObj;
@@ -1048,22 +1280,42 @@ mainloop:
                         // has been set. ctorOrProt is initialised to _Function
                         // by the Rv ctor, so comparing to _Function (and null)
                         // distinguishes "untouched" from "user-installed".
-                        Rv explicit = funObj.prop != null ? funObj.prop.get("prototype") : null;
+                        Rv explicit = funObj.prop != null ? funObj.prop.get(RC.S_PROTOTYPE) : null;
                         if (explicit != null) {
                             funObj.ctorOrProt = explicit;
-                            funObj.prop.removeAndRelease("prototype".hashCode(), "prototype");
+                            funObj.prop.removeAndRelease(RC.S_PROTOTYPE.hashCode(), RC.S_PROTOTYPE);
                         } else if (funObj.ctorOrProt == null || funObj.ctorOrProt == Rv._Function) {
                             funObj.ctorOrProt = new Rv(Rv.OBJECT, Rv._Object);
                         }
                     }
-                    for (int ii = idx + 1, nn = ii + num; ii < nn; ii++) {
-                        opnd.oArray[ii] = ((Rv) opnd.oArray[ii]).evalVal(callObj).pv();
+                    boolean fastNativeArgs = fastNativeArgPooling
+                            && (funObj.type & ~Rv.CTOR_MASK) == Rv.NATIVE
+                            && funObj.obj instanceof NativeFunctionFast;
+                    if (fastNativeArgs) {
+                        Rv[] scratches = ensureEvalArgScratch(depth, num);
+                        for (int ii = idx + 1, si = 0; ii < idx + 1 + num; ii++, si++) {
+                            opnd.oArray[ii] = materializeArgForFastNative(
+                                    ((Rv) opnd.oArray[ii]).evalVal(callObj), scratches[si]);
+                        }
+                    } else {
+                        for (int ii = idx + 1, nn = ii + num; ii < nn; ii++) {
+                            opnd.oArray[ii] = ((Rv) opnd.oArray[ii]).evalVal(callObj).pv();
+                        }
                     }
                     Rv cobakFun = funObj.co;
                     Rv funCo = borrowCallObject();
                     try {
                         funCo.prev = funObj == Rv._Function ? callObj : funObj.co.prev;
-                        Rv thiz = isInit ? new Rv(Rv.OBJECT, funObj) : funRef.co;
+                        Rv thiz;
+                        if (isInit) {
+                            if (ctorPoolEnabled && to[i] instanceof InvokeOpRv) {
+                                thiz = ((InvokeOpRv) to[i]).borrowCtorThis(funObj);
+                            } else {
+                                thiz = new Rv(Rv.OBJECT, funObj);
+                            }
+                        } else {
+                            thiz = funRef.co;
+                        }
                         Rv ret = call(isInit, funObj, funObj.co = funCo, thiz, opnd, idx + 1, num);
                         opnd.oSize = idx + 1;
                         opnd.oArray[opnd.oSize - 1] = isInit && ret == Rv._undefined ? thiz : ret;
@@ -1078,7 +1330,8 @@ mainloop:
                     if (num == 0) num = ((Rv) opnd.oArray[opnd.oSize - 1]).num + 1; // fall through
                 case RC.TOK_LBR: // json object
                     if (num == 0) num = ((Rv) opnd.oArray[opnd.oSize - 1]).num * 2 + 1;
-                    rv = Rv.polynary(callObj, t, opnd, num);
+                    Rv.LiteralOpRv litSite = (to[i] instanceof Rv.LiteralOpRv) ? (Rv.LiteralOpRv) to[i] : null;
+                    rv = Rv.polynary(callObj, t, opnd, num, litSite);
                     opnd.oSize = opnd.oSize - num + 1;
                     opnd.oArray[opnd.oSize - 1] = rv;
                     break;
@@ -1098,6 +1351,19 @@ mainloop:
             clearEvalTemps(depth);
             evalDepth = depth;
         }
+    }
+
+    private static String rpnDebug(int[] ops, Object[] vals, int len) {
+        StringBuffer b = new StringBuffer();
+        for (int i = 0; i < len; i++) {
+            if (i > 0) {
+                b.append(' ');
+            }
+            int raw = ops[i];
+            int tok = raw & 0xffff;
+            b.append(i).append(':').append(RC.tokenName(tok, vals != null ? vals[i] : null));
+        }
+        return b.toString();
     }
 
     /**
@@ -1137,8 +1403,12 @@ mainloop:
             // Native callables use function.obj = NativeFunction (or Fast); only JS
             // functions have a {@link Node} in obj — never cast function.obj to Node
             // when isNative, or ClassCastException (e.g. setInterval callback to native).
-            boolean needArgs = isNative
-                    || ((Node) function.obj).referencesArguments;
+            // Allocate Arguments when the function (or a native callable) references it.
+            // The flag is set by tokenRangeReferencesArguments() during parsing, which
+            // scans the raw token stream — unlike rpnReferencesArguments it works even
+            // before RPN compilation (lazy bodies). NativeFunctionFast exits earlier.
+            boolean needArgs = isNative || (function.obj instanceof Node
+                    && ((Node) function.obj).referencesArguments);
             Rv args = needArgs ? new Rv(Rv.ARGUMENTS, Rv._Arguments) : null;
             if (args != null) {
                 args.num = num;
@@ -1162,8 +1432,21 @@ mainloop:
         if (isNative) {
             return callNative(isInit, function, funCo);
         }
-        
-        Node node = (Node) children.getObject(-1); // the block ('{') node
+
+        GeneratorRuntime.State prevActiveGen = this.activeGeneratorState;
+        GeneratorRuntime.State genResume = this.generatorResumeContext;
+        this.generatorResumeContext = null;
+        this.activeGeneratorState = genResume;
+        try {
+        final Node fnRoot = (Node) function.obj;
+        final boolean genAst = fnRoot.generatorFunction;
+
+        if (genAst && genResume == null) {
+            return GeneratorRuntime.createIterator(this, function, funCo);
+        }
+
+        Node node;
+        int idx;
         
         int _cd0 = callDepth;
         if (_cd0 >= callStackPool.length) {
@@ -1179,15 +1462,24 @@ mainloop:
             stack.oSize = 0;
         }
         callDepth = _cd0 + 1;
-        int idx = 0;
+        if (genResume != null && genResume.savedStack != null) {
+            GeneratorRuntime.restorePack(stack, genResume.savedStack);
+            node = genResume.resumeNode;
+            idx = genResume.resumeIdx;
+            funCo = genResume.funCoLeaf;
+        } else {
+            node = (Node) children.getObject(-1); // the block ('{') node
+            idx = 0;
+        }
         try {
+        generatorSuspendSkipRecycle = false;
         Rv evr = null;
         for (;;) {
             Object next = null;
             int t;
             if ((t = node.tagType) == RC.TOK_LBR && node.state >= 0) { // not resolved
                 this.reset(src, node.properties, node.display, node.state);
-                statements(funCo, node, -1);
+                statements(funCo, node, -1, genAst);
                 node.state |= 0x80000000;
             }
             boolean isbrk;
@@ -1296,9 +1588,34 @@ mainloop:
                 } else {
                     evr = Rv.error(evr.toStr().str);
                 }
+                if (activeGeneratorState != null) {
+                    activeGeneratorState.done = true;
+                    activeGeneratorState.finalValue = Rv._undefined;
+                }
                 return evr;
             case RC.TOK_RETURN:
-                return eval(funCo, cc[0]).evalVal(funCo);
+                Rv retGen = eval(funCo, cc[0]).evalVal(funCo);
+                if (activeGeneratorState != null) {
+                    activeGeneratorState.done = true;
+                    activeGeneratorState.finalValue = retGen;
+                }
+                return retGen;
+            case RC.TOK_YIELD:
+                if (activeGeneratorState == null) {
+                    return Rv.error("yield outside running generator");
+                }
+                if ((evr = eval(funCo, cc[0])).type == Rv.ERROR) {
+                    return evr;
+                }
+                evr = evr.evalVal(funCo);
+                if (stack.iSize < 1 || stack.oSize < 1) {
+                    return Rv.error("invalid yield context");
+                }
+                int resumeAfterIdx = stack.removeInt(-1);
+                Node resumeAfterBlock = (Node) stack.removeObject(-1);
+                Pack snap = GeneratorRuntime.copyPack(stack);
+                return GeneratorRuntime.suspendFromYield(this, activeGeneratorState, evr, resumeAfterBlock,
+                        resumeAfterIdx + 1, snap, funCo);
             case RC.TOK_TRY:
                 Rv tmpfun = new Rv(false, cc[0], 0); // try node
                 Rv tmpret = call(false, tmpfun, funCo, null, null, 0, 0);
@@ -1357,7 +1674,7 @@ mainloop:
                 Node block;
                 if ((block = (Node) cc[1]).children == null) {
                     this.reset(src, block.properties, block.display, block.state);
-                    statements(funCo, block, -1);
+                    statements(funCo, block, -1, genAst);
                     block.state |= 0x80000000;
                 }
                 Object[] blkoo = (block = (Node) cc[1]).children.oArray;
@@ -1423,6 +1740,16 @@ mainloop:
                 ++idx;
             } else if (nextty == RC.TOK_CASE || nextty == RC.TOK_DEFAULT) { // go to next node
                 ++idx;
+            } else if (nextty == RC.TOK_FUNCTION) {
+                Node fnDecl = (Node) next;
+                String fid = fnDecl.id;
+                if (fid != null) {
+                    Rv funcRv = funCo.get(fid);
+                    if (funcRv != null && funcRv != Rv._undefined && funcRv.isCallable()) {
+                        funcRv.co.prev = funCo;
+                    }
+                }
+                ++idx;
             } else {
                 stack.add(node).add(idx);
                 node = (Node) next;
@@ -1430,14 +1757,24 @@ mainloop:
             }
     
         }
+        if (activeGeneratorState != null) {
+            activeGeneratorState.done = true;
+            activeGeneratorState.finalValue = Rv._undefined;
+        }
         return Rv._undefined;
         } finally {
-            while (funCo != originalFunCo && funCo != null) {
-                Rv p = funCo.prev;
-                recycleCallObject(funCo);
-                funCo = p;
+            if (!generatorSuspendSkipRecycle) {
+                while (funCo != originalFunCo && funCo != null) {
+                    Rv p = funCo.prev;
+                    recycleCallObject(funCo);
+                    funCo = p;
+                }
             }
+            generatorSuspendSkipRecycle = false;
             callDepth = _cd0;
+        }
+        } finally {
+            this.activeGeneratorState = prevActiveGen;
         }
     }
 
@@ -1446,7 +1783,7 @@ mainloop:
         Rv jsArgs = args.get("1");
 
         boolean isCall = (magic == 0);
-        if (jsFunc != null && jsFunc.type >= Rv.OBJECT 
+        if (_this != null && _this.isCallable()
                 && (isCall || jsArgs != null && jsArgs.type == Rv.ARRAY)) {
             Rv funCo = borrowCallObject();
             try {
@@ -2288,14 +2625,14 @@ mainloop:
         return ret;
     }
 
-    private static final Object ACTIVE_CALL_OBJECT = new Object();
-    private static final Object CAPTURED_CALL_OBJECT = new Object();
+    static final Object ACTIVE_CALL_OBJECT = new Object();
+    static final Object CAPTURED_CALL_OBJECT = new Object();
 
-    private Rv captureScopeChain(Rv env) {
+    Rv captureScopeChain(Rv env) {
         return captureScopeChain(env, 0);
     }
 
-    private Rv captureScopeChain(Rv env, int depth) {
+    Rv captureScopeChain(Rv env, int depth) {
         if (env == null || env.prev == null) {
             return env;
         }
@@ -2329,6 +2666,16 @@ mainloop:
                 : function_list.get(function.str);
 
         if (native_func != null) {
+            if (native_func instanceof NativeFunctionFast) {
+                NativeFunctionFast fast = (NativeFunctionFast) native_func;
+                int n = args != null ? args.num : 0;
+                Pack p = new Pack(-1, n > 0 ? n : 1);
+                for (int i = 0; i < n; i++) {
+                    Rv a = args.get(Rv.intStr(i));
+                    p.add(a != null ? a : Rv._undefined);
+                }
+                return fast.callFast(isNew, thiz, p, 0, n, this);
+            }
             return native_func.func(isNew, thiz, args);
         }
 
@@ -2402,8 +2749,8 @@ mainloop:
                     .putl("apply", newNativeFunction("Function.apply"))    // apply(thisObj, arrayArgs)
             ;
             Rv._Number.nativeCtor("Number", go)
-                    .putl("MAX_VALUE", new Rv(Integer.MAX_VALUE))
-                    .putl("MIN_VALUE", new Rv(Integer.MIN_VALUE))
+                    .putl("MAX_VALUE", new Rv(Double.MAX_VALUE))
+                    .putl("MIN_VALUE", new Rv(Double.MIN_VALUE))
                     .putl("NaN", Rv._NaN)
                     .ctorOrProt
                     .putl("valueOf", newNativeFunction("Number.valueOf"))
@@ -2549,6 +2896,10 @@ mainloop:
             }
             int token = tti[tpos * RC.LEX_STRIDE];
             if ((token == ttype || token == ttype2) && stack.iSize == 0) {
+                if (token == RC.TOK_EOL && shouldContinueExpressionAcrossEol(tpos)) {
+                    ++tpos;
+                    continue;
+                }
                 break;
             }
             int pr = 0;
@@ -2604,6 +2955,35 @@ mainloop:
     private static final String ARGUMENTS_NAME = "arguments";
 
     /**
+     * Scan the raw token stream (pack {@code tt}) in the range [{@code start},
+     * {@code start+len}) for a {@code TOK_SYMBOL} whose name is {@code "arguments"}.
+     * Works on the lazy, pre-RPN token pack produced during parsing; nested function
+     * bodies are NOT excluded (false positives are harmless — they only cause an
+     * extra Arguments allocation).
+     */
+    static boolean tokenRangeReferencesArguments(Pack tt, int start, int len) {
+        if (tt == null || len <= 0) return false;
+        int[] tti = tt.iArray;
+        int end = start + len;
+        for (int i = start; i < end; i++) {
+            if (tti[i * RC.LEX_STRIDE] == RC.TOK_SYMBOL) {
+                Object val = tt.getObject(i);
+                String name;
+                if (val instanceof Rv) {
+                    name = ((Rv) val).str;
+                } else if (val instanceof Object[]) {
+                    Object[] pair = (Object[]) val;
+                    name = pair.length > 1 ? (String) pair[1] : null;
+                } else {
+                    name = (String) val;
+                }
+                if (ARGUMENTS_NAME.equals(name)) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * True if the RPN stream references the special identifier {@code arguments}.
      */
     static boolean rpnReferencesArguments(int[] ops, Object[] consts, int len) {
@@ -2641,6 +3021,15 @@ mainloop:
                 if (rpnReferencesArguments(c.rpnOps, c.rpnConsts, c.rpnLen)) {
                     return true;
                 }
+            } else if (c.tagType == RC.TOK_YIELD) {
+                Pack ch = c.children;
+                if (ch != null && ch.oSize > 0) {
+                    Node ex = (Node) ch.getObject(0);
+                    if (ex.tagType == RC.TOK_MUL
+                            && rpnReferencesArguments(ex.rpnOps, ex.rpnConsts, ex.rpnLen)) {
+                        return true;
+                    }
+                }
             } else if (stmtBlockReferencesArguments(c)) {
                 return true;
             }
@@ -2675,9 +3064,13 @@ mainloop:
             if (delim == RC.TOK_RPR) break;
         }
         eat(RC.TOK_LBR);
-        astNode(function, RC.TOK_LBR, pos, eatUntil(RC.TOK_RBR, 0)); // '{' = block
+        Node bodyBlock = astNode(function, RC.TOK_LBR, pos, eatUntil(RC.TOK_RBR, 0)); // '{' = block
         eat(RC.TOK_RBR);
-        computeFunctionReferencesArguments(function);
+        // Scan the raw token stream for `arguments` instead of waiting for RPN compilation.
+        // computeFunctionReferencesArguments walks rpnOps which are null at parse time (lazy
+        // bodies), so it always returned false and the flag was effectively dead.
+        function.referencesArguments = tokenRangeReferencesArguments(
+                tt, bodyBlock.display, bodyBlock.state);
     }
     
     // 
@@ -2823,6 +3216,7 @@ mainloop:
         "await," + 
         "let," +
         "const," +
+        "yield," +
         "";
     
     static final Rhash htKeywords;
@@ -2885,9 +3279,18 @@ mainloop:
     // such as SYMBOL -> LVALUE refs. Cleared when the eval frame exits.
     private Rv[][] evalTempPool = new Rv[16][];
     private int[] evalTempUsed = new int[16];
+    /** Per-eval-depth scratch cells for {@link #fastNativeArgPooling} call arguments. */
+    private Rv[][] evalArgScratch = new Rv[16][];
     private int evalDepth = 0;
     /** Reused per JS call() control-flow stack; avoids new Pack(20,20) per function invocation. */
     private int callDepth = 0;
+
+    /** Set by {@link GeneratorRuntime#nativeNext} while resuming a generator. */
+    GeneratorRuntime.State generatorResumeContext;
+    /** Non-null during generator {@link #call} for yield/return bookkeeping. */
+    GeneratorRuntime.State activeGeneratorState;
+    /** When true, {@link #call}'s inner {@code finally} skips {@code funCo} recycling (generator yield suspend). */
+    boolean generatorSuspendSkipRecycle;
     private Pack[] callStackPool = new Pack[16];
 
     /** Pooled empty scope objects for {@code call()} ({@code funCo} / invoke bind records). */
@@ -2912,6 +3315,7 @@ mainloop:
         Rhash[] mMap = new Rhash[SLOTS];
         int[] mStamp = new int[SLOTS];
         int[] mLayout = new int[SLOTS];
+        RhashShape[] mShape = new RhashShape[SLOTS];
         Rv[] mFunObj = new Rv[SLOTS];
         int write;
     }
@@ -2919,9 +3323,30 @@ mainloop:
     /** RPN placeholder for {@code TOK_INVOKE} / {@code TOK_INIT} — holds optional {@link #csc}. */
     static final class InvokeOpRv extends Rv {
         CallSiteCache csc;
+        /** Round-robin pre-allocated {@code this} objects when {@link #ctorPoolEnabled}. */
+        Rv[] ctorThisBuf;
+        int ctorTurn;
 
         InvokeOpRv() {
             super(0);
+        }
+
+        Rv borrowCtorThis(Rv funObj) {
+            if (ctorThisBuf == null) {
+                ctorThisBuf = new Rv[8];
+                for (int j = 0; j < 8; j++) {
+                    ctorThisBuf[j] = new Rv(Rv.OBJECT, funObj);
+                }
+            }
+            Rv t = ctorThisBuf[(ctorTurn++) & 7];
+            t.type = Rv.OBJECT;
+            t.ctorOrProt = funObj;
+            if (t.prop == null) {
+                t.prop = new Rhash(11);
+            } else {
+                t.prop.clearPreserveCapacity();
+            }
+            return t;
         }
     }
 
@@ -2940,6 +3365,7 @@ mainloop:
         c.num = 0;
         c.str = null;
         c.obj = null;
+        c.clearSymbolLookupCache();
         c.prop.clearPreserveCapacity();
         return c;
     }
@@ -2958,6 +3384,7 @@ mainloop:
         c.obj = null;
         c.gen = 0;
         c.ctorOrProt = Rv._Object;
+        c.clearSymbolLookupCache();
         c.prop.clearPreserveCapacity();
         if (callObjectFreeSize < callObjectFree.length) {
             callObjectFree[callObjectFreeSize++] = c;
@@ -2986,10 +3413,59 @@ mainloop:
                 csc.mMap[w] = hp0;
                 csc.mStamp[w] = hp0.gen;
                 csc.mLayout[w] = hp0.layoutFp;
+                csc.mShape[w] = hp0.shape;
                 csc.mFunObj[w] = funObj;
             }
         }
         csc.write = (w + 1) % CallSiteCache.SLOTS;
+    }
+
+    private Rv[] ensureEvalArgScratch(int depth, int need) {
+        while (depth >= evalArgScratch.length) {
+            Rv[][] grown = new Rv[evalArgScratch.length * 2][];
+            System.arraycopy(evalArgScratch, 0, grown, 0, evalArgScratch.length);
+            evalArgScratch = grown;
+        }
+        Rv[] row = evalArgScratch[depth];
+        if (row == null || row.length < need) {
+            int cap = row == null ? Math.max(8, need) : Math.max(row.length * 2, need);
+            Rv[] nr = new Rv[cap];
+            if (row != null) {
+                System.arraycopy(row, 0, nr, 0, row.length);
+            }
+            for (int i = row == null ? 0 : row.length; i < cap; i++) {
+                nr[i] = new Rv();
+            }
+            evalArgScratch[depth] = row = nr;
+        }
+        return row;
+    }
+
+    private static Rv materializeArgForFastNative(Rv v, Rv scratch) {
+        if (v == null) {
+            return Rv._undefined;
+        }
+        int t = v.type;
+        if (t == Rv.UNDEFINED || t >= Rv.OBJECT || v == Rv._NaN) {
+            return v;
+        }
+        if (t == Rv.NUMBER) {
+            scratch.clearEvalTemp();
+            scratch.type = Rv.NUMBER;
+            scratch.f = v.f;
+            scratch.num = v.num;
+            scratch.d = v.d;
+            return scratch;
+        }
+        if (t == Rv.STRING) {
+            scratch.clearEvalTemp();
+            scratch.type = Rv.STRING;
+            scratch.str = v.str;
+            scratch.f = false;
+            scratch.num = 0;
+            return scratch;
+        }
+        return v.pv();
     }
 
     /**
@@ -3015,6 +3491,7 @@ mainloop:
                     String k0 = fun.str;
                     if (h0 == csc.mHolder[si] && hp0 == csc.mMap[si] && hp0 != null
                             && csc.mStamp[si] == hp0.gen && csc.mLayout[si] == hp0.layoutFp
+                            && (csc.mShape[si] == hp0.shape)
                             && (k0 == csc.mKey[si]
                             || (k0 != null && csc.mKey[si] != null && csc.mKey[si].equals(k0)))) {
                         out[0] = fun.evalRef(callObj, acquireEvalTemp(depth));

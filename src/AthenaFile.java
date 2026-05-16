@@ -4,6 +4,8 @@ import java.util.*;
 import javax.microedition.io.*;
 import javax.microedition.io.file.*;
 
+import net.cnjm.j2me.util.IoByteBufferPool;
+
 public class AthenaFile {
     private FileConnection fc = null;
     private boolean isResource = false;
@@ -75,10 +77,14 @@ public class AthenaFile {
             }
             try {
                 ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                byte[] buf = new byte[1024];
-                int n;
-                while ((n = resIn.read(buf)) > 0) {
-                    bos.write(buf, 0, n);
+                byte[] buf = IoByteBufferPool.borrow(1024);
+                try {
+                    int n;
+                    while ((n = resIn.read(buf)) > 0) {
+                        bos.write(buf, 0, n);
+                    }
+                } finally {
+                    IoByteBufferPool.release(buf);
                 }
                 resIn.close();
                 AthenaFile af = new AthenaFile(null, O_RDONLY);
@@ -218,13 +224,17 @@ public class AthenaFile {
                 
                 InputStream tempIn = fc.openInputStream();
                 ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                byte[] tempBuffer = new byte[1024];
-                int len;
-                
-                while ((len = tempIn.read(tempBuffer)) > 0) {
-                    baos.write(tempBuffer, 0, len);
+                byte[] tempBuffer = IoByteBufferPool.borrow(1024);
+                try {
+                    int len;
+
+                    while ((len = tempIn.read(tempBuffer)) > 0) {
+                        baos.write(tempBuffer, 0, len);
+                    }
+                } finally {
+                    IoByteBufferPool.release(tempBuffer);
                 }
-                
+
                 tempIn.close();
                 byte[] fileContent = baos.toByteArray();
                 
@@ -603,13 +613,17 @@ public class AthenaFile {
 
                 InputStream tempIn = file.fc.openInputStream();
                 ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                byte[] tempBuffer = new byte[1024];
-                int len;
-                
-                while ((len = tempIn.read(tempBuffer)) > 0) {
-                    baos.write(tempBuffer, 0, len);
+                byte[] tempBuffer = IoByteBufferPool.borrow(1024);
+                try {
+                    int len;
+
+                    while ((len = tempIn.read(tempBuffer)) > 0) {
+                        baos.write(tempBuffer, 0, len);
+                    }
+                } finally {
+                    IoByteBufferPool.release(tempBuffer);
                 }
-                
+
                 tempIn.close();
                 byte[] fileContent = baos.toByteArray();
 
