@@ -1,10 +1,79 @@
+# Athena2ME — Docker builds (Java 8 + Ant + Node for preproc)
+#
+# Default (full CI-like JAR):   docker compose run --rm build
+# Or explicit:                 docker compose run --rm build all
+#
+# Optional modes (Compose profiles — do not run with plain `docker compose up`):
+#   docker compose --profile preproc run --rm preproc
+#   docker compose --profile preproc-check run --rm preproc-check
+#   docker compose --profile compile run --rm compile
+#   docker compose --profile jar run --rm jar
+#   docker compose --profile jar-release run --rm jar-release
+#   docker compose --profile all-preproc run --rm all-preproc
+#   docker compose --profile release run --rm release
+#   docker compose --profile clean run --rm clean
+#
+# Release preproc profile:      docker compose --profile preproc run --rm -e BUILD_PROFILE=release preproc
+# Custom Ant:                   docker compose run --rm build ant clean compile
+#
+# See modes list:               docker compose run --rm build help
+
+x-athena-common: &athena-common
+  build: .
+  volumes:
+    - .:/app
+  working_dir: /app
+
 services:
-  athena-build:
-    build: .
-    volumes:
-      - .:/app
-      # We mount the whole dir so it has src, res, lib, etc.
-      # The build artifacts will appear in ./build/ on the host
-    container_name: athena2me-compiler
-    # To run a specific ant target, you can override the command:
-    # command: ant clean all
+  build:
+    <<: *athena-common
+    container_name: athena2me-build
+    command: ["all"]
+
+  preproc:
+    <<: *athena-common
+    profiles: [preproc]
+    container_name: athena2me-preproc
+    command: ["preproc"]
+
+  preproc-check:
+    <<: *athena-common
+    profiles: [preproc-check]
+    container_name: athena2me-preproc-check
+    command: ["preproc-check"]
+
+  compile:
+    <<: *athena-common
+    profiles: [compile]
+    container_name: athena2me-compile
+    command: ["compile"]
+
+  jar:
+    <<: *athena-common
+    profiles: [jar]
+    container_name: athena2me-jar
+    command: ["jar"]
+
+  jar-release:
+    <<: *athena-common
+    profiles: [jar-release]
+    container_name: athena2me-jar-release
+    command: ["jar-release"]
+
+  all-preproc:
+    <<: *athena-common
+    profiles: [all-preproc]
+    container_name: athena2me-all-preproc
+    command: ["all-preproc"]
+
+  release:
+    <<: *athena-common
+    profiles: [release]
+    container_name: athena2me-release
+    command: ["release"]
+
+  clean:
+    <<: *athena-common
+    profiles: [clean]
+    container_name: athena2me-clean
+    command: ["clean"]

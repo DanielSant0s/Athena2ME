@@ -28,6 +28,9 @@ public class Node {
     public int[] rpnOps;
     public Object[] rpnConsts;
     public int rpnLen;
+
+    /** True for {@code function*} generator callables (body may contain {@code yield}). */
+    public boolean generatorFunction;
     
     /**
      * properties = Pack(n, n) {

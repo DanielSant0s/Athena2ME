@@ -1,2 +1,2 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Shell scripts must use LF so Docker/Linux can exec the shebang.
+docker/** text eol=lf

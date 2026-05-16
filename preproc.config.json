@@ -1,0 +1,14 @@
+{
+  "srcDir": "res",
+  "outDir": "build/res",
+  "entry": "/main.js",
+  "modes": ["perfile", "bundle"],
+  "bundleOut": "/app.js",
+  "skipBundle": ["/tests.js"],
+  "es5Target": true,
+  "minifyLocals": "release",
+  "shapeHints": true,
+  "stripDebug": true,
+  "globals": "tools/preproc/data/host-globals.json",
+  "allowDynamicRequire": ["/main.js"]
+}

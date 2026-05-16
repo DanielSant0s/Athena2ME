@@ -77,17 +77,21 @@ public final class AthenaRequest {
 
     private static byte[] readAllLimited(InputStream is, int max) throws IOException {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        byte[] buf = new byte[2048];
-        int total = 0;
-        int n;
-        while ((n = is.read(buf)) > 0) {
-            total += n;
-            if (total > max) {
-                throw new IOException("response too large");
+        byte[] buf = net.cnjm.j2me.util.IoByteBufferPool.borrow(2048);
+        try {
+            int total = 0;
+            int n;
+            while ((n = is.read(buf)) > 0) {
+                total += n;
+                if (total > max) {
+                    throw new IOException("response too large");
+                }
+                bos.write(buf, 0, n);
             }
-            bos.write(buf, 0, n);
+            return bos.toByteArray();
+        } finally {
+            net.cnjm.j2me.util.IoByteBufferPool.release(buf);
         }
-        return bos.toByteArray();
     }
 
     private static void applyKeepalive(Rv self, HttpConnection hc) {

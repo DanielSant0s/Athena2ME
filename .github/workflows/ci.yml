@@ -78,8 +78,22 @@ jobs:
           unzip -j tools/proguard.zip "proguard-7.4.2/lib/proguard.jar" -d tools/
           rm tools/proguard.zip
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: JS preproc deps + source check + tests
+        run: |
+          npm install --prefix tools/preproc
+          npm test --prefix tools/preproc
+          node tools/preproc/bin/a2m-preproc.mjs --check
+
       - name: Build (compile + jar + preverify + jad)
         run: ant all
+
+      - name: Check JAR baseline
+        run: node scripts/check-baseline.mjs
 
       - name: Verify JAR
         run: |

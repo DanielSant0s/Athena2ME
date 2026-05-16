@@ -55,11 +55,11 @@ public class Rv {
     LvalueInlineCache icPic;
 
     /**
-     * 2–4 slot polymorphic inline cache for a single LVALUE member-read site.
+     * 2–8 slot polymorphic inline cache for a single LVALUE member-read site.
      *  Each entry mirrors the monomorphic case: holder, resolved value, key,
      *  the holder’s backing {@link Rhash}, and that map’s {@code gen} at
-     *  resolution. Miss → full {@link Rv#get(String)}; install uses round-robin
-     *  to evict (see {@link #write}).
+     *  resolution. Miss → full {@link Rv#get(String)}; install uses LRU among
+     *  warm slots (see {@link #touch}).
      *
      *  <p>Identity of {@code rhash} plus {@code stamp} is required: array holders
      *  may replace {@code prop} (e.g. {@code unshift/sort/reverse}) and a new
@@ -70,16 +70,22 @@ public class Rv {
      *  prototype; this PIC is keyed by {@code holder} identity only.
      */
     static final class LvalueInlineCache {
-        /** 6 entries: more slots reduce PIC thrash on warm polymorphic read sites. */
-        static final int SLOTS = 6;
+        /** Eight entries: reduce PIC thrash on warm polymorphic read sites. */
+        static final int SLOTS = 8;
         final Rv[] holder;
         final Rv[] value;
         final String[] key;
         final Rhash[] rhash;
         final int[] stamp;
         final int[] layout;
-        /** Next {@link #SLOTS} index to write on a cache miss. */
-        int write;
+        /** LRU clock for {@link #write} slot replacement. */
+        final int[] touch;
+        boolean negActive;
+        Rv negHolder;
+        String negKey;
+        Rhash negMap;
+        int negStamp;
+        int negLayout;
 
         LvalueInlineCache() {
             holder = new Rv[SLOTS];
@@ -88,8 +94,11 @@ public class Rv {
             rhash = new Rhash[SLOTS];
             stamp = new int[SLOTS];
             layout = new int[SLOTS];
+            touch = new int[SLOTS];
         }
     }
+
+    private static int lvaluePicClock;
     
     // ------- NUM STR SYM LVA OBJ NOB SOB ARR ARG FUN NAT cob CTR
     // num      o           x       o       o   o   o   o         
@@ -162,6 +171,7 @@ public class Rv {
         hash = 0;
         gen = 0;
         icPic = null;
+        clearSymbolLookupCache();
         opaque = null;
         num = 0;
         f = false;
@@ -172,6 +182,14 @@ public class Rv {
         co = null;
         ctorOrProt = null;
         prev = null;
+    }
+
+    final void clearSymbolLookupCache() {
+        symPicKey = null;
+        symPicVal = null;
+        symPicGen = 0;
+        symPicHost = null;
+        symPicHostGen = 0;
     }
 
     final Rv resetTempLvalue(String s, Rv referenced) {
@@ -455,6 +473,14 @@ public class Rv {
                 hty == Rv.UINT8_ARRAY || hty == Rv.INT32_ARRAY || hty == Rv.FLOAT32_ARRAY;
         Rhash hp;
         LvalueInlineCache pic = this.icPic;
+        hp = holder.prop;
+        if (!skipLvaluePic && pic != null && pic.negActive && hp != null
+                && holder == pic.negHolder && hp == pic.negMap
+                && pic.negStamp == hp.gen && pic.negLayout == hp.layoutFp
+                && key != null && pic.negKey != null
+                && (pic.negKey == key || pic.negKey.equals(key))) {
+            return Rv._undefined;
+        }
         if (!skipLvaluePic && pic != null) {
             for (int i = 0, n = LvalueInlineCache.SLOTS; i < n; i++) {
                 Rv h0 = pic.holder[i];
@@ -468,6 +494,7 @@ public class Rv {
                         && pic.layout[i] == hp.layoutFp
                         && (pic.key[i] == key
                                 || (pic.key[i] != null && pic.key[i].equals(key)))) {
+                    pic.touch[i] = ++lvaluePicClock;
                     return pic.value[i];
                 }
             }
@@ -479,14 +506,36 @@ public class Rv {
         if (pic == null) {
             this.icPic = pic = new LvalueInlineCache();
         }
-        int w = pic.write;
+        if (v == Rv._undefined && (hp = holder.prop) != null) {
+            pic.negActive = true;
+            pic.negHolder = holder;
+            pic.negKey = key;
+            pic.negMap = hp;
+            pic.negStamp = hp.gen;
+            pic.negLayout = hp.layoutFp;
+        } else {
+            pic.negActive = false;
+        }
+        int w = 0;
+        int minT = Integer.MAX_VALUE;
+        for (int j = 0; j < LvalueInlineCache.SLOTS; j++) {
+            if (pic.holder[j] == null) {
+                w = j;
+                minT = -1;
+                break;
+            }
+            if (pic.touch[j] < minT) {
+                minT = pic.touch[j];
+                w = j;
+            }
+        }
+        pic.touch[w] = ++lvaluePicClock;
         pic.holder[w] = holder;
         pic.rhash[w] = (hp = holder.prop);
         pic.stamp[w] = hp != null ? hp.gen : 0;
         pic.layout[w] = hp != null ? hp.layoutFp : 0;
         pic.key[w] = key;
         pic.value[w] = v;
-        pic.write = (w + 1) % LvalueInlineCache.SLOTS;
         return v;
     }
     
@@ -497,7 +546,7 @@ public class Rv {
         }
         if (type >= Rv.CTOR_MASK && "prototype".equals(p)) { // this is a constructor
             return this.ctorOrProt != null;
-        } else if (type >= Rv.ARRAY && "length".equals(p)) { // array/arguments/function/native
+        } else if (type >= Rv.ARRAY && RC.S_LENGTH.equals(p)) { // array/arguments/function/native
             return true;
         } else if (type == Rv.UINT8_ARRAY || type == Rv.INT32_ARRAY || type == Rv.FLOAT32_ARRAY) {
             int idx = arrayIndexKey(p);
@@ -524,7 +573,7 @@ public class Rv {
         // helpers, …) can treat strings as read-only arrays of one-character
         // strings without a per-call typeof branch.
         if ((type = this.type) == Rv.STRING || type == Rv.STRING_OBJECT) {
-            if ("length".equals(p)) {
+            if (RC.S_LENGTH.equals(p)) {
                 return Rv.smallInt(this.str.length());
             }
             int pl = p.length();
@@ -578,7 +627,7 @@ public class Rv {
         if (type >= Rv.CTOR_MASK && "prototype".equals(p) // this is a constructor
                 || type >= Rv.OBJECT && type < Rv.CTOR_MASK && "constructor".equals(p)) { 
             return this.ctorOrProt != null ? this.ctorOrProt : Rv._undefined;
-        } else if ("length".equals(p)) { // array/arguments/function/native
+        } else if (RC.S_LENGTH.equals(p)) { // array/arguments/function/native
             int num = type >= Rv.ARRAY ? this.num : -1;
             if (num >= 0) return Rv.smallInt(num);
         } else if (type == Rv.UINT8_ARRAY || type == Rv.INT32_ARRAY || type == Rv.FLOAT32_ARRAY) {
@@ -664,7 +713,7 @@ public class Rv {
                 o.ctorOrProt = val;
                 if ((type & Rv.CTOR_MASK) == 0) o.type = type | Rv.CTOR_MASK;
             }
-        } else if (type >= Rv.ARRAY && "length".equals(p)) {
+        } else if (type >= Rv.ARRAY && RC.S_LENGTH.equals(p)) {
             if (type == Rv.ARRAY && (val = val.toNum()) != Rv._NaN) {
                 int newNum;
                 double nv = numValue(val);
@@ -923,7 +972,7 @@ public class Rv {
         if (type >= Rv.CTOR_MASK && "prototype".equals(p)
                 || type >= Rv.OBJECT && type < Rv.CTOR_MASK && "constructor".equals(p)) {
             return this.ctorOrProt != null ? this.ctorOrProt : Rv._undefined;
-        } else if ("length".equals(p)) {
+        } else if (RC.S_LENGTH.equals(p)) {
             int num = type >= Rv.ARRAY ? this.num
                     : type == Rv.STRING || type == Rv.STRING_OBJECT ? this.str.length()
                     : -1;
@@ -1329,6 +1378,15 @@ public class Rv {
      * @return
      */
     public static final Rv polynary(Rv callObj, int op, Pack opnd, int num) {
+        return polynary(callObj, op, opnd, num, null);
+    }
+
+    /**
+     * @param litSite optional literal bytecode site; when non-null and
+     *        {@link RocksInterpreter#literalShapeCacheEnabled}, records the
+     *        final {@link RhashShape} after an object literal build.
+     */
+    public static final Rv polynary(Rv callObj, int op, Pack opnd, int num, LiteralOpRv litSite) {
         int idx = opnd.oSize - num;
         switch (op) {
         case RC.TOK_COL: // ... ? ... : ...
@@ -1353,9 +1411,23 @@ public class Rv {
                 Rv v = ((Rv) opnd.getObject(i + 1)).evalVal(callObj);
                 obj.putl(ks, v);
             }
+            if (litSite != null && RocksInterpreter.literalShapeCacheEnabled
+                    && obj.prop != null) {
+                litSite.lastLiteralShape = obj.prop.shape;
+            }
             return obj;
         }
         return Rv._undefined; // never happens
+    }
+
+    /** RPN operator cell for object/array literal bytecode sites. */
+    public static final class LiteralOpRv extends Rv {
+        /** Shape of {@code prop} after the last object literal build at this site. */
+        public RhashShape lastLiteralShape;
+
+        public LiteralOpRv() {
+            super(0);
+        }
     }
     
     /**
@@ -1661,6 +1733,9 @@ public class Rv {
     public static Rv _DataView;
     /** Promise constructor (initialized lazily by StdLib). */
     public static Rv _Promise;
+
+    /** Iterator prototype for generator objects (initialized by StdLib). */
+    public static Rv _GeneratorIterProto;
 
     /** Backing store for {@code ArrayBuffer} instances ({@code opaque}). */
     public static final class ArrayBufferBacking {

@@ -13,7 +13,8 @@ import javax.microedition.lcdui.Font;
 import javax.microedition.lcdui.Image;
 
 import net.cnjm.j2me.tinybro.*;
-import net.cnjm.j2me.util.*;
+import net.cnjm.j2me.util.IoByteBufferPool;
+import net.cnjm.j2me.util.Pack;
 import net.cnjm.j2me.sync.AtomicInt;
 import net.cnjm.j2me.sync.Mutex;
 import net.cnjm.j2me.sync.Semaphore;
@@ -23,6 +24,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
     Rv jsThis = null;
     Rv jsExitHandler = null;
     private AthenaCanvas canvas;
+    /** Live bindings for {@code Screen.width} / {@code Screen.height} (updated on resize / fullscreen). */
+    private Rv screenWidthRv;
+    private Rv screenHeightRv;
     private Command exitCmd = new Command("Exit", Command.EXIT, 1);
     private Thread jsThread = null;
     volatile boolean jsRunning = false;
@@ -32,9 +36,16 @@ public class Athena2ME extends MIDlet implements CommandListener {
     private BootSplashCanvas bootCanvas;
     private Thread coldStartThread;
     private boolean bootHandoffScheduled;
+    /** From {@code [boot] fullscreen=} in {@code boot.ini}; applied when the main canvas is shown. */
+    private boolean bootStartFullscreen;
 
     /** Cache for {@code require()}: canonical resource path → module {@code exports} object. */
     private final Hashtable moduleCache = new Hashtable();
+    /**
+     * In-memory ES6 preprocessor cache for {@code require}/{@code loadScript} bodies
+     * (key: {@code canon + ":" + srcHash + ":" + es6Enabled}).
+     */
+    private final Hashtable modulePreprocMemCache = new Hashtable();
 
     private Render3DBackend r3d;
     /** {@code null} = auto-detect; {@code "soft"} / {@code "m3g"} = forced (see {@code Render3D.setBackend} in JS). */
@@ -51,6 +62,22 @@ public class Athena2ME extends MIDlet implements CommandListener {
     private PadListener[] padListenerSnap;
     /** Canonical resource path → decoded {@link Image} (shared with boot splash). */
     private final Rhash imageResourceCache = new Rhash(16);
+
+    private int render3dUploadedMeshNextId = 1;
+    /** Integer id → {@link UploadedStripMesh} for {@code Render3D.uploadStaticMesh}. */
+    private final Hashtable render3dUploadedMeshes = new Hashtable();
+
+    private static final class UploadedStripMesh {
+        final int[] stripLens;
+        final Rv.Float32View positions;
+        final Rv.Float32View normals;
+
+        UploadedStripMesh(int[] stripLens, Rv.Float32View positions, Rv.Float32View normals) {
+            this.stripLens = stripLens;
+            this.positions = positions;
+            this.normals = normals;
+        }
+    }
 
     private static long perfFramesRendered;
     private static long perfNsPadDispatch;
@@ -508,6 +535,19 @@ public class Athena2ME extends MIDlet implements CommandListener {
         canvas.setCommandListener(this);
     }
 
+    /** Updates {@code Screen.width} / {@code Screen.height} after canvas resize or fullscreen toggle. */
+    void syncScreenDimensionProps() {
+        if (canvas == null || screenWidthRv == null || screenHeightRv == null) {
+            return;
+        }
+        int w = canvas.getWidth();
+        int h = canvas.getHeight();
+        screenWidthRv.f = false;
+        screenWidthRv.num = w;
+        screenHeightRv.f = false;
+        screenHeightRv.num = h;
+    }
+
     protected void destroyApp(boolean unconditional) {
         frameRunning = false;
         if (bootCanvas != null) {
@@ -539,10 +579,14 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
     protected void startApp() throws MIDletStateChangeException {
         moduleCache.clear();
+        modulePreprocMemCache.clear();
         bootHandoffScheduled = false;
         final BootIniConfig bootCfg = BootIniConfig.loadFromClasspath(getClass());
         bootCanvas = new BootSplashCanvas(this, bootCfg);
         Display.getDisplay(this).setCurrent(bootCanvas);
+        if (bootCfg.fullscreen) {
+            bootCanvas.setFullScreenMode(true);
+        }
         bootCanvas.startAnimating();
 
         coldStartThread = new Thread(new Runnable() {
@@ -585,6 +629,10 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 }
                 coldStartThread = null;
                 Display.getDisplay(Athena2ME.this).setCurrent(canvas);
+                if (bootStartFullscreen) {
+                    canvas.setFullScreenMode(true);
+                }
+                syncScreenDimensionProps();
                 if (jsThread != null) {
                     jsThread.start();
                 }
@@ -593,6 +641,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
     }
 
     private void performColdStartPrepareJsThread(BootIniConfig bootCfg) {
+        bootStartFullscreen = bootCfg.fullscreen;
         String mainPath = bootCfg.mainScript;
         if ("ask".equalsIgnoreCase(mainPath)) {
             AthenaFilePicker picker = new AthenaFilePicker(this);
@@ -622,6 +671,10 @@ public class Athena2ME extends MIDlet implements CommandListener {
         } catch (Exception ex) {
             ex.printStackTrace();
         }
+        System.out.println("[boot] main=" + mainPath + " loaded=" + (src != null)
+                + " chars=" + (src != null ? src.length() : -1)
+                + " es6=" + bootCfg.es6
+                + " fullscreen=" + bootCfg.fullscreen);
 
         if (ri == null) {
             ri = new RocksInterpreter();
@@ -637,6 +690,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
         } else {
             ri.reset(src, null, 0, src.length());
         }
+        System.out.println("[boot] preprocessed cacheHit=" + cacheHit
+                + " chars=" + (ri.src != null ? ri.src.length() : -1)
+                + " endpos=" + ri.endpos);
         ri.evalString = true;
         ri.DEBUG = false;
         if (!cacheHit) {
@@ -647,6 +703,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
         Node func = ri.astNode(null, '{', 0, 0);
         ri.astNode(func, '{', 0, ri.endpos);
+        System.out.println("[boot] ast ready children=" + func.children.oSize);
         func.referencesArguments = RocksInterpreter.stmtBlockReferencesArguments(func);
         Rv rv = new Rv(false, func, 0);
         rv.co = ri.initGlobalObject();
@@ -1226,6 +1283,39 @@ public class Athena2ME extends MIDlet implements CommandListener {
             }
         })));
 
+        ri.addToObject(_os, "setFastNativeArgPooling",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.setFastNativeArgPooling", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter useRi) {
+                RocksInterpreter.setFastNativeArgPooling(num > 0 && Rv.argAt(args, start, num, 0).asBool());
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_os, "setCtorPoolEnabled",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.setCtorPoolEnabled", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter useRi) {
+                RocksInterpreter.setCtorPoolEnabled(num > 0 && Rv.argAt(args, start, num, 0).asBool());
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_os, "setLiteralShapeCacheEnabled",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.setLiteralShapeCacheEnabled", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter useRi) {
+                RocksInterpreter.setLiteralShapeCacheEnabled(num > 0 && Rv.argAt(args, start, num, 0).asBool());
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_os, "setEscapeOptForLiterals",
+            ri.addNativeFunction(new NativeFunctionListEntry("os.setEscapeOptForLiterals", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter useRi) {
+                RocksInterpreter.setEscapeOptForLiterals(num > 0 && Rv.argAt(args, start, num, 0).asBool());
+                return Rv._undefined;
+            }
+        })));
+
         ri.addToObject(_os, "threadYield",
             ri.addNativeFunction(new NativeFunctionListEntry("os.threadYield", new NativeFunctionFast() {
             public final int length = 0;
@@ -1586,13 +1676,15 @@ public class Athena2ME extends MIDlet implements CommandListener {
         ri.addToObject(callObj, "os", _os);
 
         Rv _Screen = ri.newModule();
-        ri.addToObject(_Screen, "width", new Rv(canvas.getWidth()));
-        ri.addToObject(_Screen, "height", new Rv(canvas.getHeight()));
+        screenWidthRv = new Rv(canvas.getWidth());
+        screenHeightRv = new Rv(canvas.getHeight());
+        ri.addToObject(_Screen, "width", screenWidthRv);
+        ri.addToObject(_Screen, "height", screenHeightRv);
 
         final Rv[] screenLayerCtorBox = new Rv[1];
-        screenLayerCtorBox[0] = ri.addNativeFunction(new NativeFunctionListEntry("Screen.Layer.ctor", new NativeFunction() {
+        screenLayerCtorBox[0] = ri.addNativeFunction(new NativeFunctionListEntry("Screen.Layer.ctor", new NativeFunctionFast() {
             public final int length = 0;
-            public Rv func(boolean isNew, Rv _this, Rv args) {
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                 return new Rv(Rv.OBJECT, screenLayerCtorBox[0]);
             }
         }));
@@ -1656,6 +1748,16 @@ public class Athena2ME extends MIDlet implements CommandListener {
             }
         })));
 
+        ri.addToObject(_Screen, "reserveBatch",
+            ri.addNativeFunction(new NativeFunctionListEntry("Screen.reserveBatch", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                int n = num > 0 ? jsInt(Rv.argAt(args, start, num, 0)) : 0;
+                canvas.reserveSpriteBatch(n);
+                return Rv._undefined;
+            }
+        })));
+
         ri.addToObject(_Screen, "createLayer",
             ri.addNativeFunction(new NativeFunctionListEntry("Screen.createLayer", new NativeFunctionFast() {
             public final int length = 2;
@@ -1714,6 +1816,25 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 AthenaCanvas.Layer L = layerFromRv(Rv.argAt(args, start, num, 0));
                 canvas.freeLayer(L);
                 return Rv._undefined;
+            }
+        })));
+
+        ri.addToObject(_Screen, "setFullScreen",
+            ri.addNativeFunction(new NativeFunctionListEntry("Screen.setFullScreen", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                boolean on = num > 0 && Rv.argAt(args, start, num, 0).asBool();
+                canvas.setFullScreenMode(on);
+                selfMidlet.syncScreenDimensionProps();
+                return Rv._undefined;
+            }
+        })));
+
+        ri.addToObject(_Screen, "isFullScreen",
+            ri.addNativeFunction(new NativeFunctionListEntry("Screen.isFullScreen", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                return canvas.isFullScreenMode() ? Rv._true : Rv._false;
             }
         })));
 
@@ -2005,10 +2126,19 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 if (a0 == null) {
                     return Rv._undefined;
                 }
-                float[] uv = uvFloatsFromRArray(a0);
                 ensureR3D();
                 r3d.init(canvas);
-                r3d.setTexCoords(uv);
+                if (r3d instanceof Render3DSoftBackend && a0.type == Rv.FLOAT32_ARRAY
+                        && a0.opaque instanceof Rv.Float32View) {
+                    Rv.Float32View uv = (Rv.Float32View) a0.opaque;
+                    int nf = uv.byteLength >> 2;
+                    if (nf >= 2 && (nf & 1) == 0) {
+                        ((Render3DSoftBackend) r3d).setTexCoordsFloatView(uv);
+                        return Rv._undefined;
+                    }
+                }
+                float[] uvs = uvFloatsFromRArray(a0);
+                r3d.setTexCoords(uvs);
                 return Rv._undefined;
             }
         })));
@@ -2021,9 +2151,42 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 if (a0 == null || a1 == null) {
                     return Rv.error("setIndexedMesh: need positions and indices");
                 }
-                float[] pos = floatsFromRArray(a0);
                 int[] idx = intsFromRArray(a1);
-                if (pos == null || idx == null) {
+                if (idx == null) {
+                    return Rv.error("setIndexedMesh: invalid indices");
+                }
+                ensureR3D();
+                r3d.init(canvas);
+                if (r3d instanceof Render3DSoftBackend && a0.type == Rv.FLOAT32_ARRAY
+                        && a0.opaque instanceof Rv.Float32View) {
+                    Rv.Float32View pv = (Rv.Float32View) a0.opaque;
+                    int n = pv.byteLength >> 2;
+                    if (n < 9 || (n % 3) != 0) {
+                        return Rv.error("setIndexedMesh: invalid positions (n*3 floats)");
+                    }
+                    Rv a2 = Rv.argAt(args, start, num, 2);
+                    if (num > 2 && a2 != null && a2 != Rv._undefined && a2 != Rv._null) {
+                        if (a2.type == Rv.FLOAT32_ARRAY && a2.opaque instanceof Rv.Float32View) {
+                            Rv.Float32View nv = (Rv.Float32View) a2.opaque;
+                            if ((nv.byteLength >> 2) != n) {
+                                return Rv.error("setIndexedMesh: normals length must match positions");
+                            }
+                            ((Render3DSoftBackend) r3d).setIndexedTriangleMeshFloatView(pv, idx, nv);
+                            return Rv._undefined;
+                        }
+                        float[] pos = floatsFromRArray(a0);
+                        float[] nrm = floatsFromRArray(a2);
+                        if (pos == null || nrm == null || nrm.length != pos.length) {
+                            return Rv.error("setIndexedMesh: invalid normals");
+                        }
+                        r3d.setIndexedTriangleMesh(pos, idx, nrm);
+                        return Rv._undefined;
+                    }
+                    ((Render3DSoftBackend) r3d).setIndexedTriangleMeshFloatView(pv, idx, null);
+                    return Rv._undefined;
+                }
+                float[] pos = floatsFromRArray(a0);
+                if (pos == null) {
                     return Rv.error("setIndexedMesh: invalid positions or indices");
                 }
                 Rv a2 = Rv.argAt(args, start, num, 2);
@@ -2032,8 +2195,6 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 if (nrm != null && nrm.length != pos.length) {
                     return Rv.error("setIndexedMesh: normals length must match positions");
                 }
-                ensureR3D();
-                r3d.init(canvas);
                 r3d.setIndexedTriangleMesh(pos, idx, nrm);
                 return Rv._undefined;
             }
@@ -2229,9 +2390,42 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 if (a0 == null || a1 == null) {
                     return Rv.error("setTriangleStripMesh: need positions and stripLens");
                 }
-                float[] pos = floatsFromRArray(a0);
                 int[] sl = intsFromRArray(a1);
-                if (pos == null || sl == null) {
+                if (sl == null) {
+                    return Rv.error("setTriangleStripMesh: invalid stripLens");
+                }
+                ensureR3D();
+                r3d.init(canvas);
+                if (r3d instanceof Render3DSoftBackend && a0.type == Rv.FLOAT32_ARRAY
+                        && a0.opaque instanceof Rv.Float32View) {
+                    Rv.Float32View pv = (Rv.Float32View) a0.opaque;
+                    int n = pv.byteLength >> 2;
+                    if (n < 9 || (n % 3) != 0) {
+                        return Rv.error("setTriangleStripMesh: invalid positions (n*3 floats)");
+                    }
+                    Rv a2 = Rv.argAt(args, start, num, 2);
+                    if (num > 2 && a2 != null && a2 != Rv._undefined && a2 != Rv._null) {
+                        if (a2.type == Rv.FLOAT32_ARRAY && a2.opaque instanceof Rv.Float32View) {
+                            Rv.Float32View nv = (Rv.Float32View) a2.opaque;
+                            if ((nv.byteLength >> 2) != n) {
+                                return Rv.error("setTriangleStripMesh: normals length must match positions");
+                            }
+                            ((Render3DSoftBackend) r3d).setTriangleStripMeshFloatView(pv, sl, nv);
+                            return Rv._undefined;
+                        }
+                        float[] pos = floatsFromRArray(a0);
+                        float[] nrm = floatsFromRArray(a2);
+                        if (pos == null || nrm == null || nrm.length != pos.length) {
+                            return Rv.error("setTriangleStripMesh: invalid normals");
+                        }
+                        r3d.setTriangleStripMesh(pos, sl, nrm);
+                        return Rv._undefined;
+                    }
+                    ((Render3DSoftBackend) r3d).setTriangleStripMeshFloatView(pv, sl, null);
+                    return Rv._undefined;
+                }
+                float[] pos = floatsFromRArray(a0);
+                if (pos == null) {
                     return Rv.error("setTriangleStripMesh: invalid positions (n*3) or stripLens");
                 }
                 Rv a2 = Rv.argAt(args, start, num, 2);
@@ -2240,8 +2434,6 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 if (nrm != null && nrm.length != pos.length) {
                     return Rv.error("setTriangleStripMesh: normals length must match positions");
                 }
-                ensureR3D();
-                r3d.init(canvas);
                 r3d.setTriangleStripMesh(pos, sl, nrm);
                 return Rv._undefined;
             }
@@ -2253,6 +2445,75 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 if (r3d != null) {
                     r3d.clearImmediateMesh();
                 }
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "uploadStaticMesh",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.uploadStaticMesh", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv a0 = Rv.argAt(args, start, num, 0);
+                Rv a1 = Rv.argAt(args, start, num, 1);
+                if (a0 == null || a1 == null || !(r3d instanceof Render3DSoftBackend)) {
+                    return Rv.error("uploadStaticMesh: software backend + positions + stripLens required");
+                }
+                if (a0.type != Rv.FLOAT32_ARRAY || !(a0.opaque instanceof Rv.Float32View)) {
+                    return Rv.error("uploadStaticMesh: positions must be Float32Array");
+                }
+                int[] sl = intsFromRArray(a1);
+                if (sl == null) {
+                    return Rv.error("uploadStaticMesh: invalid stripLens");
+                }
+                Rv.Float32View pv = (Rv.Float32View) a0.opaque;
+                int n = pv.byteLength >> 2;
+                if (n < 9 || (n % 3) != 0) {
+                    return Rv.error("uploadStaticMesh: invalid positions (n*3 floats)");
+                }
+                int[] slCopy = new int[sl.length];
+                System.arraycopy(sl, 0, slCopy, 0, sl.length);
+                Rv.Float32View nv = null;
+                if (num > 2) {
+                    Rv a2 = Rv.argAt(args, start, num, 2);
+                    if (a2 != null && a2 != Rv._undefined && a2 != Rv._null) {
+                        if (a2.type != Rv.FLOAT32_ARRAY || !(a2.opaque instanceof Rv.Float32View)) {
+                            return Rv.error("uploadStaticMesh: normals must be Float32Array");
+                        }
+                        nv = (Rv.Float32View) a2.opaque;
+                        if ((nv.byteLength >> 2) != n) {
+                            return Rv.error("uploadStaticMesh: normals length must match positions");
+                        }
+                    }
+                }
+                int id = render3dUploadedMeshNextId++;
+                render3dUploadedMeshes.put(new Integer(id), new UploadedStripMesh(slCopy, pv, nv));
+                return new Rv(id);
+            }
+        })));
+        ri.addToObject(_Render3D, "useUploadedMesh",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.useUploadedMesh", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                if (!(r3d instanceof Render3DSoftBackend)) {
+                    return Rv.error("useUploadedMesh: software backend only");
+                }
+                ensureR3D();
+                r3d.init(canvas);
+                int id = jsInt(Rv.argAt(args, start, num, 0));
+                Object o = render3dUploadedMeshes.get(new Integer(id));
+                if (!(o instanceof UploadedStripMesh)) {
+                    return Rv.error("useUploadedMesh: invalid handle");
+                }
+                UploadedStripMesh m = (UploadedStripMesh) o;
+                ((Render3DSoftBackend) r3d).setTriangleStripMeshFloatView(m.positions, m.stripLens, m.normals);
+                return Rv._undefined;
+            }
+        })));
+        ri.addToObject(_Render3D, "freeUploadedMesh",
+            ri.addNativeFunction(new NativeFunctionListEntry("Render3D.freeUploadedMesh", new NativeFunctionFast() {
+            public final int length = 1;
+            public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                int id = jsInt(Rv.argAt(args, start, num, 0));
+                render3dUploadedMeshes.remove(new Integer(id));
                 return Rv._undefined;
             }
         })));
@@ -2366,12 +2627,12 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
         final Rv _Image = ri.newModule();
 
-        ri.addNativeFunction(new NativeFunctionListEntry("Image", new NativeFunction() {
+        ri.addNativeFunction(new NativeFunctionListEntry("Image", new NativeFunctionFast() {
             public final int length = 1;
-                public Rv func(boolean isNew, Rv _this, Rv args) {
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                     Rv ret = isNew ? _this : new Rv(Rv.OBJECT, _Image);
 
-                    String name = args.get("0").toStr().str;
+                    String name = Rv.argAt(args, start, num, 0).toStr().str;
 
                     Image img = canvas.loadImage(name);
                     ImageView view = new ImageView(img);
@@ -2419,9 +2680,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
         })));
 
         ri.addToObject(_Image.ctorOrProt, "free", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Image.free", new NativeFunction() {
+            ri.addNativeFunction(new NativeFunctionListEntry("Image.free", new NativeFunctionFast() {
                 public final int length = 1;
-                public Rv func(boolean isNew, Rv _this, Rv args) {
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                     _this.opaque = null;
 
                     return Rv._undefined;
@@ -2432,13 +2693,13 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
         final Rv _Font = ri.newModule();
 
-        ri.addNativeFunction(new NativeFunctionListEntry("Font", new NativeFunction() {
+        ri.addNativeFunction(new NativeFunctionListEntry("Font", new NativeFunctionFast() {
             public final int length = 3;
-                public Rv func(boolean isNew, Rv _this, Rv args) {
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                     Rv ret = isNew ? _this : new Rv(Rv.OBJECT, _Font);
 
                     Font font = null;
-                    Rv font_face =  args.get("0");
+                    Rv font_face = Rv.argAt(args, start, num, 0);
 
                     if (font_face.isStr()) {
                         if (font_face.toStr().str.compareTo("default") == 0) {
@@ -2448,12 +2709,12 @@ public class Athena2ME extends MIDlet implements CommandListener {
                         int font_style = Font.STYLE_PLAIN;
                         int font_size =  Font.SIZE_MEDIUM;
 
-                        if (args.num > 1) {
-                            font_style = jsInt(args.get("1"));
+                        if (num > 1) {
+                            font_style = jsInt(Rv.argAt(args, start, num, 1));
                         }
 
-                        if (args.num > 2) {
-                            font_size =  jsInt(args.get("2"));
+                        if (num > 2) {
+                            font_size =  jsInt(Rv.argAt(args, start, num, 2));
                         }
 
                         font = Font.getFont(jsInt(font_face), font_style, font_size);
@@ -2711,8 +2972,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
         ri.addToObject(callObj, "Keyboard", _Keyboard);
 
         final Rv _Request = ri.newModule();
-        ri.addNativeFunction(new NativeFunctionListEntry("Request", new NativeFunction() {
-            public Rv func(boolean isNew, Rv _this, Rv args) {
+        ri.addNativeFunction(new NativeFunctionListEntry("Request", new NativeFunctionFast() {
+            public final int length = 0;
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                 Rv ret = isNew ? _this : new Rv(Rv.OBJECT, _Request);
                 ret.opaque = new AthenaRequest();
                 ri.addToObject(ret, "keepalive", new Rv(0));
@@ -2737,20 +2999,22 @@ public class Athena2ME extends MIDlet implements CommandListener {
             })));
 
         ri.addToObject(_Request.ctorOrProt, "post",
-            ri.addNativeFunction(new NativeFunctionListEntry("Request.post", new NativeFunction() {
+            ri.addNativeFunction(new NativeFunctionListEntry("Request.post", new NativeFunctionFast() {
                 public final int length = 2;
-                public Rv func(boolean isNew, Rv _this, Rv args) {
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                     AthenaRequest ar = (AthenaRequest) _this.opaque;
-                    return ar.postPromise(ri, _this, args.get("0").toStr().str, bytesFromBufferArg(args.get("1")));
+                    return ar.postPromise(ri, _this, Rv.argAt(args, start, num, 0).toStr().str,
+                            bytesFromBufferArg(Rv.argAt(args, start, num, 1)));
                 }
             })));
 
         ri.addToObject(_Request.ctorOrProt, "download",
-            ri.addNativeFunction(new NativeFunctionListEntry("Request.download", new NativeFunction() {
+            ri.addNativeFunction(new NativeFunctionListEntry("Request.download", new NativeFunctionFast() {
                 public final int length = 2;
-                public Rv func(boolean isNew, Rv _this, Rv args) {
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                     AthenaRequest ar = (AthenaRequest) _this.opaque;
-                    return ar.downloadPromise(ri, _this, args.get("0").toStr().str, args.get("1").toStr().str);
+                    return ar.downloadPromise(ri, _this, Rv.argAt(args, start, num, 0).toStr().str,
+                            Rv.argAt(args, start, num, 1).toStr().str);
                 }
             })));
 
@@ -2762,11 +3026,12 @@ public class Athena2ME extends MIDlet implements CommandListener {
         ri.addToObject(_SocketMod, "SOCK_DGRAM", new Rv(AthenaSocket.SOCK_DGRAM));
         ri.addToObject(_SocketMod, "SOCK_RAW", new Rv(AthenaSocket.SOCK_RAW));
 
-        ri.addNativeFunction(new NativeFunctionListEntry("Socket", new NativeFunction() {
-            public Rv func(boolean isNew, Rv _this, Rv args) {
+        ri.addNativeFunction(new NativeFunctionListEntry("Socket", new NativeFunctionFast() {
+            public final int length = 2;
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                 Rv ret = isNew ? _this : new Rv(Rv.OBJECT, _SocketMod);
-                int dom = jsInt(args.get("0"));
-                int typ = jsInt(args.get("1"));
+                int dom = jsInt(Rv.argAt(args, start, num, 0));
+                int typ = jsInt(Rv.argAt(args, start, num, 1));
                 ret.opaque = new AthenaSocket(dom, typ);
                 return ret;
             }
@@ -2854,14 +3119,16 @@ public class Athena2ME extends MIDlet implements CommandListener {
                     if (size < 1) {
                         size = 1024;
                     }
-                    byte[] buf = new byte[size];
+                    byte[] buf = IoByteBufferPool.borrow(size);
                     try {
                         int n = s.recv(buf, 0, size);
                         if (n <= 0) {
                             return newUint8Array(ri, new byte[0]);
                         }
-                        if (n == size) {
-                            return newUint8Array(ri, buf);
+                        if (n == buf.length) {
+                            byte[] out = buf;
+                            buf = null;
+                            return newUint8Array(ri, out);
                         }
                         byte[] t = new byte[n];
                         System.arraycopy(buf, 0, t, 0, n);
@@ -2869,6 +3136,8 @@ public class Athena2ME extends MIDlet implements CommandListener {
                     } catch (Exception e) {
                         e.printStackTrace();
                         return newUint8Array(ri, new byte[0]);
+                    } finally {
+                        IoByteBufferPool.release(buf);
                     }
                 }
             })));
@@ -2935,14 +3204,16 @@ public class Athena2ME extends MIDlet implements CommandListener {
                     if (size < 1) {
                         size = 1024;
                     }
-                    byte[] buf = new byte[size];
+                    byte[] buf = IoByteBufferPool.borrow(size);
                     try {
                         int n = s.recv(buf, 0, size);
                         if (n <= 0) {
                             return newUint8Array(ri, new byte[0]);
                         }
-                        if (n == size) {
-                            return newUint8Array(ri, buf);
+                        if (n == buf.length) {
+                            byte[] out = buf;
+                            buf = null;
+                            return newUint8Array(ri, out);
                         }
                         byte[] t = new byte[n];
                         System.arraycopy(buf, 0, t, 0, n);
@@ -2950,6 +3221,8 @@ public class Athena2ME extends MIDlet implements CommandListener {
                     } catch (Exception e) {
                         e.printStackTrace();
                         return newUint8Array(ri, new byte[0]);
+                    } finally {
+                        IoByteBufferPool.release(buf);
                     }
                 }
             })));
@@ -3034,8 +3307,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
 
         final Rv _Timer = ri.newModule();
 
-        ri.addNativeFunction(new NativeFunctionListEntry("Timer", new NativeFunction() {
-                public Rv func(boolean isNew, Rv _this, Rv args) {
+        ri.addNativeFunction(new NativeFunctionListEntry("Timer", new NativeFunctionFast() {
+                public final int length = 0;
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                     Rv ret = isNew ? _this : new Rv(Rv.OBJECT, _Timer);
 
                     AthenaTimer timer = new AthenaTimer(RocksInterpreter.bootTime);
@@ -3058,12 +3332,12 @@ public class Athena2ME extends MIDlet implements CommandListener {
         })));
 
         ri.addToObject(_Timer.ctorOrProt, "set", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Timer.set", new NativeFunction() {
+            ri.addNativeFunction(new NativeFunctionListEntry("Timer.set", new NativeFunctionFast() {
             public final int length = 1;
-                public Rv func(boolean isNew, Rv _this, Rv args) {
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                     AthenaTimer timer = (AthenaTimer)_this.opaque;
 
-                    int value = jsInt(args.get("0"));
+                    int value = jsInt(Rv.argAt(args, start, num, 0));
 
                     timer.set(value);
 
@@ -3072,8 +3346,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
         })));
 
         ri.addToObject(_Timer.ctorOrProt, "pause", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Timer.pause", new NativeFunction() {
-                public Rv func(boolean isNew, Rv _this, Rv args) {
+            ri.addNativeFunction(new NativeFunctionListEntry("Timer.pause", new NativeFunctionFast() {
+                public final int length = 0;
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                     AthenaTimer timer = (AthenaTimer)_this.opaque;
 
                     timer.pause();
@@ -3083,8 +3358,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
         })));
 
         ri.addToObject(_Timer.ctorOrProt, "resume", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Timer.resume", new NativeFunction() {
-                public Rv func(boolean isNew, Rv _this, Rv args) {
+            ri.addNativeFunction(new NativeFunctionListEntry("Timer.resume", new NativeFunctionFast() {
+                public final int length = 0;
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                     AthenaTimer timer = (AthenaTimer)_this.opaque;
 
                     timer.resume();
@@ -3094,8 +3370,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
         })));
 
         ri.addToObject(_Timer.ctorOrProt, "reset", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Timer.reset", new NativeFunction() {
-                public Rv func(boolean isNew, Rv _this, Rv args) {
+            ri.addNativeFunction(new NativeFunctionListEntry("Timer.reset", new NativeFunctionFast() {
+                public final int length = 0;
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                     AthenaTimer timer = (AthenaTimer)_this.opaque;
 
                     timer.reset();
@@ -3105,8 +3382,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
         })));
 
         ri.addToObject(_Timer.ctorOrProt, "playing", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Timer.playing", new NativeFunction() {
-                public Rv func(boolean isNew, Rv _this, Rv args) {
+            ri.addNativeFunction(new NativeFunctionListEntry("Timer.playing", new NativeFunctionFast() {
+                public final int length = 0;
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                     AthenaTimer timer = (AthenaTimer)_this.opaque;
 
                     return timer.playing() ? Rv._true : Rv._false;
@@ -3114,8 +3392,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
         })));
 
         ri.addToObject(_Timer.ctorOrProt, "free", 
-            ri.addNativeFunction(new NativeFunctionListEntry("Timer.free", new NativeFunction() {
-                public Rv func(boolean isNew, Rv _this, Rv args) {
+            ri.addNativeFunction(new NativeFunctionListEntry("Timer.free", new NativeFunctionFast() {
+                public final int length = 0;
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                     _this.opaque = null;
 
                     return Rv._undefined;
@@ -3279,8 +3558,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 }
         })));
         ri.addToObject(_SfxF.ctorOrProt, "play",
-            ri.addNativeFunction(new NativeFunctionListEntry("Sound.Sfx.play", new NativeFunction() {
-                public Rv func(boolean isNew, Rv _this, Rv args) {
+            ri.addNativeFunction(new NativeFunctionListEntry("Sound.Sfx.play", new NativeFunctionFast() {
+                public final int length = 1;
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
                     Object o = _this.opaque;
                     if (!(o instanceof SfxView)) {
                         return Rv._undefined;
@@ -3290,7 +3570,7 @@ public class Athena2ME extends MIDlet implements CommandListener {
                     if (s == null) {
                         return Rv._undefined;
                     }
-                    Rv a0 = args.get("0");
+                    Rv a0 = num > 0 ? Rv.argAt(args, start, num, 0) : Rv._undefined;
                     boolean hasCh = a0 != null && a0 != Rv._undefined;
                     int v = sv.volume;
                     int pan = sv.pan;
@@ -3322,9 +3602,10 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 }
         })));
         ri.addToObject(_SfxF.ctorOrProt, "playing",
-            ri.addNativeFunction(new NativeFunctionListEntry("Sound.Sfx.playing", new NativeFunction() {
-                public Rv func(boolean isNew, Rv _this, Rv args) {
-                    int ch = jsInt(args.get("0"));
+            ri.addNativeFunction(new NativeFunctionListEntry("Sound.Sfx.playing", new NativeFunctionFast() {
+                public final int length = 1;
+                public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                    int ch = jsInt(Rv.argAt(args, start, num, 0));
                     return AthenaSound.isSfxChannelPlaying(ch) ? Rv._true : Rv._false;
                 }
         })));
@@ -3334,10 +3615,10 @@ public class Athena2ME extends MIDlet implements CommandListener {
         final RocksInterpreter interp = ri;
 
         ri.addToObject(callObj, "require",
-            ri.addNativeFunction(new NativeFunctionListEntry("require", new NativeFunction() {
+            ri.addNativeFunction(new NativeFunctionListEntry("require", new NativeFunctionFast() {
             public final int length = 1;
-            public Rv func(boolean isNew, Rv _this, Rv args) {
-                Rv a0 = args.get("0");
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv a0 = num > 0 ? Rv.argAt(args, start, num, 0) : Rv._undefined;
                 if (a0 == null || a0 == Rv._undefined) {
                     return Rv._undefined;
                 }
@@ -3351,12 +3632,13 @@ public class Athena2ME extends MIDlet implements CommandListener {
                     if (userSrc == null) {
                         return Rv._undefined;
                     }
+                    String body = es6PreprocessCachedSource(canon, userSrc);
                     Rv exports = interp.newModule();
                     Rv module = interp.newModule();
                     interp.addToObject(module, "exports", exports);
                     interp.addToObject(globalObj, "____rqE", exports);
                     interp.addToObject(globalObj, "____rqM", module);
-                    String wrapper = "(function(exports,module,require){\n" + userSrc + "\n})(____rqE,____rqM,require);\n";
+                    String wrapper = "(function(exports,module,require){\n" + body + "\n})(____rqE,____rqM,require);\n";
                     try {
                         interp.runInGlobalScope(wrapper, globalObj);
                     } finally {
@@ -3376,10 +3658,10 @@ public class Athena2ME extends MIDlet implements CommandListener {
         })));
 
         ri.addToObject(callObj, "loadScript",
-            ri.addNativeFunction(new NativeFunctionListEntry("loadScript", new NativeFunction() {
+            ri.addNativeFunction(new NativeFunctionListEntry("loadScript", new NativeFunctionFast() {
             public final int length = 1;
-            public Rv func(boolean isNew, Rv _this, Rv args) {
-                Rv a0 = args.get("0");
+            public Rv callFast(boolean isNew, Rv _this, Pack args, int start, int num, RocksInterpreter ri) {
+                Rv a0 = num > 0 ? Rv.argAt(args, start, num, 0) : Rv._undefined;
                 if (a0 == null || a0 == Rv._undefined) {
                     return Rv._undefined;
                 }
@@ -3388,8 +3670,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 if (userSrc == null) {
                     return Rv._undefined;
                 }
+                String body = es6PreprocessCachedSource(canon, userSrc);
                 synchronized (jsRuntimeLock) {
-                    interp.runInGlobalScope(userSrc, globalObj);
+                    interp.runInGlobalScope(body, globalObj);
                 }
                 return Rv._undefined;
             }
@@ -3405,8 +3688,11 @@ public class Athena2ME extends MIDlet implements CommandListener {
         jsThread = new Thread(new Runnable() {
             public void run() {
                 try {
+                    System.out.println("[boot] js thread start");
                     synchronized (bootJsLock) {
-                        ri.call(false, _rv, _callObj, null, null, 0, 0);
+                        Rv ret = ri.call(false, _rv, _callObj, null, null, 0, 0);
+                        System.out.println("[boot] js thread returned type=" + ret.type
+                                + " str=" + ret.str + " value=" + ret);
                     }
                 } catch (Throwable t) {
                     t.printStackTrace();
@@ -3447,6 +3733,36 @@ public class Athena2ME extends MIDlet implements CommandListener {
             destroyApp(false);
             notifyDestroyed();
         }
+    }
+
+    private String es6PreprocessCachedSource(String canon, String userSrc) {
+        if (userSrc == null || ri == null || !ri.es6PreprocessEnabled) {
+            return userSrc;
+        }
+        if (Es6PreprocFacade.isPrebaked(userSrc)) {
+            return userSrc;
+        }
+        int h = userSrc.hashCode();
+        String key = canon + ":" + h + ":es6v1";
+        Object hit = modulePreprocMemCache.get(key);
+        if (hit instanceof String) {
+            return (String) hit;
+        }
+        String rmsHit = tryLoadModulePreprocFromRms(key, h);
+        if (rmsHit != null) {
+            if (modulePreprocMemCache.size() > 128) {
+                modulePreprocMemCache.clear();
+            }
+            modulePreprocMemCache.put(key, rmsHit);
+            return rmsHit;
+        }
+        String pp = Es6PreprocFacade.process(userSrc);
+        if (modulePreprocMemCache.size() > 128) {
+            modulePreprocMemCache.clear();
+        }
+        modulePreprocMemCache.put(key, pp);
+        saveModulePreprocToRms(key, h, pp);
+        return pp;
     }
     
     private static String canonicalResourcePath(String path) {
@@ -3635,6 +3951,10 @@ public class Athena2ME extends MIDlet implements CommandListener {
     }
 
     private static final String RS_PREPROC = "A2MjsPP";
+    /** Per-module ES6 preprocessed bodies for {@link #es6PreprocessCachedSource} (separate from boot main cache). */
+    private static final String RS_MOD_PREPROC = "A2MjsMod";
+    private static final int MOD_PREPROC_MAX_RECORDS = 64;
+    private static final int MOD_PREPROC_MAX_BODY = 240 * 1024;
 
     /**
      * Loads cached startup script text if the source hash and ES6 mode still match
@@ -3723,6 +4043,159 @@ public class Athena2ME extends MIDlet implements CommandListener {
                 } catch (Exception e) { }
             }
         }
+    }
+
+    private String tryLoadModulePreprocFromRms(String cacheKey, int srcHash) {
+        RecordStore rs = null;
+        try {
+            rs = RecordStore.openRecordStore(RS_MOD_PREPROC, false);
+        } catch (Exception e) {
+            return null;
+        }
+        try {
+            int n = rs.getNumRecords();
+            for (int i = 1; i <= n; i++) {
+                byte[] r = rs.getRecord(i);
+                String body = decodeModPreprocRecordBody(r, cacheKey, srcHash, true);
+                if (body != null) {
+                    return body;
+                }
+            }
+            return null;
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (rs != null) {
+                try {
+                    rs.closeRecordStore();
+                } catch (Exception e) { }
+            }
+        }
+    }
+
+    private void saveModulePreprocToRms(String cacheKey, int srcHash, String preprocessed) {
+        if (preprocessed == null) {
+            return;
+        }
+        byte[] blob = encodeModPreprocRecord(cacheKey, srcHash, true, preprocessed);
+        if (blob == null) {
+            return;
+        }
+        RecordStore rs = null;
+        try {
+            rs = RecordStore.openRecordStore(RS_MOD_PREPROC, true);
+            int n = rs.getNumRecords();
+            for (int i = 1; i <= n; i++) {
+                byte[] r = rs.getRecord(i);
+                if (modPreprocRecordMetaMatches(r, cacheKey, srcHash, true)) {
+                    rs.setRecord(i, blob, 0, blob.length);
+                    return;
+                }
+            }
+            if (n >= MOD_PREPROC_MAX_RECORDS) {
+                return;
+            }
+            rs.addRecord(blob, 0, blob.length);
+        } catch (Exception e) {
+        } finally {
+            if (rs != null) {
+                try {
+                    rs.closeRecordStore();
+                } catch (Exception e) { }
+            }
+        }
+    }
+
+    private static boolean modPreprocRecordMetaMatches(byte[] r, String wantKey, int wantHash, boolean wantEs6) {
+        if (r == null || r.length < 11 || wantKey == null) {
+            return false;
+        }
+        if ((r[0] & 0xff) != 0xA2 || r[1] != 'M' || r[2] != 'm' || r[3] != 1) {
+            return false;
+        }
+        int sh = (r[4] << 24) | ((r[5] & 0xff) << 16) | ((r[6] & 0xff) << 8) | (r[7] & 0xff);
+        if (sh != wantHash) {
+            return false;
+        }
+        boolean storedEs6 = r[8] != 0;
+        if (storedEs6 != wantEs6) {
+            return false;
+        }
+        int klen = ((r[9] & 0xff) << 8) | (r[10] & 0xff);
+        if (klen < 0 || 11 + klen > r.length) {
+            return false;
+        }
+        byte[] kcopy = new byte[klen];
+        System.arraycopy(r, 11, kcopy, 0, klen);
+        String key;
+        try {
+            key = new String(kcopy, "UTF-8");
+        } catch (java.io.UnsupportedEncodingException e) {
+            key = new String(kcopy);
+        }
+        return wantKey.equals(key);
+    }
+
+    private static String decodeModPreprocRecordBody(byte[] r, String wantKey, int wantHash, boolean wantEs6) {
+        if (!modPreprocRecordMetaMatches(r, wantKey, wantHash, wantEs6)) {
+            return null;
+        }
+        int klen = ((r[9] & 0xff) << 8) | (r[10] & 0xff);
+        int o = 11 + klen;
+        if (o + 4 > r.length) {
+            return null;
+        }
+        int blen = (r[o] << 24) | ((r[o + 1] & 0xff) << 16) | ((r[o + 2] & 0xff) << 8) | (r[o + 3] & 0xff);
+        o += 4;
+        if (blen < 0 || o + blen > r.length || blen > MOD_PREPROC_MAX_BODY) {
+            return null;
+        }
+        byte[] bcopy = new byte[blen];
+        System.arraycopy(r, o, bcopy, 0, blen);
+        try {
+            return new String(bcopy, "UTF-8");
+        } catch (java.io.UnsupportedEncodingException e) {
+            return new String(bcopy);
+        }
+    }
+
+    private static byte[] encodeModPreprocRecord(String cacheKey, int srcHash, boolean es6Mode, String body) {
+        if (cacheKey == null || body == null) {
+            return null;
+        }
+        byte[] kb;
+        byte[] bb;
+        try {
+            kb = cacheKey.getBytes("UTF-8");
+            bb = body.getBytes("UTF-8");
+        } catch (java.io.UnsupportedEncodingException e) {
+            kb = cacheKey.getBytes();
+            bb = body.getBytes();
+        }
+        if (kb.length > 65535 || bb.length > MOD_PREPROC_MAX_BODY) {
+            return null;
+        }
+        int len = 11 + kb.length + 4 + bb.length;
+        byte[] out = new byte[len];
+        out[0] = (byte) 0xA2;
+        out[1] = (byte) 'M';
+        out[2] = (byte) 'm';
+        out[3] = 1;
+        out[4] = (byte) (srcHash >> 24);
+        out[5] = (byte) (srcHash >> 16);
+        out[6] = (byte) (srcHash >> 8);
+        out[7] = (byte) srcHash;
+        out[8] = (byte) (es6Mode ? 1 : 0);
+        out[9] = (byte) (kb.length >> 8);
+        out[10] = (byte) kb.length;
+        System.arraycopy(kb, 0, out, 11, kb.length);
+        int p = 11 + kb.length;
+        out[p] = (byte) (bb.length >> 24);
+        out[p + 1] = (byte) (bb.length >> 16);
+        out[p + 2] = (byte) (bb.length >> 8);
+        out[p + 3] = (byte) bb.length;
+        System.arraycopy(bb, 0, out, p + 4, bb.length);
+        return out;
     }
     
 }

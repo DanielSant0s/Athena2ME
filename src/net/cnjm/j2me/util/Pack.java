@@ -54,13 +54,19 @@ public class Pack {
 
     public final int getInt(int index) {
         if (index < 0) index = iSize + index;
-        if (index >= iSize) throw new ArrayIndexOutOfBoundsException(index);
+        if (index < 0 || index >= iSize) {
+            throw new ArrayIndexOutOfBoundsException(
+                    "Pack.getInt index=" + index + " iSize=" + iSize);
+        }
         return iArray[index];
     }
     
     public final Object getObject(int index) {
         if (index < 0) index = oSize + index;
-        if (index >= oSize) throw new ArrayIndexOutOfBoundsException(index);
+        if (index < 0 || index >= oSize) {
+            throw new ArrayIndexOutOfBoundsException(
+                    "Pack.getObject index=" + index + " oSize=" + oSize);
+        }
         return oArray[index];
     }
     
@@ -74,7 +80,10 @@ public class Pack {
 
     public final Pack add(int index, int ival) {
         if (index < 0) index = iSize + index;
-        if (index > iSize) throw new ArrayIndexOutOfBoundsException(index);
+        if (index < 0 || index > iSize) {
+            throw new ArrayIndexOutOfBoundsException(
+                    "Pack.add(int) index=" + index + " iSize=" + iSize);
+        }
         int[] arr;
         int size = iSize++;
         if ((arr = iArray) == null || size + 1 >= arr.length) {
@@ -90,7 +99,10 @@ public class Pack {
     
     public final Pack add(int index, Object oval) {
         if (index < 0) index = oSize + index;
-        if (index > oSize) throw new ArrayIndexOutOfBoundsException(index);
+        if (index < 0 || index > oSize) {
+            throw new ArrayIndexOutOfBoundsException(
+                    "Pack.add(Object) index=" + index + " oSize=" + oSize);
+        }
         Object[] arr;
         int size = oSize++;
         if ((arr = oArray) == null || size + 1 >= arr.length) {
@@ -106,14 +118,20 @@ public class Pack {
     
     public final Pack set(int index, int ival) {
         if (index < 0) index = iSize + index;
-        if (index >= iSize) throw new ArrayIndexOutOfBoundsException(index);
+        if (index < 0 || index >= iSize) {
+            throw new ArrayIndexOutOfBoundsException(
+                    "Pack.set(int) index=" + index + " iSize=" + iSize);
+        }
         iArray[index] = ival;
         return this;
     }
     
     public final Pack set(int index, Object oval) {
         if (index < 0) index = oSize + index;
-        if (index >= oSize) throw new ArrayIndexOutOfBoundsException(index);
+        if (index < 0 || index >= oSize) {
+            throw new ArrayIndexOutOfBoundsException(
+                    "Pack.set(Object) index=" + index + " oSize=" + oSize);
+        }
         oArray[index] = oval;
         return this;
     }
@@ -145,7 +163,10 @@ public class Pack {
 
     public final int removeInt(int index) {
         if (index < 0) index = iSize + index;
-        if (index >= iSize) throw new ArrayIndexOutOfBoundsException(index);
+        if (index < 0 || index >= iSize) {
+            throw new ArrayIndexOutOfBoundsException(
+                    "Pack.removeInt index=" + index + " iSize=" + iSize);
+        }
         int[] arr = iArray;
         int len, size;
         if ((len = (size = --iSize) - index) > 0) {
@@ -157,7 +178,10 @@ public class Pack {
     
     public final Object removeObject(int index) {
         if (index < 0) index = oSize + index;
-        if (index >= oSize) throw new ArrayIndexOutOfBoundsException(index);
+        if (index < 0 || index >= oSize) {
+            throw new ArrayIndexOutOfBoundsException(
+                    "Pack.removeObject index=" + index + " oSize=" + oSize);
+        }
         Object[] arr = oArray;
         int len, size;
         if ((len = (size = --oSize) - index) > 0) {

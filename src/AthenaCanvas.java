@@ -44,6 +44,8 @@ public class AthenaCanvas extends GameCanvas {
     private Layer currentLayer;
 
     private static final int SPRITE_BATCH_INIT = 256;
+    /** Hard cap on sprite batch backing arrays (flush mid-frame when exceeded). */
+    private static final int SPRITE_BATCH_CAP = 4096;
     private boolean spriteBatchActive;
     private Image[] spriteBatchImg = new Image[SPRITE_BATCH_INIT];
     private int[] spriteBatchX = new int[SPRITE_BATCH_INIT];
@@ -58,6 +60,11 @@ public class AthenaCanvas extends GameCanvas {
     private boolean autoSpriteBatchPerFrame;
 
     private final Athena2ME hostMidlet;
+    /**
+     * Last value passed to {@link #setFullScreenMode(boolean)}. Some MIDP stub jars omit
+     * {@code Canvas#isFullScreenMode()}, so we track state here for JS and boot logic.
+     */
+    private boolean fullScreenMode;
     private static final int COLOR_UNSET = 0x80000000;
     private int lastDrawColor = COLOR_UNSET;
     private static final int RECT_BATCH_INIT = 512;
@@ -158,6 +165,15 @@ public class AthenaCanvas extends GameCanvas {
         currentLayer = null;
     }
 
+    public void setFullScreenMode(boolean mode) {
+        super.setFullScreenMode(mode);
+        fullScreenMode = mode;
+    }
+
+    public boolean isFullScreenMode() {
+        return fullScreenMode;
+    }
+
     public void setAutoSpriteBatchPerFrame(boolean enabled) {
         autoSpriteBatchPerFrame = enabled;
     }
@@ -206,9 +222,18 @@ public class AthenaCanvas extends GameCanvas {
 
     private void growSpriteBatch(int need) {
         int len = spriteBatchImg.length;
+        if (len >= SPRITE_BATCH_CAP) {
+            return;
+        }
         int n = len;
-        while (n < need) {
+        while (n < need && n < SPRITE_BATCH_CAP) {
             n *= 2;
+        }
+        if (n > SPRITE_BATCH_CAP) {
+            n = SPRITE_BATCH_CAP;
+        }
+        if (n <= len) {
+            return;
         }
         spriteBatchImg = growImageArray(spriteBatchImg, n);
         spriteBatchX = growIntArray(spriteBatchX, n);
@@ -255,6 +280,20 @@ public class AthenaCanvas extends GameCanvas {
 
     public boolean isSpriteBatchActive() {
         return spriteBatchActive;
+    }
+
+    /**
+     * Pre-grow internal sprite batch storage so the next {@code extra} enqueues
+     * avoid repeated reallocation (capped at a fixed maximum).
+     */
+    public void reserveSpriteBatch(int extra) {
+        if (extra <= 0) {
+            return;
+        }
+        int need = spriteBatchCount + extra;
+        if (need > spriteBatchImg.length && spriteBatchImg.length < SPRITE_BATCH_CAP) {
+            growSpriteBatch(Math.min(need, SPRITE_BATCH_CAP));
+        }
     }
 
     /** Create an offscreen RGB buffer; returns {@code null} on failure (e.g. OOM). */
@@ -429,7 +468,11 @@ public class AthenaCanvas extends GameCanvas {
         flushRectBatch();
         if (spriteBatchActive) {
             if (spriteBatchCount >= spriteBatchImg.length) {
-                growSpriteBatch(spriteBatchCount + 1);
+                if (spriteBatchImg.length >= SPRITE_BATCH_CAP) {
+                    flushPendingSpriteBatch();
+                } else {
+                    growSpriteBatch(spriteBatchCount + 1);
+                }
             }
             int i = spriteBatchCount++;
             spriteBatchImg[i] = img;
@@ -524,5 +567,12 @@ public class AthenaCanvas extends GameCanvas {
             return currentLayer.height;
         }
         return getHeight();
+    }
+
+    protected void sizeChanged(int w, int h) {
+        super.sizeChanged(w, h);
+        if (hostMidlet != null) {
+            hostMidlet.syncScreenDimensionProps();
+        }
     }
 }

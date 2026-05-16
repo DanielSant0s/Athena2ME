@@ -23,6 +23,9 @@
       </ul>
     </li>
     <li>
+      <a href="#performance-and-size">Performance and size</a>
+    </li>
+    <li>
       <a href="#coding">Coding</a>
       <ul>
         <li><a href="#prerequisites">Prerequisites</a></li>
@@ -31,7 +34,12 @@
         <li><a href="#functions-classes-and-consts">Functions and classes</a></li>
       </ul>
     </li>
-    <li><a href="#contributing">Contributing</a></li>
+    <li>
+      <a href="#contributing">Contributing</a>
+      <ul>
+        <li><a href="#docker-build">Docker build</a></li>
+      </ul>
+    </li>
     <li><a href="#license">License</a></li>
     <li><a href="#contact">Contact</a></li>
     <li><a href="#thanks">Thanks</a></li>
@@ -97,7 +105,8 @@ New types are always being added and this list can grow a lot over time, so stay
 - [x] Constant folding in the ES6 pre-processor (literal/const-folding in `Es6Preproc` before tokenize, incl. `Math`/`Number` constants; partial `const` propagation)
 - [x] **`async`/`await`** (linear `async function` bodies only — desugared before parse; see [Promise / async](#promise-minimal)); no `async`/`await` in the grammar itself
 - [x] Runtime JAR modules: **`require`** (CommonJS `exports`) and **`loadScript`** (global) — see [Global script loading](#global-script-loading-require-loadscript)
-- [ ] Generators, regex literals
+- [x] **Generators** (`function*`, `yield`, iterator `.next()` → `{ value, done }`); `yield` in `try`/`catch`/`finally` is not supported in v1; no `yield*`, no `for…of` over arbitrary iterables yet
+- [ ] Regex literals
 
 ### Built With
 
@@ -106,6 +115,45 @@ New types are always being added and this list can grow a lot over time, so stay
 * [RockScript](https://code.google.com/archive/p/javascript4me/)
 
 `project.properties` in this tree targets **MSA** with optional **JSR-184** (M3G / `Render3D`), **JSR-239**, and **SATSA-JCRMI** flags; adjust the platform line for your WTK or SDK profile.
+
+## Performance and size
+
+Athena2ME is tuned for **small heaps and slow CPUs** (typical MIDP phones). Most of the interpreter work is described under [Changes from upstream RockScript / javascript4me](#changes-from-upstream-rockscript--javascript4me); this section is a **single map** of runtime behaviours, build options, and knobs so you know what matters without rereading the whole README.
+
+### Runtime: where time and RAM go
+
+- **Native calls** — Hot bindings use **`NativeFunctionFast`** (no per-call `arguments` object; direct callee reference). Pair with **`os.setFastNativeArgPooling(true)`** (default) so repeated positional reads stay allocation-light.
+- **Property access** — Member reads use a **multi-slot PIC** with LRU touches and a **negative cache** for missing keys on hot paths.
+- **Object literals** — Bytecode sites can record a **`RhashShape`** for repeated literal shapes when **`os.setLiteralShapeCacheEnabled(true)`** (default on).
+- **Constructors** — Optional reuse of short-lived **`this`** shells: **`os.setCtorPoolEnabled(true)`** (off by default; only if profiling shows constructor churn and you respect the “few live instances per site” rule).
+- **ES6 preprocess** — `require` / `loadScript` share an in-memory preprocessor cache (128 entries); on miss, the runtime may read or write **`A2MjsMod`** in RMS (module bodies, capped footprint). **`os.setEscapeOptForLiterals(true)`** speeds **template literal** preprocessing by copying long static spans in fewer steps (safe spans only; see [docs/PERFORMANCE.md](docs/PERFORMANCE.md)). Larger VM ideas (true hidden classes for maps, IADD-style int stack opcodes) are **not** in this tree yet.
+- **Promises** — Microtasks sit in a **fixed ring** (256 slots); overflow drops the oldest job once and logs to `System.out`.
+- **Render3D (software)** — **`Float32Array` views** for positions, normals, and UVs can be consumed **without** copying into temporary `float[]` when you pass views (see `Render3D.setTriangleStripMesh` / `setIndexedMesh` / `setTexCoords`). **`Render3D.uploadStaticMesh`**, **`useUploadedMesh`**, and **`freeUploadedMesh`** keep static strip data behind integer handles (**software only**; do not mutate backing buffers while a handle is live).
+- **Render3D (M3G)** — The **same JS API** is supported for immediate meshes, but data is uploaded through **`float[]` / M3G `VertexBuffer`**: there is **no** `Float32View` zero-copy path on **`m3g`**; use **`soft`** if your bottleneck is typed-array upload cost.
+- **2D** — Sprite batches cap at **4096** queued regions per flush; **`Screen.reserveBatch(n)`** pre-grows storage when you know batch size up front.
+- **Sound** — **`Sound.Sfx`** may **reuse** the MMAPI `Player` when the same `byte[]` clip is replayed on a channel.
+- **I/O** — **`IoByteBufferPool`** backs transient reads in **`AthenaRequest`**, **`AthenaFile`**, **`BootIniConfig`**, and related paths. **`Socket.recv`** / **`BTSocket.recv`** borrow pooled buffers and return a **`Uint8Array`** that may **own** the buffer when the read fills it exactly.
+
+### Build: smaller JARs
+
+- **`ant all`** — Development JAR + preverify, full **`res/`** set (no Node preproc).
+- **`ant all-preproc`** — Same as **`ant all`** for packaging shape (full tree including **`demos/`**), but **`preproc`** runs first and the JAR is built from **`build/res/`** (prebaked scripts; optional **`app.js`** per `preproc.config.json`).
+- **`ant release`** — Optional **`strip-features`** (Node, `ATHENA_FEATURES`) → slimmer resource set (by default excludes **`tests.js`** and **`demos/**`** from the prebaked **`build/res/`** tree packaged into the JAR) → **ProGuard** shrink/obfuscate → JAD. To ship demos or tests (e.g. **`main.js`** loads **`require(demos[i].path)`**), add **`-Drelease.include.demos=true`** and/or **`-Drelease.include.tests=true`**. CI can enforce a **JAR size ceiling** via **`node scripts/check-baseline.mjs`** and **`bench/baseline.json`**.
+
+### Measurements
+
+- **`res/tests.js`** — **`testPerfPlanMicrobenches`** plus **scene** timers (`bench scene *`) for quick device logging.
+- **Full checklist** — Section-by-section notes, exact caps, and the **`os.*` tuning list**: **[docs/PERFORMANCE.md](docs/PERFORMANCE.md)**.
+
+### Optional JS tuning (`os`)
+
+Use these when you profile a real device and need to trade safety for speed:
+
+- `os.setFastNativeArgPooling(on)`
+- `os.setCtorPoolEnabled(on)`
+- `os.setLiteralShapeCacheEnabled(on)`
+- `os.setEscapeOptForLiterals(on)` — template-heavy ES6 sources and preprocessor time
+- `os.getPerfStats()` / `os.getMemoryStats()` — lightweight counters and heap hints
 
 ## Coding
 
@@ -398,7 +446,10 @@ class Boss extends Enemy {
 ```
 
 Known limitations versus full ES6: `const` does not yet enforce immutability at
-runtime (but block scoping works); no regex literals, no generators; no
+runtime (but block scoping works); no regex literals; **generators** support
+`function*`, `yield`, and iterator `next()` only (`yield*` and `for…of` over
+generators are not implemented yet; `yield` inside `try` is rejected at parse
+time). No
 `async`/`await` in the parser grammar—only **linear** `async function` bodies are
 rewritten to `Promise` chains before tokenize (see [Promise (minimal)](#promise-minimal));
 no tagged templates, no `Proxy`/`Reflect`, no symbols as
@@ -445,6 +496,7 @@ and are resolved with the fast-dispatch path described above.
   `delete`, `keys`/`values`/`entries`, iteration via `for...of`
 * **Date** — `now`, `getTime`, `setTime`
 * **Error** — `name`, `message`, `toString`
+* **Generators** — `function*` / `yield`; iterator **`next()`** returns `{ value, done }`. No `yield*`; `yield` inside `try`/`catch`/`finally` is rejected at parse time; `for…of` over generators is not implemented yet
 * **Misc** — `console.log`, `isNaN`, `parseInt`, `eval`, `es - evalString` (do **not** use `eval` to load whole scripts from the JAR; use **`require`** / **`loadScript`** below)
 
 **How to run it**
@@ -825,9 +877,9 @@ SFX is loaded into memory **once** per `Sfx` object; each `play()` creates a new
 
 **Software raster (implementation)** — **Untextured** triangles use **`Graphics.fillTriangle`** via [`AthenaCanvas.drawTriangle`](src/AthenaCanvas.java) (fast). **Textured** triangles rasterize per scanline into a buffer and call **`Graphics.drawRGB`** through [`AthenaCanvas.drawRgb`](src/AthenaCanvas.java) (fewer native calls than one `fillRect` per pixel). UVs use perspective-correct interpolation; sampling is **bilinear** by default on **soft** (**`setTextureFilter`** / **`setTextureWrap`** adjust sampling and wrap/clamp).
 
-**Backend parity** — New `Render3D` APIs are implemented on **both** `m3g` and `soft` **unless** called out (e.g. **`setDepthBuffer`**, **`setMaxTriangles`**, and **`getCapabilities`** field **`depthBufferOption`** are **soft**-centric; **`load`**, **`worldAnimate`**, and **`m3g*`** are **M3G-only**). **Texture mapping** — call **`setTexture`(*jar path*)**, then **`setTexCoords`(*2 floats per vertex*)**, then **`setTriangleStripMesh` / `setIndexedMesh`** (same for both backends). Both backends use the JAR image resource path (e.g. `"/tex.png"`). If the image fails to load, drawing falls back to **flat / Gouraud** shading (no texture). **Texture alpha** — **soft** samples **ARGB** from `Image.getRGB` and blends with **`drawRGB(..., processAlpha true)`**; the software Z-buffer is updated only when texel alpha is **≥ 128** (approximate cut-out; overlapping transparent surfaces can still look wrong without **back-to-front** ordering). **M3G** uses **`CompositingMode.ALPHA`** on the immediate mesh when a texture is present, and tries **`Image2D.RGBA`** first when loading the image. The **`soft`** default triangle budget is **1024** (reallocate up to **4096** with `setMaxTriangles`); M3G has no per-frame triangle cap in this API. **`Render3D.setDepthBuffer(true)`** (software only) enables a per-pixel **depth buffer** and correct intersection for opaque geometry at the cost of **W×H** `int` plus extra fill work; M3G ignores it (hardware Z already). If depth is off, the software path uses **painter’s sort** (triangle centroid), which can be wrong for intersecting surfaces.
+**Backend parity** — New `Render3D` APIs are implemented on **both** `m3g` and `soft` **unless** called out (e.g. **`setDepthBuffer`**, **`setMaxTriangles`**, **`uploadStaticMesh` / `useUploadedMesh` / `freeUploadedMesh`**, and **`getCapabilities`** field **`depthBufferOption`** are **software-only**; **`load`**, **`worldAnimate`**, and **`m3g*`** are **M3G-only**). **Texture mapping** — call **`setTexture`(*jar path*)**, then **`setTexCoords`(*2 floats per vertex*)**, then **`setTriangleStripMesh` / `setIndexedMesh`** (same for both backends). Both backends use the JAR image resource path (e.g. `"/tex.png"`). If the image fails to load, drawing falls back to **flat / Gouraud** shading (no texture). **Texture alpha** — **soft** samples **ARGB** from `Image.getRGB` and blends with **`drawRGB(..., processAlpha true)`**; the software Z-buffer is updated only when texel alpha is **≥ 128** (approximate cut-out; overlapping transparent surfaces can still look wrong without **back-to-front** ordering). **M3G** uses **`CompositingMode.ALPHA`** on the immediate mesh when a texture is present, and tries **`Image2D.RGBA`** first when loading the image. The **`soft`** default triangle budget is **1024** (reallocate up to **4096** with `setMaxTriangles`); M3G has no per-frame triangle cap in this API. **`Render3D.setDepthBuffer(true)`** (software only) enables a per-pixel **depth buffer** and correct intersection for opaque geometry at the cost of **W×H** `int` plus extra fill work; M3G ignores it (hardware Z already). If depth is off, the software path uses **painter’s sort** (triangle centroid), which can be wrong for intersecting surfaces.
 
-**`Float32Array` UVs** — `setTexCoords` accepts **2×N** floats (a `Float32Array` of UV pairs, or a JS array with an even length ≥ 2). Position arrays still require a multiple of 3 floats in `setTriangleStripMesh` / `setIndexedMesh`.
+**`Float32Array` UVs** — `setTexCoords` accepts **2×N** floats (a `Float32Array` of UV pairs, or a JS array with an even length ≥ 2). Position arrays still require a multiple of 3 floats in `setTriangleStripMesh` / `setIndexedMesh`. When the backend is **`soft`**, **`Float32Array` views** for positions, normals, and UVs can skip an extra copy into temporary `float[]` on the native side; on **`m3g`**, buffers are still materialized for M3G. Summary: [Performance and size](#performance-and-size).
 
 * **`Render3D.getBackend()`** — string `"m3g"` or `"soft"` (after `init` it matches the active backend; before `init`, the predicted value: M3G if the API is present, else software).
 * **`Render3D.getCapabilities()`** — object: **`backend`** (string, active or predicted), **`m3gPresent`** (**1** / **0**, whether JSR-184 `Graphics3D` is available), **`maxTriangles`** (after `init` on **`soft`**: budget **32**..**4096**; on **`m3g`**: **-1**; if **`r3d`** is not created yet but the predicted backend is **`soft`**, **1024** is reported; otherwise **-1**), **`depthBufferOption`** (**1** when **`backend` === `"soft"`** so `setDepthBuffer` applies, else **0**).
@@ -885,16 +937,64 @@ To build the project locally, you need **JDK 8** and **Apache Ant**.
     ant -Dskip.preverify=true
     ```
     The output artefacts will be in the `build/` directory.
+3.  **`ant all-preproc`:** Same pipeline as **`ant all`** (compile → JAR → ProGuard preverify → JAD), but runs the Node **preproc** step first and packages **`build/res/`** instead of raw **`res/`** (prebaked scripts, full tree including **`demos/`**). Use **`ant -Dbuild.profile=release all-preproc`** for release-style minify in preproc only. **`ant preproc`** alone only refreshes **`build/res/`** without rebuilding the JAR.
+4.  **`ant all` vs `ant release`:** The default **`ant`** / **`ant all`** JAR includes the full **`res/`** tree (including **`demos/`**). **`ant release`** uses **`jar-release`**, which packages **`build/res/`** after **`preproc`** and **by default drops** **`demos/**`** and **`tests.js`** to shrink the JAR. If your entry script loads demos at runtime, run for example:  
+    `ant -Drelease.include.demos=true release` (and add **`-Drelease.include.tests=true`** if you need **`tests.js`** in the JAR).
 
-### Docker Build
+### Docker build
 
-If you have Docker and Docker Compose installed, you can build the project without installing JDK 8 or Ant on your machine:
+The [Dockerfile](Dockerfile) image includes **JDK 8**, **Ant**, **Node.js 20** (for `tools/preproc`), and a cached **ProGuard** JAR. The repo is bind-mounted at `/app`, so outputs land in your host **`build/`** directory. The container **entrypoint is `/app/docker/athena2me-entrypoint.sh`** (from your working copy), so new build modes apply after a **`git pull`** without rebuilding the image—rebuild only when the **Dockerfile** or base image dependencies change.
 
-1.  Run the build:
-    ```bash
-    docker-compose up --build
-    ```
-    The compiled `.jar` and `.jad` will appear in your local `build/` folder.
+**Default (full build, same idea as `ant all`):**
+
+```bash
+docker compose run --rm build
+# or explicitly:
+docker compose run --rm build all
+```
+
+**Override the first argument** to choose a mode (see [`docker/athena2me-entrypoint.sh`](docker/athena2me-entrypoint.sh)):
+
+| Mode | Command example | What it runs |
+| --- | --- | --- |
+| `all-preproc` | `docker compose run --rm build all-preproc` | `ant all-preproc` (compile + **preproc** + JAR from **`build/res/`** + preverify + JAD; **`BUILD_PROFILE`** for preproc) |
+| `all` | `docker compose run --rm build all` | `ant all` (compile → JAR → preverify → JAD) |
+| `compile` | `docker compose run --rm build compile` | `ant compile` (Java only) |
+| `jar` | `docker compose run --rm build jar` | `ant jar-only` (expects classes; dev `res/` in JAR) |
+| `jar-release` | `docker compose run --rm build jar-release` | `ant jar-release` (compile + Node **preproc** + slim JAR; omit **`demos/**`** / **`tests.js`** unless you pass Ant flags — see below) |
+| `release` | `docker compose run --rm build release` | `ant release` (strip-features → slim + ProGuard + JAD) |
+| `preproc` | `docker compose run --rm build preproc` | `ant preproc` only (writes **`build/res/`**; profile via env below) |
+| `preproc-check` | `docker compose run --rm build preproc-check` | `npm test` + `a2m-preproc --check` (no Ant) |
+| `clean` | `docker compose run --rm build clean` | `ant clean` |
+| `ant …` | `docker compose run --rm build ant clean jar-only` | Forwards to `ant` (ensures `tools/proguard.jar` exists first) |
+| `help` | `docker compose run --rm build help` | Prints the mode list |
+
+**Release JAR resources:** `jar-release` / `release` package **`build/res/`** and **exclude** `demos/**` and `tests.js` by default so the MIDlet stays small. If your app loads demos or tests at runtime, forward Ant properties through the **`ant`** mode:
+
+```bash
+docker compose run --rm build ant -Drelease.include.demos=true -Drelease.include.tests=true release
+```
+
+**`preproc` / `all-preproc` profile:** set **`BUILD_PROFILE`** to `dev` (default) or `release` (passed as `-Dbuild.profile=…` to Ant for **`preproc`** and **`all-preproc`**):
+
+```bash
+docker compose run --rm -e BUILD_PROFILE=release build preproc
+```
+
+**Compose profiles** — optional one-liners (same image; each service sets the mode so they do not start on a plain `docker compose up`):
+
+```bash
+docker compose --profile preproc run --rm preproc
+docker compose --profile preproc-check run --rm preproc-check
+docker compose --profile compile run --rm compile
+docker compose --profile jar run --rm jar
+docker compose --profile jar-release run --rm jar-release
+docker compose --profile all-preproc run --rm all-preproc
+docker compose --profile release run --rm release
+docker compose --profile clean run --rm clean
+```
+
+Rebuild the image after changing the Dockerfile: `docker compose build build`.
 
 ### GitHub Actions (CI)
 
