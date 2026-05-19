@@ -28,8 +28,12 @@ replay_pid*
 # CI / local: API manifest from scripts/export-j2me-api.mjs
 build/
 
-# CI: ProGuard downloaded by the build-jar workflow step
-tools/
+# CI / local: ProGuard downloaded by the build-jar workflow step
+tools/proguard.jar
+tools/proguard.zip
+
+# npm deps for tools/preproc (installed by CI / ant preproc-npm)
+tools/preproc/node_modules/
 
 # AthenaStudio (VS Code extension)
 athenastudio/node_modules/
