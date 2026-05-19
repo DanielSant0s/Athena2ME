@@ -1,0 +1,15 @@
+{
+  "name": "@athena2me/preproc",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Build-time ES6→ES5 preprocessor and bundler for Athena2ME RockScript",
+  "scripts": {
+    "test": "node test/run.mjs"
+  },
+  "dependencies": {
+    "acorn": "^8.14.0",
+    "acorn-walk": "^8.3.4",
+    "astring": "^1.9.0"
+  }
+}
