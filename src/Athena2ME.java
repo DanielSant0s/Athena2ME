@@ -67,6 +67,9 @@ public class Athena2ME extends MIDlet implements CommandListener {
     /** Integer id → {@link UploadedStripMesh} for {@code Render3D.uploadStaticMesh}. */
     private final Hashtable render3dUploadedMeshes = new Hashtable();
 
+    /** HTML layout session for {@code Browser.*} bindings. */
+    private final BrowserSession browserSession = new BrowserSession();
+
     private static final class UploadedStripMesh {
         final int[] stripLens;
         final Rv.Float32View positions;
@@ -239,6 +242,32 @@ public class Athena2ME extends MIDlet implements CommandListener {
         Rv n = v.toNum();
         if (n == Rv._NaN) return 0.0f;
         return (float) Rv.numValue(n);
+    }
+
+    private static Rv browserOpToRv(RocksInterpreter ri, Object[] row) {
+        if (row == null) {
+            return Rv._null;
+        }
+        Rv o = ri.newModule();
+        ri.addToObject(o, "kind", new Rv((String) row[0]));
+        ri.addToObject(o, "x", new Rv((double) ((Integer) row[1]).intValue()));
+        ri.addToObject(o, "y", new Rv((double) ((Integer) row[2]).intValue()));
+        ri.addToObject(o, "w", new Rv((double) ((Integer) row[3]).intValue()));
+        ri.addToObject(o, "h", new Rv((double) ((Integer) row[4]).intValue()));
+        ri.addToObject(o, "color", new Rv((double) ((Integer) row[5]).intValue()));
+        ri.addToObject(o, "fontFace", new Rv((double) ((Integer) row[6]).intValue()));
+        ri.addToObject(o, "fontStyle", new Rv((double) ((Integer) row[7]).intValue()));
+        ri.addToObject(o, "fontSize", new Rv((double) ((Integer) row[8]).intValue()));
+        ri.addToObject(o, "flags", new Rv((double) ((Integer) row[9]).intValue()));
+        ri.addToObject(o, "nodeTag", new Rv((double) ((Integer) row[10]).intValue()));
+        ri.addToObject(o, "nodeId", new Rv((double) ((Integer) row[11]).intValue()));
+        String tx = (String) row[12];
+        ri.addToObject(o, "text", tx == null ? Rv._null : new Rv(tx));
+        String hf = (String) row[13];
+        ri.addToObject(o, "href", hf == null ? Rv._null : new Rv(hf));
+        String im = (String) row[14];
+        ri.addToObject(o, "imgSrc", im == null ? Rv._null : new Rv(im));
+        return o;
     }
 
     /** Mirrors package-private {@code Rv.ARRAY} for {@code type} checks. */
@@ -3019,6 +3048,184 @@ public class Athena2ME extends MIDlet implements CommandListener {
             })));
 
         ri.addToObject(callObj, "Request", _Request);
+
+        // @feature browser
+        final Rv _Browser = ri.newModule();
+        ri.addToObject(callObj, "Browser", _Browser);
+
+        ri.addToObject(_Browser, "loadHtml",
+            ri.addNativeFunction(new NativeFunctionListEntry("Browser.loadHtml", new NativeFunctionFast() {
+                public final int length = 1;
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    String html = Rv.argAt(args, start, num, 0).toStr().str;
+                    int w = selfMidlet.canvas.getWidth();
+                    int h = selfMidlet.canvas.getHeight();
+                    selfMidlet.browserSession.loadHtml(selfMidlet.jsRuntimeLock, Athena2ME.class, html, w, h);
+                    return Rv._undefined;
+                }
+            })));
+
+        ri.addToObject(_Browser, "reload",
+            ri.addNativeFunction(new NativeFunctionListEntry("Browser.reload", new NativeFunctionFast() {
+                public final int length = 0;
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    int w = selfMidlet.canvas.getWidth();
+                    int h = selfMidlet.canvas.getHeight();
+                    selfMidlet.browserSession.reload(selfMidlet.jsRuntimeLock, Athena2ME.class, w, h);
+                    return Rv._undefined;
+                }
+            })));
+
+        ri.addToObject(_Browser, "clear",
+            ri.addNativeFunction(new NativeFunctionListEntry("Browser.clear", new NativeFunctionFast() {
+                public final int length = 0;
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    selfMidlet.browserSession.clear();
+                    return Rv._undefined;
+                }
+            })));
+
+        ri.addToObject(_Browser, "opCount",
+            ri.addNativeFunction(new NativeFunctionListEntry("Browser.opCount", new NativeFunctionFast() {
+                public final int length = 0;
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    return new Rv((double) selfMidlet.browserSession.getOpCount());
+                }
+            })));
+
+        ri.addToObject(_Browser, "getOp",
+            ri.addNativeFunction(new NativeFunctionListEntry("Browser.getOp", new NativeFunctionFast() {
+                public final int length = 1;
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    int i = jsInt(Rv.argAt(args, start, num, 0));
+                    return browserOpToRv(ri, selfMidlet.browserSession.getOpArray(i));
+                }
+            })));
+
+        ri.addToObject(_Browser, "scrollY",
+            ri.addNativeFunction(new NativeFunctionListEntry("Browser.scrollY", new NativeFunctionFast() {
+                public final int length = 1;
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    if (num >= 1) {
+                        selfMidlet.browserSession.setScrollY(jsInt(Rv.argAt(args, start, num, 0)));
+                        return Rv._undefined;
+                    }
+                    return new Rv((double) selfMidlet.browserSession.getScrollY());
+                }
+            })));
+
+        ri.addToObject(_Browser, "scrollBy",
+            ri.addNativeFunction(new NativeFunctionListEntry("Browser.scrollBy", new NativeFunctionFast() {
+                public final int length = 2;
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    int delta = jsInt(Rv.argAt(args, start, num, 0));
+                    int viewH = jsInt(Rv.argAt(args, start, num, 1));
+                    selfMidlet.browserSession.scrollBy(delta, viewH);
+                    return Rv._undefined;
+                }
+            })));
+
+        ri.addToObject(_Browser, "contentBottom",
+            ri.addNativeFunction(new NativeFunctionListEntry("Browser.contentBottom", new NativeFunctionFast() {
+                public final int length = 0;
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    return new Rv((double) selfMidlet.browserSession.getContentBottom());
+                }
+            })));
+
+        ri.addToObject(_Browser, "focusCount",
+            ri.addNativeFunction(new NativeFunctionListEntry("Browser.focusCount", new NativeFunctionFast() {
+                public final int length = 0;
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    return new Rv((double) selfMidlet.browserSession.getFocusCount());
+                }
+            })));
+
+        ri.addToObject(_Browser, "focusIndex",
+            ri.addNativeFunction(new NativeFunctionListEntry("Browser.focusIndex", new NativeFunctionFast() {
+                public final int length = 1;
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    if (num >= 1) {
+                        selfMidlet.browserSession.setFocusIndex(jsInt(Rv.argAt(args, start, num, 0)));
+                        return Rv._undefined;
+                    }
+                    return new Rv((double) selfMidlet.browserSession.getFocusIndex());
+                }
+            })));
+
+        ri.addToObject(_Browser, "focusNodeId",
+            ri.addNativeFunction(new NativeFunctionListEntry("Browser.focusNodeId", new NativeFunctionFast() {
+                public final int length = 0;
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    return new Rv((double) selfMidlet.browserSession.getFocusNodeId());
+                }
+            })));
+
+        ri.addToObject(_Browser, "moveFocus",
+            ri.addNativeFunction(new NativeFunctionListEntry("Browser.moveFocus", new NativeFunctionFast() {
+                public final int length = 1;
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    selfMidlet.browserSession.moveFocus(jsInt(Rv.argAt(args, start, num, 0)));
+                    return Rv._undefined;
+                }
+            })));
+
+        ri.addToObject(_Browser, "activate",
+            ri.addNativeFunction(new NativeFunctionListEntry("Browser.activate", new NativeFunctionFast() {
+                public final int length = 0;
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    StringBuffer m = new StringBuffer();
+                    StringBuffer b = new StringBuffer();
+                    String url = selfMidlet.browserSession.activateFocused(m, b);
+                    Rv o = ri.newModule();
+                    if (url == null) {
+                        ri.addToObject(o, "url", Rv._null);
+                    } else {
+                        ri.addToObject(o, "url", new Rv(url));
+                    }
+                    ri.addToObject(o, "method", new Rv(m.toString()));
+                    ri.addToObject(o, "body", new Rv(b.toString()));
+                    return o;
+                }
+            })));
+
+        ri.addToObject(_Browser, "hitTest",
+            ri.addNativeFunction(new NativeFunctionListEntry("Browser.hitTest", new NativeFunctionFast() {
+                public final int length = 2;
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    int x = jsInt(Rv.argAt(args, start, num, 0));
+                    int y = jsInt(Rv.argAt(args, start, num, 1));
+                    return new Rv((double) selfMidlet.browserSession.hitTest(x, y));
+                }
+            })));
+
+        ri.addToObject(_Browser, "historyPush",
+            ri.addNativeFunction(new NativeFunctionListEntry("Browser.historyPush", new NativeFunctionFast() {
+                public final int length = 1;
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    selfMidlet.browserSession.historyPush(Rv.argAt(args, start, num, 0).toStr().str);
+                    return Rv._undefined;
+                }
+            })));
+
+        ri.addToObject(_Browser, "historyBack",
+            ri.addNativeFunction(new NativeFunctionListEntry("Browser.historyBack", new NativeFunctionFast() {
+                public final int length = 0;
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    String u = selfMidlet.browserSession.historyBack();
+                    return u == null ? Rv._null : new Rv(u);
+                }
+            })));
+
+        ri.addToObject(_Browser, "historyForward",
+            ri.addNativeFunction(new NativeFunctionListEntry("Browser.historyForward", new NativeFunctionFast() {
+                public final int length = 0;
+                public Rv callFast(boolean isNew, Rv thiz, Pack args, int start, int num, RocksInterpreter ri) {
+                    String u = selfMidlet.browserSession.historyForward();
+                    return u == null ? Rv._null : new Rv(u);
+                }
+            })));
+        // @end
 
         final Rv _SocketMod = ri.newModule();
         ri.addToObject(_SocketMod, "AF_INET", new Rv(AthenaSocket.AF_INET));

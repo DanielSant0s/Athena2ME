@@ -57,6 +57,11 @@ const demos = [
         title: "Asteroids",
         subtitle: "Vector ship, wrap, splitting rocks",
         path: "/demos/asteroids.js"
+    },
+    {
+        title: "HTML mini-browser",
+        subtitle: "Java layout, JS paint, Request navigation",
+        path: "/demos/browser.js"
     }
 ];
 

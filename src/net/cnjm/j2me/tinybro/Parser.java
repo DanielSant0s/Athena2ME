@@ -1,13 +1,14 @@
 package net.cnjm.j2me.tinybro;
 
 import java.util.Hashtable;
+import java.util.Vector;
 
 import net.cnjm.j2me.util.Pack;
 
 /**
  * values: 
  * width/height: length, auto
- * line-height: length, normal // 行高=字体高+行距
+ * line-height: length, normal // ????=?????+????
  * border-width: length
  * border-style: none, solid, dotted
  * text-align: left(default), center, right, justify
@@ -28,9 +29,10 @@ import net.cnjm.j2me.util.Pack;
  */
 public class Parser {
     
-    static final String ENUM_STR =  
-        // special
-        "undefined,0," + 
+    /** Hrefs from link elements with rel=stylesheet, filled during {@link #html(Page)}. */
+    private final Vector stylesheetLinks = new Vector();
+
+    static final String ENUM_STR = 
         "invalid,1," + 
         "html,10," + 
         "head," + 
@@ -201,8 +203,10 @@ public class Parser {
         "num9," + 
         "pound," + 
         "star," + 
-        "soft1," + 
-        "soft2," + 
+        "soft1,1617," + 
+        "soft2,1618," + 
+        "font-size,1619," + 
+        "font-weight,1620" + 
         ""; // end
     private static final Hashtable STR_TO_ENUM;
     
@@ -243,6 +247,7 @@ public class Parser {
     }
     
     public final Node html(Page owner) {
+        stylesheetLinks.removeAllElements();
         int state = TAG_CONTENT;
         Node root = new Node(owner, "");
         Node n = root;
@@ -306,6 +311,14 @@ main:
                 if (c == '>') {
                     ++pos;
                     int tt = n.tagType;
+                    if (tt == C.E_LINK) {
+                        String rel = n.getProperty("rel");
+                        String href = n.getProperty("href");
+                        if (href != null && href.length() > 0 && rel != null
+                                && rel.toLowerCase().equals("stylesheet")) {
+                            stylesheetLinks.addElement(href);
+                        }
+                    }
                     // <link ...>, <br>, <hr>, <img ...>, <input ...> 
                     if (tt == C.E_LINK || tt == C.E_BR || tt == C.E_HR || 
                             tt == C.E_IMG || tt == C.E_INPUT || tt == C.E_OBJECT) { 
@@ -363,24 +376,54 @@ main:
         }
         
         Parser tmp = new Parser("");
+        Node docRoot = root.getChild(0);
+        if (docRoot == null) {
+            docRoot = new Node(owner, "div");
+            root.appendChild(docRoot);
+        }
         for (int i = 0, size = styles.oSize; i < size; i += 2) {
             n = (Node) styles.oArray[i];
             String css = ((String) styles.oArray[i + 1]).trim();
-            if (n == root) { // TODO
-//                Pack sp = tmp.reset(css).style();
-//                Pack np = new Pack(-1, -1);
-//                for (int ii = 0, nn = sp.oSize; ii < nn; ii += 2) {
-//                    n.select(np.reset(-1, 4), (String) sp.oArray[ii]);
-//                    Pack prop = tmp.reset((String) sp.oArray[ii + 1]).cssProperties();
-//                    for (int jj = 0, jn = np.oSize; jj < jn; jj++) {
-//                        ((Node) np.oArray[jj]).applyStyle(prop);
-//                    }
-//                }
+            if (n == root) {
+                applyGlobalCss(docRoot, css, tmp);
             } else {
-                n.setStyle(0, tmp.reset(css).cssProperties());
+                n.setStyle(C.DI_NORMAL, tmp.reset(css).cssProperties());
             }
         }
-        return root.getChild(0);
+        Host host = owner.host;
+        if (host != null) {
+            for (int li = 0; li < stylesheetLinks.size(); li++) {
+                String href = (String) stylesheetLinks.elementAt(li);
+                Object sheet = host.getResource(href);
+                if (sheet instanceof String) {
+                    applyGlobalCss(docRoot, ((String) sheet).trim(), tmp);
+                }
+            }
+        }
+        return docRoot;
+    }
+
+    /**
+     * Apply a stylesheet block {@code sel { props } sel2 { ... }} to matching nodes.
+     */
+    public static final void applyGlobalCss(Node docRoot, String css, Parser tmp) {
+        if (docRoot == null || css == null || css.length() == 0) {
+            return;
+        }
+        Pack sp = tmp.reset(css).style();
+        for (int ii = 0; ii < sp.oSize; ii += 2) {
+            String sel = (String) sp.oArray[ii];
+            String body = (String) sp.oArray[ii + 1];
+            if (sel == null || body == null) {
+                continue;
+            }
+            Pack np = docRoot.select(sel.trim());
+            for (int jj = 0; jj < np.oSize; jj++) {
+                Node hit = (Node) np.oArray[jj];
+                int st = np.iArray[jj];
+                hit.setStyle(st, tmp.reset(body).cssProperties());
+            }
+        }
     }
     
     public final Pack style() {

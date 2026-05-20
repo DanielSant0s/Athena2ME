@@ -60,6 +60,7 @@ Athena2ME is a project that seeks to facilitate and at the same time brings a co
 * Keyboard: Basic keypad support.
 * Timer: Control the time precisely in your code, it contains several timing functions.
 * Request: HTTP/HTTPS client returning **Promises** (`get` / `post` / `download`).
+* **Browser** (optional build feature): HTML/CSS layout in Java, flat draw-list and focus data for JS (`Browser.loadHtml`, `getOp`, …); see [docs/BROWSER.md](docs/BROWSER.md).
 * Socket: TCP/UDP sockets (`javax.microedition.io`).
 * WebSocket: Minimal `ws://` client (RFC 6455 framing over TCP).
 * Bluetooth: JSR-82 inquiry, `btspp://` client (`BTSocket`), optional `/lib/bluetooth.js` helper — see [Bluetooth (JSR-82)](#bluetooth-jsr-82).

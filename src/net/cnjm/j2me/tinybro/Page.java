@@ -64,35 +64,86 @@ public class Page {
         return ret;
     }
 
+    /** Binary search longest substring starting at {@code from} that fits {@code maxWidth}. */
+    private static final int breakTextLine(String s, int from, Font fo, int maxWidth) {
+        int n = s.length();
+        if (from >= n) {
+            return n;
+        }
+        if (maxWidth < 2) {
+            return from + 1;
+        }
+        char[] cc = s.toCharArray();
+        int lo = from + 1;
+        int hi = n;
+        while (lo < hi) {
+            int mid = (lo + hi + 1) >> 1;
+            if (fo.charsWidth(cc, from, mid - from) <= maxWidth) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        if (lo <= from) {
+            return from + 1;
+        }
+        return lo;
+    }
+
     public final void calcStyle() {
         Node parent = new Node(this, "div");
         parent.children = new Pack(-1, 1).add(dom);
         Node container = parent;
         container.drawinfo[C.DI_FIXED] = new Pack(22, -1).setSize(22, -1).set(C.F_WIDTH, width);
         container.drawinfo[C.DI_TMP] = new Pack(C.TMP_SIZE, -1).setSize(C.TMP_SIZE, -1);
-        int[] contblock = container.drawinfo[C.DI_FIXED].iArray;
+        Pack contblock = container.drawinfo[C.DI_FIXED];
         int[] conttmp = container.drawinfo[C.DI_TMP].iArray;
         Pack rowelem = new Pack(20, 10);
         Pack stack = new Pack(20, 20);
         Pack contstack = new Pack(-1, 10);
         int idx = 0, size = parent.children.oSize;
-        int indent = 0; // TODO delete this
         Object[] siblings = parent.children.oArray;
         for (;; idx++) {
             if (idx >= size) {
-                if (stack.iSize == 0) break;
-                if ((container.display & C.M_DISPLAY) > C.DISP_INLINE) { // block, inline-block
-                    int[] cba = contblock;
+                if (stack.iSize == 0) {
+                    rowEnds(container, rowelem);
+                    break;
+                }
+                if ((container.display & C.M_DISPLAY) > C.DISP_INLINE && contstack.oSize > 0) { // block, inline-block
+                    rowEnds(container, rowelem);
+                    rowelem.setSize(0, 0);
+                    int closedDisp = container.display & C.M_DISPLAY;
+                    Pack closedBlock = container.drawinfo[C.DI_FIXED];
+                    int[] closedBa = closedBlock.iArray;
                     container = (Node) contstack.removeObject(contstack.oSize - 1);
-                    contblock = container.drawinfo[C.DI_FIXED].iArray;
+                    contblock = container.drawinfo[C.DI_FIXED];
                     conttmp = container.drawinfo[C.DI_TMP].iArray;
-                    conttmp[C.TMP_OFFSETX] += cba[C.F_WIDTH] + cba[C.F_ML] + cba[C.F_MR];
+                    if (closedDisp == 0x20) { // block: stack next row in parent
+                        int closedH = Node.blockContentHeight(closedBlock);
+                        if (closedH <= 1) {
+                            closedH = 16;
+                        }
+                        if (closedH > 0) {
+                            closedBlock.set(C.F_HEIGHT, closedH);
+                        }
+                        if (closedH > conttmp[C.TMP_ROWH]) {
+                            conttmp[C.TMP_ROWH] = closedH;
+                        }
+                        rowEnds(container, rowelem);
+                        rowelem.setSize(0, 0);
+                    } else if (closedDisp == 0x30) { // inline-block: row height + horizontal cursor
+                        int closedH = Node.blockContentHeight(closedBlock);
+                        if (closedH > conttmp[C.TMP_ROWH]) {
+                            conttmp[C.TMP_ROWH] = closedH;
+                        }
+                        conttmp[C.TMP_OFFSETX] += C.px(closedBa[C.F_WIDTH]) + C.px(closedBa[C.F_ML])
+                                + C.px(closedBa[C.F_MR]);
+                    }
                 }
                 idx = stack.removeInt(stack.iSize - 1);
                 parent = (Node) stack.removeObject(stack.oSize - 1);
                 size = parent.children.oSize;
                 siblings = parent.children.oArray;
-                indent -= 2; // TODO delete this
                 continue;
             }
             Node node = (Node) siblings[idx];
@@ -106,18 +157,19 @@ public class Page {
                     Image im = (Image) host.getResource((String) oa[C.C_IMGURL]);
                     oa[C.C_IMGOBJ] = im;
                 }
-//                Font fo = new Font("SimSun", ia[C.C_FONTSTYLE], ia[C.C_FONTSIZE]);
                 Font fo = Font.getFont(Font.FACE_SYSTEM, ia[C.C_FONTSTYLE], ia[C.C_FONTSIZE]);
+                if (ia[C.C_FONTFACE] == C.FACE_MONOSPACE) {
+                    fo = Font.getFont(Font.FACE_MONOSPACE, ia[C.C_FONTSTYLE], ia[C.C_FONTSIZE]);
+                } else if (ia[C.C_FONTFACE] == C.FACE_PROPORTIONAL) {
+                    fo = Font.getFont(Font.FACE_PROPORTIONAL, ia[C.C_FONTSTYLE], ia[C.C_FONTSIZE]);
+                }
                 oa[C.C_FONTOBJ] = fo;
                 ia[C.C_FONTH] = fo.getHeight();
             }
 
-//            ParserTest.dumpNode(node, indent); // TODO delete this
-
             // process current node
             if (disp == 0) { // display = none
                 if (node.tagType == C.E_BR) {
-                    // TODO calc row elements
                     rowEnds(container, rowelem);
                 }
                 continue;
@@ -125,47 +177,68 @@ public class Page {
             int[] block = null;
             if (node.tagType == C.E_T) {
                 Pack dif = node.drawinfo[C.DI_FIXED];
-                Node par = node.parent;
-                Pack dicInh;
-                dicInh = par.drawinfo[par.state]; // direct parent
-                for (; dicInh == null; par = par.parent) {
-                    dicInh = par.drawinfo[par.state];
-                }
+                Pack dicInh = Node.inheritedStyle(node);
                 int[] dica = dicInh.iArray;
                 if (dicInh.oArray[C.C_FONTOBJ] == null) {
-//                    Font f = new Font("SimSun", dica[C.C_FONTSTYLE], dica[C.C_FONTSIZE]);
-                    Font f = Font.getFont(Font.FACE_SYSTEM, dica[C.C_FONTSTYLE], dica[C.C_FONTSIZE]);
-                    dicInh.oArray[C.C_FONTOBJ] = f;
-//                    FontMetrics fm = dummyFrame.getFontMetrics(f);
-                    dica[C.C_FONTH] = f.getHeight();
-                    dica[C.C_FONTWX1] = f.charWidth('x');
-                    dica[C.C_FONTWX2] = f.charWidth('X');
-                    //dica[C.C_FONTWHZ] = f.charWidth('жа');
+                    int face = dica[C.C_FONTFACE];
+                    Font foInit;
+                    if (face == C.FACE_MONOSPACE) {
+                        foInit = Font.getFont(Font.FACE_MONOSPACE, dica[C.C_FONTSTYLE], dica[C.C_FONTSIZE]);
+                    } else if (face == C.FACE_PROPORTIONAL) {
+                        foInit = Font.getFont(Font.FACE_PROPORTIONAL, dica[C.C_FONTSTYLE], dica[C.C_FONTSIZE]);
+                    } else {
+                        foInit = Font.getFont(Font.FACE_SYSTEM, dica[C.C_FONTSTYLE], dica[C.C_FONTSIZE]);
+                    }
+                    dicInh.oArray[C.C_FONTOBJ] = foInit;
+                    dica[C.C_FONTH] = foInit.getHeight();
+                    dica[C.C_FONTWX1] = foInit.charWidth('x');
+                    dica[C.C_FONTWX2] = foInit.charWidth('X');
                 }
                 String s = node.getProperty("t");
+                if (s == null || s.length() == 0) {
+                    continue;
+                }
                 Font fo = (Font) dicInh.oArray[C.C_FONTOBJ];
                 char[] cc = s.toCharArray();
-                int contw = contblock[C.F_WIDTH];
-                int strw = fo.charsWidth(cc, 0, cc.length);
-                dif.set(0, conttmp[C.TMP_ROWIDX]).set(1, conttmp[C.TMP_OFFSETX]).set(3, strw).set(4, fo.getHeight())
-                        .set(C.T_SRCIDX, 0).set(C.T_SRCLEN, cc.length);
-                rowelem.add(dif).add(0).add(strw); // TODO ?
-                conttmp[C.TMP_OFFSETX] += strw;
-//                int estn = 8;
-//                for (int off = curoffx, i1 = 0, i2 = cc.length < estn ? cc.length : estn;;) {
-//                    int maxw = contw - off;
-//                    int strw = fo.charsWidth(cc, i1, i2 - i1);
-//                    if (strw < maxw)
-//                }
+                int contw = contblock.iArray[C.F_WIDTH];
+                int pos = 0;
+                dif.setSize(0, -1);
+                while (pos < cc.length) {
+                    int room = contw - conttmp[C.TMP_OFFSETX];
+                    if (room < 2) {
+                        rowEnds(container, rowelem);
+                        room = contw - conttmp[C.TMP_OFFSETX];
+                    }
+                    int end = breakTextLine(s, pos, fo, room);
+                    if (end <= pos) {
+                        end = pos + 1;
+                    }
+                    int strw = fo.charsWidth(cc, pos, end - pos);
+                    int oldLen = dif.iSize;
+                    dif.setSize(oldLen + 7, -1);
+                    dif.set(oldLen + 0, conttmp[C.TMP_ROWIDX]);
+                    dif.set(oldLen + 1, conttmp[C.TMP_OFFSETX]);
+                    dif.set(oldLen + 2, 0);
+                    dif.set(oldLen + 3, strw);
+                    dif.set(oldLen + 4, fo.getHeight());
+                    dif.set(oldLen + C.T_SRCIDX, pos);
+                    dif.set(oldLen + C.T_SRCLEN, end - pos);
+                    rowelem.add(dif).add(0).add(strw);
+                    conttmp[C.TMP_OFFSETX] += strw;
+                    pos = end;
+                    if (pos < cc.length) {
+                        rowEnds(container, rowelem);
+                    }
+                }
             } else if (disp > 0x10) { // block | inline-block
-                if (disp == 0x20) { // block
+                if (disp == 0x20) {
                     rowEnds(container, rowelem);
                 }
                 block = node.drawinfo[C.DI_FIXED].iArray;
                 Pack dic = node.drawinfo[node.state];
                 if (dic == null) dic = Node.DEF_DIC;
                 int[] dica = dic.iArray;
-                int w = block[C.F_WIDTH], contw = contblock[C.F_WIDTH];
+                int w = block[C.F_WIDTH], contw = contblock.iArray[C.F_WIDTH];
                 int mask = w & ~C.M;
                 w = w & C.M;
                 if (mask == C.M_PERC) {
@@ -175,10 +248,35 @@ public class Page {
                 }
                 if (w > contw) w = contw;
                 block[C.F_WIDTH] = w;
-                if (conttmp[C.TMP_OFFSETX] + w > contw || disp == 0x20) {
+                if (disp != 0x20 && conttmp[C.TMP_OFFSETX] + w > contw) {
                     rowEnds(container, rowelem);
                 }
                 block[C.F_ROWIDX] = conttmp[C.TMP_ROWIDX];
+                {
+                    int rowYInParent = 0;
+                    int rowOffIdx = C.F_ROWOFFSET + block[C.F_ROWIDX];
+                    if (rowOffIdx >= 0 && rowOffIdx < contblock.iSize) {
+                        rowYInParent = C.px(contblock.iArray[rowOffIdx]);
+                    }
+                    block[C.F_VERTALIGN] = rowYInParent;
+                }
+                if (disp != 0x20) { // inline-block: record horizontal slot + row height
+                    block[C.F_OFFSETX] = conttmp[C.TMP_OFFSETX];
+                    int bh = C.px(block[C.F_HEIGHT]);
+                    if (bh <= 0 && node.tagType == C.E_IMG) {
+                        Object imo = dic.oArray[C.C_IMGOBJ];
+                        if (imo instanceof Image) {
+                            bh = ((Image) imo).getHeight();
+                        }
+                    }
+                    if (bh <= 0) {
+                        bh = C.px(block[C.F_WIDTH]);
+                    }
+                    if (bh > conttmp[C.TMP_ROWH]) {
+                        conttmp[C.TMP_ROWH] = bh;
+                    }
+                    conttmp[C.TMP_OFFSETX] += w;
+                }
             } else { // inline
                 // do nothing?
             }
@@ -193,23 +291,83 @@ public class Page {
                 size = childrensize;
                 siblings = children.oArray;
                 if (disp > 0x10) { // block, inline-block
-                    conttmp[C.TMP_CONT_LEFT] += block[C.F_OFFSETX] + block[C.F_ML] + block[C.F_BL] + block[C.F_PL];
-                    conttmp[C.TMP_CONT_TOP] += block[C.F_OFFSETY] + block[C.F_MT] + block[C.F_BT] + block[C.F_PT];
+                    conttmp[C.TMP_CONT_LEFT] += C.px(block[C.F_OFFSETX]) + C.px(block[C.F_ML]) + C.px(block[C.F_BL]) + C.px(block[C.F_PL]);
+                    conttmp[C.TMP_CONT_TOP] += C.px(block[C.F_OFFSETY]) + C.px(block[C.F_MT]) + C.px(block[C.F_BT]) + C.px(block[C.F_PT]);
                     contstack.add(container);
                     container = node;
-                    contblock = block;
                     container.drawinfo[C.DI_FIXED].add(0); // rowoffset0
-                    container.drawinfo[C.DI_TMP] = new Pack(C.TMP_SIZE, -1);
-                    conttmp = node.drawinfo[C.DI_TMP].iArray;
+                    contblock = container.drawinfo[C.DI_FIXED];
+                    container.drawinfo[C.DI_TMP] = new Pack(C.TMP_SIZE, -1).setSize(C.TMP_SIZE, -1);
+                    conttmp = container.drawinfo[C.DI_TMP].iArray;
                 }
-                indent += 2; // TODO delete this
             }
         }
     }
     
     private static final void rowEnds(Node container, Pack rowelem) {
-        // TODO
-        
+        int[] conttmp = container.drawinfo[C.DI_TMP].iArray;
+        Pack fixed = container.drawinfo[C.DI_FIXED];
+        int[] fa = fixed.iArray;
+        int rowIdx = conttmp[C.TMP_ROWIDX];
+        if (rowelem == null || rowelem.oSize == 0) {
+            int dh = conttmp[C.TMP_ROWH] > 0 ? conttmp[C.TMP_ROWH] : 1;
+            int next = C.F_ROWOFFSET + rowIdx + 1;
+            while (fixed.iSize <= next) {
+                fixed.add(0);
+            }
+            int prevY = fa[C.F_ROWOFFSET + rowIdx];
+            fixed.set(next, prevY + dh);
+            conttmp[C.TMP_ROWIDX] = rowIdx + 1;
+            conttmp[C.TMP_OFFSETX] = 0;
+            conttmp[C.TMP_ROWH] = 0;
+            return;
+        }
+        int maxH = 1;
+        for (int k = 0; k < rowelem.oSize; k++) {
+            Pack dif = (Pack) rowelem.oArray[k];
+            if (dif != null && dif.iSize > 4) {
+                int hh = dif.iArray[4];
+                if (hh > maxH) {
+                    maxH = hh;
+                }
+            }
+        }
+        Pack cdic = container.drawinfo[container.state];
+        if (cdic == null) {
+            cdic = Node.DEF_DIC;
+        }
+        int hAlign = (cdic.iArray[C.F_TEXTALIGN] >> 4) & 0x0F;
+        int slack = fa[C.F_WIDTH] - conttmp[C.TMP_OFFSETX];
+        if (slack < 0) {
+            slack = 0;
+        }
+        int shift = 0;
+        if (hAlign == (C.E_CENTER & 0x0F)) {
+            shift = slack >> 1;
+        } else if (hAlign == (C.E_RIGHT & 0x0F)) {
+            shift = slack;
+        }
+        for (int k = 0; k < rowelem.oSize; k++) {
+            Pack dif = (Pack) rowelem.oArray[k];
+            if (dif != null) {
+                for (int seg = 0, n = dif.iSize; seg < n; seg += 7) {
+                    if (dif.iArray[seg + C.F_ROWIDX] != rowIdx) {
+                        continue;
+                    }
+                    int ox = dif.iArray[seg + C.F_OFFSETX];
+                    dif.set(seg + C.F_OFFSETX, ox + shift);
+                }
+            }
+        }
+        int next = C.F_ROWOFFSET + rowIdx + 1;
+        while (fixed.iSize <= next) {
+            fixed.add(0);
+        }
+        int prevY = fa[C.F_ROWOFFSET + rowIdx];
+        fixed.set(next, prevY + maxH);
+        conttmp[C.TMP_ROWIDX] = rowIdx + 1;
+        conttmp[C.TMP_OFFSETX] = 0;
+        conttmp[C.TMP_ROWH] = 0;
         rowelem.setSize(0, 0);
     }
     
@@ -270,7 +428,7 @@ public class Page {
               parent = (Node) stack.removeObject(stack.oSize - 1);
               size = parent.children.oSize;
               siblings = parent.children.oArray;
-              if ((parent.display & C.M_DISPLAY) > C.DISP_INLINE) {
+              if ((parent.display & C.M_DISPLAY) > C.DISP_INLINE && contstack.oSize > 0) {
                   contblock = (Pack) contstack.removeObject(contstack.oSize - 1);
                   conttop = contstack.removeInt(contstack.iSize - 1);
                   contleft = contstack.removeInt(contstack.iSize - 1);
@@ -309,7 +467,7 @@ public class Page {
                   int srcidx;
                   // TODO draw text shadow
                   g.drawString(s.substring(srcidx = t[i + C.T_SRCIDX], srcidx + t[i + C.T_SRCLEN]), 
-                          contleft + t[i + C.F_OFFSETX], yoff + t[i + C.F_OFFSETY] + t[C.C_FONTH], Graphics.BASELINE);
+                          contleft + C.px(t[i + C.F_OFFSETX]), yoff + C.px(t[i + C.F_OFFSETY]) + t[C.C_FONTH], Graphics.BASELINE);
               }
           } else if ((node.display & C.M_DISPLAY) > 0x10) { // block | inline-block
               block = node.drawinfo[0];
@@ -323,17 +481,17 @@ public class Page {
               int yoff = conttop + cba[C.F_ROWOFFSET + ba[C.F_ROWIDX]];
               if (dica[C.C_BGCOLOR] != C.E_TRANSPARENT) {
                   g.setColor(dica[C.C_BGCOLOR] & C.M);
-                  g.fillRect(contleft + ba[C.F_OFFSETX] + ba[C.F_ML] + ba[C.F_BL], 
-                          yoff + ba[C.F_OFFSETY] + ba[C.F_MT] + ba[C.F_BT], 
-                          ba[C.F_WIDTH], ba[C.F_HEIGHT]);
+                  g.fillRect(contleft + C.px(ba[C.F_OFFSETX]) + C.px(ba[C.F_ML]) + C.px(ba[C.F_BL]), 
+                          yoff + C.px(ba[C.F_OFFSETY]) + C.px(ba[C.F_MT]) + C.px(ba[C.F_BT]), 
+                          C.px(ba[C.F_WIDTH]), C.px(ba[C.F_HEIGHT]));
               }
               // TODO draw border
-              if (ba[C.F_BT] > 0) {
+              if (C.px(ba[C.F_BT]) > 0) {
                   g.setColor(dica[C.C_BCT] & C.M);
-                  g.drawRect(contleft + ba[C.F_OFFSETX] + ba[C.F_ML], 
-                          yoff + ba[C.F_OFFSETY] + ba[C.F_MT], 
-                          ba[C.F_WIDTH] + ba[C.F_BL] + ba[C.F_BR], 
-                          ba[C.F_HEIGHT] + ba[C.F_BT] + ba[C.F_BB]);
+                  g.drawRect(contleft + C.px(ba[C.F_OFFSETX]) + C.px(ba[C.F_ML]), 
+                          yoff + C.px(ba[C.F_OFFSETY]) + C.px(ba[C.F_MT]), 
+                          C.px(ba[C.F_WIDTH]) + C.px(ba[C.F_BL]) + C.px(ba[C.F_BR]), 
+                          C.px(ba[C.F_HEIGHT]) + C.px(ba[C.F_BT]) + C.px(ba[C.F_BB]));
               }
               
           } else { // inline
@@ -350,8 +508,8 @@ public class Page {
               size = childrensize;
               siblings = children.oArray;
               if ((node.display & C.M_DISPLAY) > 0x10) { // block, inline-block
-                  contleft += ba[C.F_OFFSETX] + ba[C.F_ML] + ba[C.F_BL] + ba[C.F_PL];
-                  conttop += ba[C.F_OFFSETY] + ba[C.F_MT] + ba[C.F_BT] + ba[C.F_PT];
+                  contleft += C.px(ba[C.F_OFFSETX]) + C.px(ba[C.F_ML]) + C.px(ba[C.F_BL]) + C.px(ba[C.F_PL]);
+                  conttop += C.px(ba[C.F_OFFSETY]) + C.px(ba[C.F_MT]) + C.px(ba[C.F_BT]) + C.px(ba[C.F_PT]);
                   contstack.add(contblock).add(contleft).add(conttop);
                   contblock = block;
               }

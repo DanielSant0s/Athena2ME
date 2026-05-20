@@ -235,7 +235,7 @@ public class Node {
      */
     public final Pack select(String selector) {
         Pack ret = new Pack(4, 4);
-        ret.add(this).add(0);
+        ret.add(this).add(C.DI_NORMAL);
         Pack sel = new Parser(selector).cssSelector();
         for (int i = 0, n = sel.oSize; i < n; i++) {
             if (ret.oSize > 0) {
@@ -244,21 +244,21 @@ public class Node {
                 for (int ii = ret.oSize; --ii >= 0;) {
                     Node nd = (Node) ret.oArray[ii];
                     for (int j = grp.oSize; --j >= 0;) {
-                        int st = 0;
+                        int st = C.DI_NORMAL;
                         String s = (String) grp.oArray[j];
                         int idx = s.lastIndexOf(':');
                         if (idx > 0) {
                             st = Parser.stringToEnum(s.substring(idx + 1));
                             switch (st) {
-                            case 1010: // hover
-                            case 1011: // focus
-                                st = 1;
+                            case C.E_HOVER:
+                            case C.E_FOCUS:
+                                st = C.DI_FOCUS;
                                 break;
-                            case 1012: // active
-                                st = 2;
+                            case C.E_ACTIVE:
+                                st = C.DI_ACTIVE;
                                 break;
                             default:
-                                st = 0;
+                                st = C.DI_NORMAL;
                             }
                             s = s.substring(0, idx);
                         }
@@ -422,6 +422,37 @@ public class Node {
                     }
                 }
                 break;
+            case C.E_FONT_SIZE:
+                if (srcsize > 0) {
+                    int fv = val[0];
+                    if (fv == C.E_SMALL) {
+                        dest.add(C.C_START + C.C_FONTSIZE).add(C.SIZE_SMALL);
+                    } else if (fv == C.E_LARGE) {
+                        dest.add(C.C_START + C.C_FONTSIZE).add(C.SIZE_LARGE);
+                    } else if (fv == C.E_MEDIUM) {
+                        dest.add(C.C_START + C.C_FONTSIZE).add(C.SIZE_MEDIUM);
+                    } else if (fv == C.E_DEFAULT) {
+                        dest.add(C.C_START + C.C_FONTSIZE).add(C.E_DEFAULT);
+                    } else if ((fv & ~C.M) == C.M_PX) {
+                        int px = fv & C.M;
+                        int sz = px <= 10 ? C.SIZE_SMALL : (px <= 15 ? C.SIZE_MEDIUM : C.SIZE_LARGE);
+                        dest.add(C.C_START + C.C_FONTSIZE).add(sz);
+                    }
+                }
+                break;
+            case C.E_FONT_WEIGHT:
+                if (srcsize > 0) {
+                    int wv = val[0];
+                    if (wv == C.E_BOLD) {
+                        dest.add(C.C_START + C.C_FONTSTYLE).add(C.STYLE_BOLD);
+                    } else if ((wv & ~C.M) == C.M_PX) {
+                        int n = wv & C.M;
+                        dest.add(C.C_START + C.C_FONTSTYLE).add(n >= 600 ? C.STYLE_BOLD : C.STYLE_PLAIN);
+                    } else if (wv == C.E_NORMAL || wv == C.E_DEFAULT) {
+                        dest.add(C.C_START + C.C_FONTSTYLE).add(C.STYLE_PLAIN);
+                    }
+                }
+                break;
             case C.E_TEXT_DECORATION:
                 dest.add(C.C_START + C.C_FONTSTYLE)
                     .add(v0 == C.E_UNDERLINE ? C.STYLE_UNDERLINED : 0);
@@ -542,6 +573,126 @@ public class Node {
             }
             p.oArray[C.C_IMGURL] = bgimg;
         }
+    }
+
+    /**
+     * Merge {@code drawinfo[state]} from ancestors (root → parent) for CSS inheritance.
+     * Partial styles on a parent (e.g. only {@code font-size}) no longer hide {@code color}
+     * from a grandparent.
+     */
+    public static Pack inheritedStyle(Node from) {
+        Pack merged = (Pack) DEF_DIC.clone();
+        if (from == null) {
+            return merged;
+        }
+        Pack chain = new Pack(-1, 8);
+        for (Node n = from.parent; n != null; n = n.parent) {
+            chain.add(n);
+        }
+        for (int i = chain.oSize; --i >= 0;) {
+            Node n = (Node) chain.oArray[i];
+            if (n.drawinfo == null) {
+                continue;
+            }
+            Pack layer = n.drawinfo[n.state];
+            if (layer != null) {
+                mergeDrawinfo(merged, layer);
+            }
+        }
+        return merged;
+    }
+
+    /** Resolve layout font metrics for inherited style (same face/style/size as JS {@code Font}). */
+    public static void ensureFontMetrics(Pack dic) {
+        if (dic == null) {
+            return;
+        }
+        int[] a = dic.iArray;
+        Object[] oa = dic.oArray;
+        Font fo = (Font) oa[C.C_FONTOBJ];
+        if (fo == null) {
+            int face = a[C.C_FONTFACE];
+            int style = a[C.C_FONTSTYLE];
+            int size = a[C.C_FONTSIZE];
+            if (face == C.FACE_MONOSPACE) {
+                fo = Font.getFont(Font.FACE_MONOSPACE, style, size);
+            } else if (face == C.FACE_PROPORTIONAL) {
+                fo = Font.getFont(Font.FACE_PROPORTIONAL, style, size);
+            } else {
+                fo = Font.getFont(Font.FACE_SYSTEM, style, size);
+            }
+            oa[C.C_FONTOBJ] = fo;
+        }
+        if (a[C.C_FONTH] <= 0) {
+            a[C.C_FONTH] = fo.getHeight();
+        }
+        if (a[C.C_FONTWX1] <= 0) {
+            a[C.C_FONTWX1] = fo.charWidth('x');
+        }
+        if (a[C.C_FONTWX2] <= 0) {
+            a[C.C_FONTWX2] = fo.charWidth('X');
+        }
+    }
+
+    public static int textHeight(Pack dic) {
+        ensureFontMetrics(dic);
+        int h = dic.iArray[C.C_FONTH];
+        return h > 0 ? h : 12;
+    }
+
+    public static int measureTextWidth(Pack dic, String s) {
+        if (s == null || s.length() == 0) {
+            return 0;
+        }
+        ensureFontMetrics(dic);
+        Font fo = (Font) dic.oArray[C.C_FONTOBJ];
+        return fo != null ? fo.stringWidth(s) : s.length() * 6;
+    }
+
+    private static void mergeDrawinfo(Pack dest, Pack src) {
+        if (dest == null || src == null) {
+            return;
+        }
+        int[] sa = src.iArray;
+        int[] da = dest.iArray;
+        if (sa != null && da != null) {
+            int n = sa.length < da.length ? sa.length : da.length;
+            for (int i = 0; i < n; i++) {
+                if (sa[i] != 0) {
+                    da[i] = sa[i];
+                }
+            }
+        }
+        Object[] so = src.oArray;
+        Object[] dow = dest.oArray;
+        if (so != null && dow != null) {
+            int n = so.length < dow.length ? so.length : dow.length;
+            for (int i = 0; i < n; i++) {
+                if (so[i] != null) {
+                    dow[i] = so[i];
+                }
+            }
+        }
+    }
+
+    /** Block content height from row-offset table when {@code F_HEIGHT} was not set. */
+    static int blockContentHeight(Pack block) {
+        if (block == null) {
+            return 0;
+        }
+        int[] ba = block.iArray;
+        if (ba == null) {
+            return 0;
+        }
+        int rowH = 0;
+        if (block.iSize > C.F_ROWOFFSET + 1) {
+            rowH = C.px(ba[block.iSize - 1]);
+        }
+        if (rowH > 0) {
+            return rowH;
+        }
+        int h = C.px(ba[C.F_HEIGHT]);
+        return h > 0 ? h : 0;
     }
     
     protected void paint(Graphics g, int x, int y) {

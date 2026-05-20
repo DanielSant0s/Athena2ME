@@ -24,6 +24,11 @@ class C {
     static final int M_COLOR = 0x01000000;
     static final int M_PX = 0x02000000;
     static final int M_PERC = 0x04000000;
+
+    /** Strip CSS type flags ({@link #M_PX}, {@link #M_PERC}, …) from a geometry value. */
+    static int px(int v) {
+        return v & M;
+    }
     
     static final int M_DISPLAY = 0x30; // 0x00: none, 0x10: inline, 0x20: block: 0x30: inline-block
     static final int M_VISIBILITY = 0x01; // 0: hidden, 1: visible
@@ -321,5 +326,7 @@ class C {
     static final int E_STAR = 1616;
     static final int E_SOFT1 = 1617;
     static final int E_SOFT2 = 1618;
+    static final int E_FONT_SIZE = 1619;
+    static final int E_FONT_WEIGHT = 1620;
 
 }

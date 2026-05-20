@@ -553,6 +553,75 @@ line`, "multi\nline", "template newline");
         eq(h.next().done, true, "gen expr finished");
     }
 
+    function testBrowserLayoutSnapshot() {
+        if (typeof Browser === "undefined") {
+            return;
+        }
+        Browser.loadHtml("<div style=\"width:100;height:100;background:#112233;color:#ffffff\">hello</div>");
+        truthy(Browser.opCount() > 0, "Browser.loadHtml produces draw ops");
+        var i;
+        var hasText = false;
+        for (i = 0; i < Browser.opCount(); i++) {
+            if (Browser.getOp(i).kind === "text") {
+                hasText = true;
+                break;
+            }
+        }
+        truthy(hasText, "Browser layout emits text ops");
+        var nid = Browser.hitTest(50, 50);
+        truthy(nid >= 0, "Browser.hitTest hits layout box");
+        Browser.clear();
+    }
+
+    function testBrowserPageAStacking() {
+        if (typeof Browser === "undefined") {
+            return;
+        }
+        var html =
+            "<div style=\"background:#0a1020;color:#e8f0ff;padding:8px;width:100%\">" +
+            "<p style=\"font-size:large;font-weight:bold\">Page A</p>" +
+            "<p>D-pad UP/DOWN moves focus. FIRE activates links and buttons.</p>" +
+            "<p><a href=\"app://page-b\">Go to page B (app)</a></p>" +
+            "<p><a href=\"https://example.com\">Load example.com (HTTP)</a></p>" +
+            "<form action=\"app://echo\" method=\"get\">" +
+            "<input type=\"text\" name=\"q\" value=\"demo\"/> " +
+            "<input type=\"submit\" value=\"GET echo\"/>" +
+            "</form>" +
+            "<p><img src=\"/cube_texture.png\" style=\"width:48;height:48\"/></p>" +
+            "</div>";
+        Browser.loadHtml(html);
+        var pageAy = -1;
+        var pageBy = -1;
+        var exampleY = -1;
+        var imgY = -1;
+        var imgCount = 0;
+        for (i = 0; i < Browser.opCount(); i++) {
+            var op = Browser.getOp(i);
+            if (op.kind === "text" && op.text != null) {
+                var t = op.text.toString();
+                if (t.indexOf("Page A") === 0) {
+                    pageAy = op.y;
+                } else if (t.indexOf("Go to page B") >= 0) {
+                    pageBy = op.y;
+                } else if (t.indexOf("example.com") >= 0) {
+                    exampleY = op.y;
+                }
+            } else if (op.kind === "img") {
+                imgCount++;
+                imgY = op.y;
+            }
+        }
+        truthy(pageAy >= 0, "Page A text positioned");
+        truthy(pageBy >= 0, "page B link positioned");
+        truthy(exampleY >= 0, "example.com link positioned");
+        truthy(imgCount === 1, "single image op");
+        truthy(imgY >= 0, "image positioned");
+        truthy(pageAy < pageBy, "Page A above page B");
+        truthy(pageBy < exampleY, "page B above example.com");
+        truthy(exampleY < imgY, "example.com above image");
+        Browser.clear();
+    }
+
     // ------------------------------------------------------------------------
 
     function runAll() {
@@ -582,6 +651,8 @@ line`, "multi\nline", "template newline");
         try { testRender3DBench(); } catch (e) { failed++; console.log("FAIL render3d: " + e.message); }
         try { testPerfPlanMicrobenches(); } catch (e) { failed++; console.log("FAIL perf micro: " + e.message); }
         try { testGenerators(); } catch (e) { failed++; console.log("FAIL generators: " + e.message); }
+        try { testBrowserLayoutSnapshot(); } catch (e) { failed++; console.log("FAIL browser layout: " + e.message); }
+        try { testBrowserPageAStacking(); } catch (e) { failed++; console.log("FAIL browser page A stacking: " + e.message); }
 
         console.log("----------");
         console.log("Tests run: " + total + ", failed: " + failed);
